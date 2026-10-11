@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A user guide, [docs/guide](docs/guide/README.md): the concepts and words, a
+  first campaign from a fresh install with a screenshot of every step, and a
+  page for each part of the UI (machines, search spaces, objectives, policies,
+  creating, running and reading campaigns, baselines, runs and failures,
+  accounts and API keys), plus troubleshooting.
+
 ## [0.2.1] - 2026-10-10
 
 ### Added
