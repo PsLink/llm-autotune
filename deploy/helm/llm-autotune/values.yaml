@@ -29,6 +29,10 @@ jwtSecret: ""
 adminUsername: admin
 adminPassword: ""
 
+# Whether the sign-in page offers "Create account" to anyone who can reach it.
+# false: an admin adds users on the Account page.
+allowSignup: true
+
 # Both are used to build links handed to other systems, so they must be
 # addresses those systems can reach, not cluster-internal names.
 #   publicApiUrl — how a POLICY CONTAINER on a GPU machine calls home.
@@ -97,9 +101,10 @@ frontend:
     type: ClusterIP
     nodePort: ""
 
-# Engine logs: the worker writes them, the API serves them. Two pods, one
-# volume, so it wants ReadWriteMany. Without an RWX class, set enabled=false —
-# everything works except reading a run's engine log from the UI.
+# Complete engine logs as files: the worker writes them, the API serves them.
+# Two pods, one volume, so it wants ReadWriteMany. Without an RWX class, set
+# enabled=false: the UI still shows each log's end (kept in the database) and
+# a running engine's log (read from the cluster).
 runLogs:
   enabled: true
   size: 5Gi

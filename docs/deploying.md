@@ -1,12 +1,12 @@
 # Deploying LLM AutoTune
 
-One Helm chart brings up everything: the API, the orchestrator worker, the UI
-and Postgres. Two questions decide the rest of the values — where the GPUs
-are, and what measures a run.
+One Helm chart deploys the API, the orchestrator worker, the UI and
+Postgres. Most values follow from two questions: where the GPUs are, and what
+benchmarks the runs.
 
-[deploy/quickstart.sh](../deploy/quickstart.sh) installs it next to LLMBench
-with these choices made for you (see the [README](../README.md#install)). This
-page is for installing the chart yourself.
+[deploy/quickstart.sh](../deploy/quickstart.sh) installs the chart next to
+LLMBench with these values set ([README](../README.md#install)). This page
+covers installing the chart directly.
 
 ```bash
 helm install autotune deploy/helm/llm-autotune \
@@ -14,19 +14,23 @@ helm install autotune deploy/helm/llm-autotune \
   --set adminPassword=...
 ```
 
-`jwtSecret` is the only required value. It signs sign-in tokens **and** encrypts
-the kubeconfigs you paste in for GPU clusters, so rotating it logs everyone out
-and makes stored kubeconfigs unreadable. Generate it once and keep it.
+`jwtSecret` is the only required value. It signs sign-in tokens and encrypts
+stored GPU cluster kubeconfigs, so rotating it signs everyone out and makes
+stored kubeconfigs unreadable. Generate it once and keep it.
 
-`adminPassword` creates the first account, and only ever when the users table is
-empty — the chart never overwrites a password someone has changed. Leave it out
-and no account is created, which means nothing can be done in the UI until you
-create one another way.
+`adminPassword` creates the first account, only while the users table is
+empty; the chart never overwrites a changed password. Without it no account
+is created, and the first account registered on the sign-in page becomes the
+admin.
 
-## Where the GPUs are
+`allowSignup` (default `true`) lets anyone who can reach the UI create an
+ordinary account on the sign-in page. Set it to `false` to have admins add
+users on the Account page.
+
+## GPU access
 
 The platform's own cluster needs no GPUs. GPUs come from the clusters and
-machines added afterwards on the Resources page.
+machines added on the Resources page.
 
 ### GPU clusters
 
@@ -39,16 +43,16 @@ deploy/gpu-cluster.sh            # on the GPU cluster's context; --namespace NS
 It creates a namespace for engine and policy pods, a ServiceAccount allowed
 only to manage those (Deployments, Services, Jobs, TuningRuns) and read their
 pods, logs and events, read-only access to nodes, and a kubeconfig carrying
-only that account's token. It never grants writing a node: no cordon, no label,
-no taint. On **Resources ▸ Add GPU cluster**, upload the kubeconfig (encrypted
-at rest with `jwtSecret`) and pick the GPU nodes to register; each becomes a
-machine pinned to its node, with the cards the node reports.
+only that account's token. It never grants write access to nodes: no cordon,
+label or taint. On **Resources ▸ Add GPU cluster**, upload the kubeconfig
+(encrypted at rest with `jwtSecret`) and select the GPU nodes to register; each
+becomes a machine pinned to its node, with the GPUs the node reports.
 
 The GPU cluster's API server, and its nodes' NodePorts, must be reachable from
 this cluster, and the GPU cluster must reach `publicApiUrl` for policy
 campaigns.
 
-### This cluster, by its own ServiceAccount
+### The platform cluster's own GPUs
 
 ```yaml
 gpuCluster:
@@ -56,19 +60,19 @@ gpuCluster:
   namespace: ""          # empty = the release's own namespace
 ```
 
-For an install whose GPUs are in the cluster it runs in, without a kubeconfig:
-the chart grants its own ServiceAccount the same access and, on an empty
-install, registers the cluster as a machine called `local-cluster` (pinned by
-nothing: the scheduler picks the node). Set `gpuCluster.autoRegister=false` to
-skip that and add GPU nodes the usual way. `deploy/quickstart.sh` does not use
-this; the demo does.
+For GPUs in the cluster the platform runs in, without a kubeconfig: the chart
+grants its own ServiceAccount the same access and, on an empty install,
+registers the cluster as one machine called `local-cluster` (no node pin; the
+scheduler places each pod). Set `gpuCluster.autoRegister=false` to skip this
+and register GPU nodes individually. `deploy/quickstart.sh` does not use this
+mode; the demo does.
 
 A cluster without GPUs (kind, a CPU-only test cluster) takes
 `-f deploy/helm/llm-autotune/values-demo.yaml`: runs then request no
 cards, and campaigns run the mock engine
 ([mock-engine/](../mock-engine/README.md)).
 
-### Bare-metal boxes over ssh
+### Bare-metal machines over ssh
 
 ```yaml
 worker:
@@ -77,18 +81,18 @@ worker:
     existingSecret: autotune-worker-ssh
 ```
 
-Create the Secret yourself — a private key does not belong in a values file:
+Create the Secret separately; a private key does not belong in a values file:
 
 ```bash
 kubectl create secret generic autotune-worker-ssh \
   --from-file=id_ed25519=$HOME/.ssh/id_ed25519
 ```
 
-Then add each machine from the Resources page and lease it to the platform.
-Lease it free: the platform runs its engines next to nothing, and when the
-lease ends it stops only the containers it started.
+Then add each machine on the Resources page and lease it. Lease a machine
+with nothing else running on its GPUs; when the lease ends, the platform stops
+only the containers it started.
 
-## What measures a run
+## Benchmark platform
 
 Every run is benchmarked by an external platform; the adapter targets
 [LLMBench](https://github.com/modelsphere/llm-bench), installed from its own chart.
@@ -146,22 +150,20 @@ them. To work on AutoTune without one, layer `values-mock.yaml` on
 endpoint and reports invented numbers.
 
 If you measure some other way, `Evaluator` in `backend/app/evaluation/base.py` is
-a two-method interface (`start`, `poll`) and the seam to implement.
+a two-method interface (`start`, `poll`) to implement.
 
-## Addresses other systems use
+## Public addresses
 
 ```yaml
 publicApiUrl: https://autotune.example.com   # how a POLICY CONTAINER calls home
 publicUiUrl:  https://autotune.example.com   # how a PERSON reaches the UI
 ```
 
-Both must be reachable from outside the platform's own pods, because that is the
-whole point of them. `publicApiUrl` is required for policy campaigns: a policy
-container runs on a GPU machine and dials the platform to ask for launches and
-read results. Without it, the container has no way back. With
+Both must be reachable from outside the platform's pods. `publicApiUrl` is
+required for policy campaigns: a policy container runs on a GPU cluster and
+calls the platform to request launches and read results. With
 `gpuCluster.inCluster`, it defaults to the API's in-cluster address, which a
-policy running in the same cluster can reach; set it when policies run
-anywhere else.
+policy in the same cluster can reach; set it when policies run elsewhere.
 
 ## The operator
 
@@ -171,18 +173,18 @@ operator:
 ```
 
 Optional. Without it, a run is a Deployment plus a NodePort Service that the
-platform manages itself — which works on any cluster. With it, a run is a
-`TuningRun` the [operator](../operator/) reconciles, and the platform holds no
-Kubernetes machinery of its own beyond creating that object. Install the operator
-separately (see [operator/INSTALL.md](../operator/INSTALL.md)); the flag only
-tells the platform which object to render.
+platform manages itself, which works on any cluster. With it, a run is a
+`TuningRun` that the [operator](../operator/) reconciles. Install the operator
+separately ([operator/INSTALL.md](../operator/INSTALL.md)); the flag only
+selects which object the platform creates.
 
 ## Storage
 
-Engine logs are written by the worker and served by the API — two pods, one
-volume, so the claim asks for `ReadWriteMany`. On a cluster with no RWX storage
-class, set `runLogs.enabled=false`: everything works except reading a run's
-engine log from the UI.
+`runLogs` (on by default) keeps complete engine logs as files: the worker
+writes them and the API serves them, so the claim needs a `ReadWriteMany`
+storage class. On a cluster without one, set `runLogs.enabled=false`. The UI
+still shows logs: the end of every engine log is stored in the database, and
+a running engine's log is read from the cluster.
 
 Postgres is a StatefulSet by default. To use a database you already run:
 
@@ -214,7 +216,8 @@ The ones installs usually reach for:
 
 | variable | default | what it does |
 |---|---|---|
-| `AUTOTUNE_DEFAULT_DAILY_START`, `_END`, `AUTOTUNE_DEFAULT_SCHEDULE_TIMEZONE` | — | the window a drafted campaign gets when its author names none |
+| `AUTOTUNE_ALLOW_SIGNUP` | `true` | whether the sign-in page offers **Create account** (the chart's `allowSignup`) |
+| `AUTOTUNE_DEFAULT_DAILY_START`, `_END`, `AUTOTUNE_DEFAULT_SCHEDULE_TIMEZONE` | — | the window a drafted campaign gets when none is given |
 | `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `240` | window a run reserves when its length can be neither measured nor estimated from its benchmark |
 | `AUTOTUNE_READY_TIMEOUT_MINUTES` | `30` | how long a started engine may take to answer `/v1/models` |
 | `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` | `45` | how long a pod may spend scheduling and pulling its image |
@@ -236,5 +239,5 @@ The worker waits for the schema before it starts (its log says so), so
 
 ## Local development
 
-The chart is the supported install. Running the code outside it, for working
-on the platform, is in [CONTRIBUTING.md](../CONTRIBUTING.md#running-it-locally).
+The chart is the supported install. Running the code outside it, for
+development, is covered in [CONTRIBUTING.md](../CONTRIBUTING.md#running-it-locally).

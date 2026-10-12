@@ -9,6 +9,7 @@ from app.core.auth import (
     require_admin,
     verify_password,
 )
+from app.core.config import get_settings
 from app.db.base import get_async_session
 from app.db.models import Event, User, UserRole
 from app.schemas.core import (
@@ -17,6 +18,7 @@ from app.schemas.core import (
     PasswordChange,
     RegisterRequest,
     TokenResponse,
+    UserCreate,
     UserOut,
     UserRoleUpdate,
 )
@@ -24,15 +26,25 @@ from app.schemas.core import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+@router.get("/options")
+async def options():
+    """What the sign-in page offers, before anyone is signed in."""
+    return {"signup": get_settings().allow_signup}
+
+
 @router.post("/register", response_model=TokenResponse)
 async def register(body: RegisterRequest, session: AsyncSession = Depends(get_async_session)):
+    user_count = (await session.execute(select(func.count(User.id)))).scalar_one()
+    # The first account is always allowed: it is the admin of an install that
+    # was given no admin password.
+    if user_count and not get_settings().allow_signup:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "accounts on this platform are added by an admin")
     exists = (
         await session.execute(select(User).where(User.username == body.username))
     ).scalar_one_or_none()
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, "username taken")
-    # First user becomes admin — good enough for the PoC's own user system.
-    user_count = (await session.execute(select(func.count(User.id)))).scalar_one()
     user = User(
         username=body.username,
         password_hash=hash_password(body.password),
@@ -127,6 +139,30 @@ async def list_users(
     session: AsyncSession = Depends(get_async_session),
 ):
     return (await session.execute(select(User).order_by(User.id))).scalars().all()
+
+
+@router.post("/users", response_model=UserOut)
+async def add_user(
+    body: UserCreate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Add an account. The way in when sign-up is off."""
+    if body.role not in (UserRole.ADMIN.value, UserRole.USER.value):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "role must be admin|user")
+    username = body.username.strip()
+    exists = (
+        await session.execute(select(User).where(User.username == username))
+    ).scalar_one_or_none()
+    if exists:
+        raise HTTPException(status.HTTP_409_CONFLICT, "username taken")
+    user = User(username=username, password_hash=hash_password(body.password), role=body.role)
+    session.add(user)
+    session.add(Event(actor=admin.username, kind="user_added",
+                      payload={"user": username, "role": body.role}))
+    await session.commit()
+    await session.refresh(user)
+    return user
 
 
 @router.put("/users/{user_id}/role", response_model=UserOut)

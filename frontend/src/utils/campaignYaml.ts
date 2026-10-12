@@ -54,7 +54,7 @@ export const PORTABLE_KEYS = [
   'extensions',
 ] as const
 
-const HEADER = `# LLM Autotune campaign.
+const HEADER = `# LLM AutoTune campaign.
 #
 # Import this on the New campaign page to fill the form in, or post it to
 # POST /api/campaigns as JSON. Field names are the API's own.

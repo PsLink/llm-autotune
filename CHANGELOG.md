@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-12
+
 ### Added
 
-- A user guide, [docs/guide](docs/guide/README.md): the concepts and words, a
+- A user guide, [docs/guide](docs/guide/README.md): the concepts, a
   first campaign from a fresh install with a screenshot of every step, and a
   page for each part of the UI (machines, search spaces, objectives, policies,
   creating, running and reading campaigns, baselines, runs and failures,
@@ -19,6 +21,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a shared log volume; a running engine's log is read live.
 - New campaign's **Schedule** step asks **Every night** or **No window (start it
   by hand)**, instead of needing both times cleared.
+- `allowSignup` (`AUTOTUNE_ALLOW_SIGNUP`, default `true`) turns off **Create
+  account** on the sign-in page, and admins can **Add user** on the Account
+  page.
+- Registering a GPU cluster's nodes leases them in the same step (**Lease them
+  to the platform now**, on by default).
+- A run's details show its **Engine command**, the engine's command line for
+  that config with a copy button, next to its image and weights path; on
+  Kubernetes the launch command is the whole applied manifest. Leaderboard
+  rows open their run, and a row on the **Runs** page opens the run's details
+  instead of only its campaign.
+- **⋯ ▸ Mark as done** closes a paused or scheduled campaign, which otherwise
+  held its machines (they could not be edited or removed) with no way to end
+  it. **⋯ ▸ Delete** removes a campaign that never ran.
+
+### Changed
+
+- Kubernetes pre-flight checks use two probe pods per machine, one pulling the
+  images and one mounting the model path. A wrong image and a wrong path are
+  reported in the same run; before, a failed mount left the images unchecked.
+- **Add machine** reads the GPU count from the machine and refuses to save
+  when it cannot be read and none was given, instead of assuming 8 GPUs.
+- A policy campaign's **Runs** tab shows one row per trial, with the benchmark
+  run nested under the engine it measured.
+- A campaign drafted from a baseline uses the matching built-in objective
+  (**Throughput per GPU**) instead of an inline copy named "drafted: <metric>".
+- The UI spells the product name "LLM AutoTune"; the schedule dialog says what
+  was saved ("No window: the campaign runs when you start it").
+- Docs: the Chinese pages and diagrams are removed (the UI keeps its Chinese
+  translation), and the English docs use consistent, technical wording.
 
 ### Security
 
@@ -74,6 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Account page's note on what admins can do was wrong.
 - The API key dialog's example call used a fixed sample address instead of the
   platform's.
+- Removing a machine that a policy session had used failed with a server
+  error; removing a machine in a node group now says to take it out of the
+  group first.
 - Smaller fixes: the Baselines table no longer overflows the page, the
   Policies page header lays out like the others, an unleased machine no longer
   shows a fleet-manager readiness tag, and the smoke test's card-type warning
@@ -91,7 +125,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cluster (mock GPUs on each node, an `nvidia` RuntimeClass, the mock engine
   and a placeholder model), so the whole install, from `quickstart.sh` to a
   policy campaign, runs on a laptop with two kind clusters
-  ([installing](docs/install.md#trying-it-all-on-a-laptop)).
+  ([installing](docs/install.md#local-setup-with-kind)).
 
 ### Fixed
 
@@ -500,7 +534,8 @@ Released with LLMBench 0.2.0, which the install script now installs.
   [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies), checked out under `policies/` as a git
   submodule: clone with `--recurse-submodules`.
 
-[Unreleased]: https://github.com/modelsphere/llm-autotune/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/modelsphere/llm-autotune/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/modelsphere/llm-autotune/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/modelsphere/llm-autotune/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/modelsphere/llm-autotune/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/modelsphere/llm-autotune/compare/v0.1.1...v0.1.2

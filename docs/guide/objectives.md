@@ -8,13 +8,13 @@ An **objective** says what "better" means for a campaign:
 - a **direction**: maximize it (throughput) or minimize it (latency);
 - **redlines**, limits a config must stay within to rank at all.
 
-Objectives live under **Automatic Tuning ▸ Objectives**. A campaign copies the
-one it was created with, so editing an objective later never re-ranks a
-campaign that already ran.
+Objectives are under **Automatic Tuning ▸ Objectives**. A campaign copies its
+objective when it is created, so editing an objective later does not re-rank
+existing campaigns.
 
 ## The built-in objectives
 
-The install comes with six. They cannot be edited, but **Duplicate** makes an
+The install provides six. They cannot be edited; **Duplicate** makes an
 editable copy.
 
 ![The objectives list](images/objectives-list.png)
@@ -28,14 +28,14 @@ editable copy.
 | **Replay: throughput per GPU** | output tokens per minute per GPU, on replayed traffic | the campaign's workload is a replay |
 | **Replay: … under a 10s TTFT SLO** | the same, with replayed p99 TTFT ≤ 10 s | a replay, with a latency promise |
 
-**Why per GPU?** A config that takes more GPUs is almost always faster in
-total. Ranking by total throughput turns the search into "use more cards".
-Dividing by the cards used asks what one GPU buys you, so `tp=1` and `tp=2`
+**Why per GPU?** A config that uses more GPUs is almost always faster in
+total, so ranking by total throughput favors the widest configs. Dividing by
+the GPUs used measures the throughput each GPU delivers, so `tp=1` and `tp=2`
 compare fairly.
 
-## Writing your own
+## Creating an objective
 
-Press **New objective**, or **Duplicate** on one that is close.
+Press **New objective**, or **Duplicate** a similar one.
 
 ![The objective editor](images/objective-editor.png)
 
@@ -46,19 +46,19 @@ Press **New objective**, or **Duplicate** on one that is close.
   throughput metrics maximized. Set it yourself only to override that.
 - **Redlines.** A new objective has none. **Add redline** suggests p99 time to
   first token from the same benchmark as the target metric; change the metric
-  if you want another, pick an operator (`<=`, `<`, `>=`, `>`, `==`, `!=`) and
-  type the limit. Its unit is shown next to it: milliseconds for latencies,
-  tokens per second or minute for throughput, a fraction from 0 to 1 for
-  rates. "TTFT p99 `<=` 2000 ms" means the first token arrives within 2 seconds
-  for 99% of requests.
-- **As YAML** shows exactly what a campaign will carry.
+  if needed, select an operator (`<=`, `<`, `>=`, `>`, `==`, `!=`) and enter
+  the limit. The unit is shown next to it: milliseconds for latencies, tokens
+  per second or minute for throughput, a fraction from 0 to 1 for rates.
+  "TTFT p99 `<=` 2000 ms" means the first token arrives within 2 seconds for
+  99% of requests.
+- **As YAML** shows exactly what a campaign will store.
 
-A config that crosses a redline is rejected however fast it was. A metric the
-benchmark did not report counts as crossed: the platform cannot vouch for a
-limit it never measured. So a redline on a replay metric in a campaign whose
-workload is a synthetic sweep rejects every config.
+A config that crosses a redline is rejected regardless of its score. A metric
+the benchmark did not report counts as crossed, so a redline on a replay
+metric rejects every config in a campaign whose workload is a synthetic
+sweep.
 
-## The metrics you'll use most
+## Common metrics
 
 Metric names are `<benchmark module>.<metric>`. The synthetic sweep's module
 is `perf_guidellm_sweep`, a replay's is `replay`.
@@ -75,12 +75,12 @@ is `perf_guidellm_sweep`, a replay's is `replay`.
 | `replay.score_card_norm` | Replay value per card | LLMBench's value-weighted replay score, per GPU |
 | `replay.ttft_p99_ms` | Replay TTFT p99 | time to first token on real prompts |
 
-## Which metrics a campaign can use
+## Metrics available to a campaign
 
-The metrics come from the workload. A synthetic sweep reports the
-`perf_guidellm_sweep.*` metrics, a replay the `replay.*` ones. The **Benchmark**
-step of New campaign lists only objectives whose target metric the chosen
-workload reports, and warns when it does not.
+The workload determines the metrics: a synthetic sweep reports
+`perf_guidellm_sweep.*`, a replay `replay.*`. The **Benchmark** step of New
+campaign lists only objectives whose target metric the chosen workload
+reports.
 
 ---
 

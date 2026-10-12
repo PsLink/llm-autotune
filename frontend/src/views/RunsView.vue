@@ -11,7 +11,7 @@ import { duration, exactTime, relativeTime } from '../utils/time'
 
 const { t } = useI18n()
 const runs = ref<Run[]>([])
-const runRows = useRowLink((row: Run) => `/campaigns/${row.campaign_id}`)
+const runRows = useRowLink((row: Run) => `/campaigns/${row.campaign_id}?run=${row.id}`)
 
 async function load() {
   runs.value = (await api.get('/runs')).data

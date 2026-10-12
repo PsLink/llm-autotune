@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # bootstrap says so, rather than shipping a known login.
     admin_username: str = "admin"
     admin_password: str = ""
+    # Whether anyone who can open the UI may create an account on the sign-in
+    # page. Off: an admin adds users on the Account page.
+    allow_signup: bool = True
 
     # Installed plugins to enable, comma-separated entry-point names
     # (app/plugins.py, docs/plugins.md). Installed but unlisted ones stay off.

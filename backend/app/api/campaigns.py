@@ -6,7 +6,10 @@ import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,6 +41,7 @@ from app.db.models import (
     Policy,
     PolicySession,
     PolicySessionStatus,
+    PolicyState,
     Result,
     Run,
     User,
@@ -535,6 +539,7 @@ async def set_campaign_status(
         CampaignStatus.ACTIVE.value,
         CampaignStatus.PAUSED.value,
         CampaignStatus.SCHEDULED.value,
+        CampaignStatus.DONE.value,
     )
     if body.status not in allowed:
         raise HTTPException(
@@ -543,6 +548,25 @@ async def set_campaign_status(
     campaign = await session.get(Campaign, campaign_id)
     if campaign is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
+    if body.status == CampaignStatus.DONE.value:
+        # Closing a campaign by hand: its results stay, configs not measured yet
+        # are never run, and its machines are free again. Only once nothing of
+        # it is running.
+        live = (await session.execute(
+            select(func.count(Run.id)).where(
+                Run.campaign_id == campaign_id,
+                Run.status.not_in([s.value for s in TERMINAL_RUN_STATES]),
+            ))).scalar_one()
+        live += (await session.execute(
+            select(func.count(PolicySession.id)).where(
+                PolicySession.campaign_id == campaign_id,
+                PolicySession.status.not_in([s.value for s in TERMINAL_SESSION_STATES]),
+            ))).scalar_one()
+        if campaign.status == CampaignStatus.ACTIVE.value or live:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "it is still running: pause or stop it first, then mark it done",
+            )
     if body.status == CampaignStatus.SCHEDULED.value and not sched.from_campaign(campaign):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -574,6 +598,47 @@ async def set_campaign_status(
     await session.commit()
     await session.refresh(campaign)
     return await _campaign_out(session, campaign)
+
+
+@router.delete("/{campaign_id}")
+async def delete_campaign(
+    campaign_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Delete a campaign that never ran: a draft, or one still waiting for its
+    first window. One with runs keeps its results and cannot be deleted."""
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
+    if campaign.owner_id != user.id and user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "only its owner or an admin can delete it")
+    ran = (await session.execute(
+        select(func.count(Run.id)).where(Run.campaign_id == campaign_id))).scalar_one()
+    sessions = (await session.execute(
+        select(func.count(PolicySession.id)).where(PolicySession.campaign_id == campaign_id)
+    )).scalar_one()
+    if ran or sessions:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{campaign.name} has run ({ran} run(s)); a campaign with results is kept",
+        )
+    await session.execute(sa_delete(PolicyState).where(PolicyState.campaign_id == campaign_id))
+    await session.execute(sa_delete(Candidate).where(Candidate.campaign_id == campaign_id))
+    await session.execute(
+        sa_update(Event).where(Event.campaign_id == campaign_id).values(campaign_id=None))
+    await session.delete(campaign)
+    session.add(Event(actor=user.username, kind="campaign_deleted",
+                      payload={"campaign_id": campaign_id, "name": campaign.name}))
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{campaign.name} is still referred to elsewhere: {str(exc.orig)[:200]}",
+        ) from exc
+    return {"deleted": campaign_id}
 
 
 class PreflightRequest(BaseModel):

@@ -6,7 +6,7 @@ the platform owns the machine, does the measuring, and decides the result.
 
 This is the short guide. The full contract is
 [policy-contract.md](policy-contract.md); exact request and response shapes are
-at `/api/docs` on your install. 中文：[policy-api.zh.md](policy-api.zh.md)
+at `/api/docs` on your install.
 
 **Three terms used throughout**
 

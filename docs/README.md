@@ -1,36 +1,35 @@
 # Documentation
 
-Understanding it:
+**Using the platform**
 
-- [How it works](workflow.md): the product view, no code. 中文：[产品视角](workflow.zh.md)
-- [Architecture](architecture.md): how it is built. 中文：[架构](architecture.zh.md)
-- [Platform architecture](api/platform-architecture.md): the policy and a
-  campaign, step by step. 中文：[平台架构](api/platform-architecture.zh.md)
+- [User guide](guide/README.md): every page of the UI, with screenshots. Start
+  with [Concepts](guide/concepts.md) and [First campaign](guide/first-campaign.md).
 
-Using it:
+**How it works**
 
-- [User guide](guide/README.md): the platform page by page, with screenshots.
-  Start with [Concepts and words](guide/concepts.md) and
-  [Your first campaign](guide/first-campaign.md).
+- [How it works](workflow.md): the product view, without code.
+- [Architecture](architecture.md): components, the run state machine, and the
+  extension points.
+- [Platform architecture](api/platform-architecture.md): a policy campaign,
+  step by step.
 
-Running it:
+**Operating it**
 
-- [Installing](install.md): the platform cluster, GPU clusters, a policy and
-  a first campaign, step by step.
+- [Installing](install.md): the platform cluster, GPU clusters and a first
+  campaign.
 - [After installing](after-installing.md): settings, search policies, more
   GPUs, ingress and datasets.
 - [Deploying](deploying.md): the Helm chart and every setting.
 - [Upgrading](upgrading.md): how the schema is applied.
 
-Building on it:
+**Integrating with it**
 
 - [Policy API](api/policy-api.md): what a search container implements, in
-  short. 中文：[policy API](api/policy-api.zh.md). The full contract:
-  [policy-contract.md](api/policy-contract.md).
-- [Machine lease API](api/machine-lease.md): lending GPU machines from
-  another system, and taking them back.
-- [Agent API](api/agent-api.md): what an LLM writes performance reports from
-  (off by default).
-  [Prompting the report agent](perf-report-prompt.md).
+  short; the full [policy contract](api/policy-contract.md).
+- [Machine lease API](api/machine-lease.md): leasing GPU machines from another
+  system, and ending the lease.
+- [Agent API](api/agent-api.md): the read models LLM-written performance
+  reports use (off by default), and the
+  [report agent prompt](perf-report-prompt.md).
 - [Plugins](plugins.md): routes, worker steps, tables, planners and pages from
   a separately installed package.

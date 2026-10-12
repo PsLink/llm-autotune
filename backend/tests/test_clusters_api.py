@@ -117,7 +117,8 @@ async def test_update_with_a_new_kubeconfig_rotates_it(client):
 
 async def test_machine_carries_its_cluster(client):
     created = await _add(client)
-    body = {"name": "b300-k8s", "host": "k8s", "driver": "", "cluster_id": created["id"]}
+    body = {"name": "gpu-slice", "host": "k8s", "driver": "", "cluster_id": created["id"],
+            "gpu_count": 8}
     machine = (await client.post("/api/machines", json=body)).json()
     assert machine["cluster_id"] == created["id"]
     assert machine["cluster_name"] == "gpu-cluster-a"
@@ -130,7 +131,7 @@ async def test_delete_refused_while_a_machine_names_the_cluster(client):
     created = await _add(client)
     await client.post(
         "/api/machines",
-        json={"name": "b300-k8s", "host": "k8s", "cluster_id": created["id"]},
+        json={"name": "gpu-slice", "host": "k8s", "cluster_id": created["id"], "gpu_count": 8},
     )
     refused = await client.delete(f"/api/clusters/{created['id']}")
     assert refused.status_code == 409
@@ -157,7 +158,8 @@ async def test_a_group_may_not_span_two_clusters(client):
     for name, cid in (("m-a", a["id"]), ("m-b", b["id"])):
         await client.post(
             "/api/machines",
-            json={"name": name, "host": "10.0.0.1", "gpu_type": "B300", "cluster_id": cid},
+            json={"name": name, "host": "10.0.0.1", "gpu_type": "B300", "cluster_id": cid,
+                  "gpu_count": 8},
         )
     resp = await client.post(
         "/api/machine-groups", json={"name": "gang", "members": ["m-a", "m-b"]}
@@ -183,7 +185,8 @@ async def test_a_machine_row_defaults_to_the_default_cluster(client):
     """cluster_id is optional: an ssh machine (and every machine that predates
     clusters) has no cluster and is served by the default settings."""
     machine = (
-        await client.post("/api/machines", json={"name": "node-1", "host": "10.0.0.1"})
+        await client.post("/api/machines", json={"name": "node-1", "host": "10.0.0.1",
+                                                 "gpu_count": 8})
     ).json()
     assert machine["cluster_id"] is None
     assert machine["cluster_name"] == ""

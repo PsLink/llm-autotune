@@ -443,6 +443,10 @@ export interface Run {
 
 export interface RunDetail extends Run {
   config: Record<string, unknown>
+  /** The engine command this config renders to, inside the image. */
+  serve_command?: string
+  image?: string
+  model_path?: string
   results: {
     id: number
     source: string

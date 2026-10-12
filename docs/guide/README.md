@@ -1,36 +1,36 @@
 # User guide
 
-How to use LLM AutoTune once it is installed: adding GPUs, saying what to
-tune, running campaigns and reading what they find. For installing it, see
+Using LLM AutoTune after installation: adding GPUs, defining what to tune,
+running campaigns and reading the results. Installation is covered in
 [Installing](../install.md).
 
 ![A finished campaign's leaderboard](images/campaign-leaderboard.png)
 
-## New here? Read these first
+## Start here
 
-1. **[Concepts and words](concepts.md)**: campaign, search space, objective,
-   redline, policy, lease, and the rest of the vocabulary, each in a few lines.
-2. **[Your first campaign](first-campaign.md)**: from a fresh install to a
-   tuned config, step by step, with a screenshot of every step. You can follow
-   it on a laptop with no GPUs.
+1. **[Concepts](concepts.md)**: campaign, search space, objective, redline,
+   policy, lease and the other terms used in the UI.
+2. **[First campaign](first-campaign.md)**: from a fresh install to a tuned
+   config, with a screenshot of each step. It also works on a local kind
+   setup without GPUs.
 
-## The pages, one by one
+## Pages
 
-| page | what it covers | where in the UI |
+| page | covers | location in the UI |
 |---|---|---|
-| [Machines and GPU clusters](machines.md) | adding GPU clusters and ssh machines, leasing them, smoke tests, node groups | **Resources** |
-| [Search spaces](search-spaces.md) | the settings to try: fixed, swept, ranged and tied parameters, conditions, YAML | **Automatic Tuning ▸ Search spaces** |
-| [Objectives](objectives.md) | what "better" means: the target metric, the direction, redlines; which metric to pick | **Automatic Tuning ▸ Objectives** |
-| [Search policies](policies.md) | grid search versus a policy, `random-search`, registering your own | **Automatic Tuning ▸ Policies** |
-| [Creating a campaign](campaigns.md) | every step and field of New campaign; drafting from a baseline; YAML | **Automatic Tuning ▸ Campaigns ▸ New campaign** |
-| [Running a campaign](running-campaigns.md) | statuses, Start, Run now, Pause, Stop, schedules, pre-flight checks, the policy panel | a campaign's page |
-| [Reading results](results.md) | the leaderboard, a run's details, configuration, candidates, the report, rolling out a winner | a campaign's tabs |
-| [Baselines](baselines.md) | recording what production runs, comparing against it, Tune from this | **Automatic Tuning ▸ Baselines** |
-| [Runs and failures](runs.md) | a run's life, every kind of failure and what it usually means | **Runs** |
-| [Account, users and API keys](account.md) | roles, passwords, the published name, API keys | the user menu, top right |
+| [Machines and GPU clusters](machines.md) | adding GPU clusters and ssh machines, leases, smoke tests, node groups | **Resources** |
+| [Search spaces](search-spaces.md) | fixed, swept, ranged and tied parameters, conditions, YAML | **Automatic Tuning ▸ Search spaces** |
+| [Objectives](objectives.md) | target metric, direction, redlines; choosing a metric | **Automatic Tuning ▸ Objectives** |
+| [Search policies](policies.md) | grid search and policies, `random-search`, registering a policy | **Automatic Tuning ▸ Policies** |
+| [Creating a campaign](campaigns.md) | each step of New campaign; drafting from a baseline; YAML | **Automatic Tuning ▸ Campaigns ▸ New campaign** |
+| [Running a campaign](running-campaigns.md) | statuses, run controls, schedules, pre-flight checks, the policy panel | a campaign's page |
+| [Reading results](results.md) | leaderboard, run details, configuration, candidates, report, deploying the winner | a campaign's tabs |
+| [Baselines](baselines.md) | recording production's config, comparing against it, Tune from this | **Automatic Tuning ▸ Baselines** |
+| [Runs and failures](runs.md) | run states and failure kinds | **Runs** |
+| [Account, users and API keys](account.md) | roles, adding users, passwords, the published name, API keys | the user menu |
 | [Troubleshooting](troubleshooting.md) | symptoms and their usual causes | |
 
-## How the pieces fit
+## How the parts relate
 
 ```text
                  Resources                        Automatic Tuning
@@ -47,21 +47,21 @@ tune, running campaigns and reading what they find. For installing it, see
                                          leaderboard, report, winner
 ```
 
-- A **campaign** brings everything together: it copies a search space and an
-  objective, uses leased machines, and optionally a policy and a baseline.
-- Each candidate config becomes a **run** on a machine, and LLMBench measures
-  it with the campaign's workload.
-- Results land on the campaign's **leaderboard**, ranked by its objective and,
-  when a baseline exists, compared with production.
+- A **campaign** copies a search space and an objective, runs on leased
+  machines, and optionally uses a policy and a baseline.
+- Each candidate config becomes a **run** on a machine; LLMBench measures it
+  with the campaign's workload.
+- Results appear on the campaign's **leaderboard**, ranked by the objective
+  and, when a baseline exists, compared with production.
 
-## Beyond the UI
+## Further reading
 
 - [After installing](../after-installing.md): settings, more GPUs, ingress,
   datasets, building policies.
 - [How it works](../workflow.md): the product view, with diagrams of a
-  campaign and a night of tuning.
+  campaign and a tuning window.
 - [Policy contract](../api/policy-contract.md) and
-  [Machine lease API](../api/machine-lease.md): building on the platform.
+  [Machine lease API](../api/machine-lease.md): integrating with the platform.
 
-The screenshots in this guide come from a laptop install running the mock
-engine, so their numbers mean nothing about real performance.
+The screenshots come from a local kind setup running the mock engine; their
+numbers are not performance data.

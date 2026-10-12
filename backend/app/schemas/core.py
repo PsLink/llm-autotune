@@ -13,6 +13,10 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
 
+class UserCreate(RegisterRequest):
+    role: str = "user"  # admin | user
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -74,7 +78,8 @@ class MachineCreate(BaseModel):
     host: str
     ssh_user: str = "root"
     ssh_port: int = 22
-    gpu_count: int = 8
+    # None = read it from the machine. A machine that cannot be read needs it.
+    gpu_count: int | None = Field(None, ge=1, le=64)
     gpu_type: str = ""
     notes: str = ""
     # "" = platform default (ssh_docker today). Set "k8s" for a machine that is
@@ -415,9 +420,10 @@ class CampaignOut(BaseModel):
 
 
 class CampaignStatusUpdate(BaseModel):
-    # scheduled hands control back to the clock; paused takes it away. draft is
-    # not settable — a campaign that has started is no longer a draft.
-    status: str  # active | paused | scheduled
+    # scheduled hands control back to the clock; paused takes it away; done
+    # closes a campaign that is not running. draft is not settable — a campaign
+    # that has started is no longer a draft.
+    status: str  # active | paused | scheduled | done
 
 
 class CampaignScheduleUpdate(BaseModel):
@@ -465,6 +471,12 @@ class RunOut(BaseModel):
 class RunDetailOut(RunOut):
     config: dict[str, Any]
     results: list["ResultOut"]
+    # The engine's own command for this config, as it runs inside the image
+    # with the weights at /model: what a serving deployment copies. Empty when
+    # it cannot be rendered.
+    serve_command: str = ""
+    image: str = ""
+    model_path: str = ""
     # What the run actually executed on (image digest, engine/torch/CUDA
     # versions, GPU model). Detail view only — it is provenance you go looking
     # for, not something to carry on every row of a list.

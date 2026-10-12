@@ -84,7 +84,7 @@ function logout() {
 <template>
   <el-container>
     <el-header v-if="auth.isAuthenticated" class="topbar">
-      <span class="brand">LLM Autotune</span>
+      <span class="brand">LLM AutoTune</span>
       <!-- Four entries, not seven. The tuning stack is one activity — a
            campaign searches a space against an objective, from a baseline —
            so it folds into one menu, and what is left on the top row are the

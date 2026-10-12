@@ -1,4 +1,5 @@
 import os
+import shlex
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -8,10 +9,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.control.launch import MachineInfo, get_driver
-from app.control.launch.base import DeploymentHandle
+from app.control.launch.base import DeploymentHandle, LaunchSpec
 from app.core.auth import get_current_user
 from app.db.base import get_async_session
-from app.db.models import TERMINAL_RUN_STATES, Candidate, Event, Machine, Result, Run, User
+from app.db.models import (
+    TERMINAL_RUN_STATES,
+    Campaign,
+    Candidate,
+    Event,
+    Machine,
+    Result,
+    Run,
+    User,
+    is_baseline_config,
+)
 from app.schemas.core import ResultOut, RunDetailOut, RunOut
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -57,12 +68,38 @@ async def get_run(
         .scalars()
         .all()
     )
+    campaign = await session.get_one(Campaign, run.campaign_id)
     return RunDetailOut(
         **RunOut.model_validate(run).model_dump(),
         config=candidate.config,
         env_snapshot=run.env_snapshot or {},
         results=[ResultOut.model_validate(r) for r in results],
+        serve_command=_serve_command(run, candidate, campaign),
+        image=campaign.image,
+        model_path=campaign.model_path,
     )
+
+
+def _serve_command(run: Run, candidate: Candidate, campaign: Campaign) -> str:
+    """The engine command the run's config renders to, single-node."""
+    from app.control.engines import get_adapter
+
+    if is_baseline_config(candidate.config):
+        return ""
+    try:
+        spec = LaunchSpec(
+            run_id=run.id,
+            machine=MachineInfo(name="", host=""),
+            engine=campaign.engine,
+            image=campaign.image,
+            model_path=campaign.model_path,
+            served_model_name=campaign.served_model_name,
+            engine_args=candidate.config,
+            port=run.service_port or campaign.service_port,
+        )
+        return shlex.join(get_adapter(campaign.engine).build_command(spec))
+    except Exception:  # noqa: BLE001 — a display aid; the run detail never fails on it
+        return ""
 
 
 @router.post("/{run_id}/stop")
