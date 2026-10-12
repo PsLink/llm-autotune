@@ -106,6 +106,22 @@ class MachineCreate(BaseModel):
         # 422. For k8s machines the cluster probe overrides this anyway.
         return coerce_gpu_type(v)
 
+    @field_validator("name", "host", "node_selector", "data_host", "nccl_ifname")
+    @classmethod
+    def _trimmed(cls, v: str) -> str:
+        return v.strip()
+
+    @model_validator(mode="after")
+    def _addressable(self) -> "MachineCreate":
+        # A machine with no name cannot be pinned by a campaign or told apart
+        # on Resources, and an ssh machine with no host is one the worker can
+        # never reach. A k8s slice is reached through its cluster instead.
+        if not self.name:
+            raise ValueError("give the machine a name")
+        if self.driver != "k8s" and not self.host:
+            raise ValueError("an ssh machine needs the host to reach it at")
+        return self
+
 
 class MachineOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -595,6 +611,8 @@ class CandidateOut(BaseModel):
     status: str
     validation_error: str
     cards: int = 0  # GPUs this config occupies (tp × dp × pp)
+    # Production's config measured in this campaign, not a point of the search.
+    is_baseline: bool = False
 
 
 # -- baselines ----------------------------------------------------------------

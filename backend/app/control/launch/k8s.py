@@ -1744,8 +1744,12 @@ class ProbeVerdict:
                     "(credentials go in the cluster's image pull secrets).",
                 ))
             elif self.mount_failed:
+                # One probe pod mounts the path and pulls the images, and the
+                # node mounts before it pulls: say what to do, not only what
+                # did not happen.
                 out.append(pf.Check(key, label, pf.SKIP,
-                                    f"{ref}: not checked, the model mount failed first"))
+                                    f"{ref}: not checked yet. The model path failed first; "
+                                    "fix it and run the checks again to check this image"))
             elif self.pulling:
                 out.append(pf.Check(
                     key, label, pf.WARN,

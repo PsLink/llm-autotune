@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { apiErrorText } from '../utils/apiError'
 /** Building a campaign, five decisions at a time.
  *
  *  This was one dialog with nineteen controls in it, which asked the author to
@@ -8,7 +9,7 @@
  *  better, and when — and the panel on the right is the answer so far, visible
  *  the entire time rather than at a review screen nobody reads.
  */
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -132,8 +133,14 @@ const STEPS = [
 ]
 
 /** The name a campaign gets when its author leaves it blank. */
-const defaultName = computed(() =>
-  `${servedName.value || 'model'} · ${new Date().toISOString().slice(0, 10)}`)
+/** Today's date where the person is, not in UTC: a campaign named in the
+ *  evening must not carry tomorrow's or yesterday's date. */
+function localDate(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+const defaultName = computed(() => `${servedName.value || 'model'} · ${localDate()}`)
 
 /** What the engine serves the model as: the typed name, else the last part of
  *  the model path — the same rule the API applies to an empty field. */
@@ -322,7 +329,7 @@ async function runPreflight() {
   } catch (error: any) {
     ElMessage.error(
       error instanceof YamlError ? error.message
-        : (error.response?.data?.detail ?? 'Could not run the checks'),
+        : (apiErrorText(error, 'Could not run the checks')),
     )
   } finally {
     checking.value = false
@@ -371,6 +378,12 @@ watch(step, (i) => visited.value.add(i))
 
 function stepStatus(i: number): 'process' | 'success' | 'error' | 'wait' {
   if (i === step.value) return 'process'
+  // The last step is the checks: it is done when they ran, not when it was
+  // merely looked at, and it is a problem when they found one.
+  if (i === STEPS.length - 1) {
+    if (!preflight.value || preflight.value.note) return 'wait'
+    return blockers.value.length ? 'error' : 'success'
+  }
   if (!visited.value.has(i)) return 'wait'
   return problems.value[i].length ? 'error' : 'success'
 }
@@ -517,6 +530,23 @@ function adopt<T extends { id: number; name: string }>(
   return id
 }
 
+/** An imported or drafted space is not a saved row, so it has no count of
+ *  its own: ask the platform, the way the search-space editor's preview does. */
+async function countInlineSpace() {
+  const row = searchSpaces.value.find((r) => r.id === selectedSpaceId.value)
+  if (!row || row.id >= 0) return
+  try {
+    const { data } = await api.post('/search-spaces/preview', {
+      name: row.name, engine: row.engine, base: row.base ?? {}, grid: row.grid ?? {},
+      tied: row.tied ?? [], range: row.range ?? {}, conditions: row.conditions ?? {},
+    })
+    row.candidate_count = data.candidate_count
+    searchSpaces.value = [...searchSpaces.value]
+  } catch {
+    // The checks report a space the platform cannot expand.
+  }
+}
+
 function applyImport() {
   let parsed
   try {
@@ -530,7 +560,10 @@ function applyImport() {
   // default already there rather than being blanked.
   for (const [key, value] of Object.entries(parsed.fields)) {
     if (key === 'extra_env' || key === 'extra_volumes') continue
-    if (key in form.value) (form.value as Record<string, unknown>)[key] = value
+    // A file written by hand says "no window" as null; the form (and the API)
+    // spell it as an empty string.
+    const typed = value === null && (key === 'daily_start' || key === 'daily_end') ? '' : value
+    if (key in form.value) (form.value as Record<string, unknown>)[key] = typed
   }
   // A policy campaign travels as policy_id + policy_settings; the form holds
   // them as the Strategy select and the three budget inputs.
@@ -554,6 +587,7 @@ function applyImport() {
       owner_id: 0, engine: form.value.engine, description: 'from the imported file',
       base: {}, grid: {}, tied: [], range: {}, conditions: {}, candidate_count: 0,
     } as any)
+    void countInlineSpace()
   }
   if (parsed.objective) {
     selectedObjectiveId.value = adopt(objectives, parsed.objective, -2, {
@@ -643,7 +677,7 @@ async function draftFrom(req: Record<string, unknown>) {
     applyImport()
     draftNotes.value = { provenance: data.provenance, warnings: data.warnings }
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not draft a campaign')
+    ElMessage.error(apiErrorText(error, 'Could not draft a campaign'))
   } finally {
     drafting.value = false
   }
@@ -665,6 +699,19 @@ async function create() {
     step.value = firstBad
     ElMessage.error(`Still needs ${problems.value[firstBad].join(', ')}`)
     return
+  }
+  if (blockers.value.length) {
+    try {
+      await ElMessageBox.confirm(
+        `The checks found ${blockers.value.length} problem(s) that would stop this `
+          + 'campaign: ' + blockers.value.map((b) => b.label).join(', ')
+          + '. Create it anyway, to fix them before it starts?',
+        'Create with problems?',
+        { confirmButtonText: 'Create anyway', cancelButtonText: 'Go back', type: 'warning' },
+      )
+    } catch {
+      return
+    }
   }
   busy.value = true
   try {
@@ -724,7 +771,7 @@ async function create() {
     ElMessage.error(
       error instanceof YamlError
         ? error.message
-        : (error.response?.data?.detail ?? 'Create failed'),
+        : (apiErrorText(error, 'Create failed')),
     )
   } finally {
     busy.value = false
@@ -923,7 +970,8 @@ onMounted(async () => {
                   @click="openBuilder('/policies')">Register one</el-button>
                 <el-button link class="label-link" @click="refreshLists">Refresh</el-button>
               </template>
-              <el-select v-model="form.strategy" style="width: 100%" filterable>
+              <el-select v-model="form.strategy" style="width: 100%" filterable
+                :empty-values="[null, undefined]">
                 <el-option value="" label="Grid (exhaustive)" />
                 <el-option-group v-if="policies.length" label="Policies">
                   <el-option v-for="p in policies" :key="p.id" :value="`policy:${p.id}`"
@@ -1566,7 +1614,10 @@ dd.empty {
   margin: 8px 0 0;
   font-size: 12px;
 }
+.provenance dt,
 .provenance dd {
+  /* The summary panel's dt/dd spacing would offset each key from its value. */
   margin: 0;
+  font-size: 12px;
 }
 </style>

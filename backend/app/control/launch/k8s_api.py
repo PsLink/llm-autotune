@@ -247,13 +247,20 @@ class KubectlApi(K8sApi):
     def logs(self, label_selector: str, tail: int = 200) -> str:
         # --all-containers so the engine's log is captured even when the pod
         # runs a sidecar; --prefix so multi-pod output stays attributable.
-        result = self._run(
-            ["logs", "-l", label_selector, "--tail", str(tail), "--all-containers", "--prefix"]
-        )
+        args = ["logs", "-l", label_selector, "--tail", str(tail), "--all-containers", "--prefix"]
+        # A crash-looping engine has already been restarted: its current
+        # container is a fresh one with nothing in it, and what explains the
+        # crash (out of memory, a refused flag) is in the previous one. That
+        # call fails when nothing was restarted, which is fine.
+        previous = self._run([*args, "--previous"])
+        result = self._run(args)
         if result.returncode != 0:
             logger.warning("kubectl logs -l %s failed: %s", label_selector, result.stderr[:300])
-            return ""
-        return (result.stdout + "\n" + result.stderr).strip()
+            return previous.stdout.strip() if previous.returncode == 0 else ""
+        current = (result.stdout + "\n" + result.stderr).strip()
+        if previous.returncode == 0 and previous.stdout.strip():
+            return f"{previous.stdout.strip()}\n--- restarted ---\n{current}".strip()
+        return current
 
 
 class ClientApi(K8sApi):
@@ -496,12 +503,39 @@ class ClientApi(K8sApi):
         chunks = []
         for pod in pods.items:
             pod_name = pod.metadata.name
+            # A crash-looping engine's current container is a fresh restart
+            # with an empty log; the crash itself is in the previous one.
+            restarted = any(
+                (status.restart_count or 0) > 0
+                for status in ((pod.status and pod.status.container_statuses) or [])
+            )
+            if restarted:
+                try:
+                    before = self._read_log(pod_name, tail, previous=True)
+                    # Gone already (the runtime keeps one previous container,
+                    # and not for long): the kubelet answers with a sentence.
+                    if before.strip() and "unable to retrieve container logs" not in before:
+                        chunks.append(f"[{pod_name}, before the restart]\n{before}")
+                except self._ApiException:
+                    pass
             try:
-                text = self._core.read_namespaced_pod_log(pod_name, self._ns, tail_lines=tail)
+                text = self._read_log(pod_name, tail)
             except self._ApiException:
                 continue  # best-effort: a log we cannot read must not fail a run
             chunks.append(f"[{pod_name}]\n{text}")
         return "\n".join(chunks).strip()
+
+    def _read_log(self, pod_name: str, tail: int, previous: bool = False) -> str:
+        """A pod's log as text. Read raw and decoded here: the client's own
+        deserialization hands back the repr of the bytes (b'...\\n...'), which
+        is what every captured engine log looked like."""
+        response = self._core.read_namespaced_pod_log(
+            pod_name, self._ns, tail_lines=tail, previous=previous, _preload_content=False
+        )
+        data = getattr(response, "data", response)
+        if isinstance(data, bytes):
+            return data.decode("utf-8", errors="replace")
+        return str(data or "")
 
 
 # One transport per DB-bound cluster, so a worker serving several clusters does

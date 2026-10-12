@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useAuthStore } from '../stores/auth'
+import { apiErrorText } from '../utils/apiError'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { api, type ApiKey, type ApiKeyCreated } from '../api/client'
@@ -8,6 +10,7 @@ import { exactTime, relativeTime } from '../utils/time'
 
 const openDocs = () => window.open('/api/docs', '_blank')
 
+const auth = useAuthStore()
 const keys = ref<ApiKey[]>([])
 const showNew = ref(false)
 const busy = ref(false)
@@ -34,7 +37,7 @@ async function create() {
     name.value = ''
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not mint a key')
+    ElMessage.error(apiErrorText(error, 'Could not mint a key'))
   } finally {
     busy.value = false
   }
@@ -55,8 +58,10 @@ async function revoke(key: ApiKey) {
   await load()
 }
 
+// This platform's own address, as the browser reaches it: a fixed example
+// address had to be noticed and replaced before the call worked.
 const curlExample = (secret: string) =>
-  `curl -X POST http://192.0.2.10:28100/api/machines/lease \\
+  `curl -X POST ${window.location.origin}/api/machines/lease \\
   -H 'X-API-Key: ${secret}' \\
   -H 'Content-Type: application/json' \\
   -d '{"name": "node-24", "host": "198.51.100.24", "gpu_count": 8}'`
@@ -88,6 +93,10 @@ onMounted(load)
           <span :class="row.revoked_at ? 'dead' : ''">{{ row.name }}</span>
           <el-tag v-if="row.revoked_at" size="small" type="info" class="tag">revoked</el-tag>
         </template>
+      </el-table-column>
+      <el-table-column v-if="keys.some((k) => k.owner && k.owner !== auth.user?.username)"
+        label="Owner" min-width="110">
+        <template #default="{ row }">{{ row.owner }}</template>
       </el-table-column>
       <el-table-column label="Key" min-width="160">
         <template #default="{ row }"><span class="mono muted">{{ row.masked }}</span></template>

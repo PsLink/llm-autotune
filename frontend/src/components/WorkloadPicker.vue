@@ -117,7 +117,8 @@ function profileNote(p: DatasetProfile): string {
             proves the pipeline but measures nothing. A campaign keeps the sample it
             started with, so every candidate sees the same requests.
           </InfoHint></span>
-        <el-select v-model="w.dataset_profile" size="small" filterable>
+        <el-select v-model="w.dataset_profile" size="small" filterable
+          :empty-values="[null, undefined]">
           <el-option value="" label="Example set (20 requests)" />
           <el-option v-for="p in profiles" :key="p.name" :value="p.name"
             :label="p.display_name || p.name">

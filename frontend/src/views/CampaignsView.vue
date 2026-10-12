@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { describeStrategy } from '../plugins'
 import { computed, onMounted, ref } from 'vue'
-import { api, type Campaign } from '../api/client'
+import { api, type Campaign, type Policy } from '../api/client'
 import LinkButton from '../components/LinkButton.vue'
 import { useI18n } from '../i18n'
 import { useRowLink } from '../utils/nav'
@@ -11,9 +11,20 @@ import { exactTime, relativeTime } from '../utils/time'
 const campaignRows = useRowLink((row: Campaign) => `/campaigns/${row.id}`)
 const { t } = useI18n()
 const campaigns = ref<Campaign[]>([])
+const policies = ref<Policy[]>([])
 
 async function load() {
   campaigns.value = (await api.get('/campaigns')).data
+  try {
+    policies.value = (await api.get('/policies')).data
+  } catch {
+    policies.value = []
+  }
+}
+
+/** The policy by name: "policy #1" meant looking it up on another page. */
+function policyName(id: number): string {
+  return policies.value.find((p) => p.id === id)?.name ?? `policy #${id}`
 }
 
 /** The window as an operator reads it, not as it is stored. A campaign with no
@@ -23,7 +34,8 @@ function schedule(c: Campaign): { text: string; auto: boolean } {
   if (c.daily_start && c.daily_end) {
     return { text: `${c.daily_start} → ${c.daily_end}`, auto: true }
   }
-  if (c.window_start || c.window_end) return { text: t('campaigns.oneOff'), auto: true }
+  // Start and Run now open a window of their own, but that is not a
+  // schedule: without a nightly window the campaign runs when started.
   return { text: t('campaigns.manual'), auto: false }
 }
 
@@ -74,12 +86,12 @@ onMounted(load)
           <span :class="schedule(row).auto ? 'mono' : 'muted'">{{ schedule(row).text }}</span>
         </template>
       </el-table-column>
-      <el-table-column :label="t('campaigns.search')" width="110">
+      <el-table-column :label="t('campaigns.search')" width="160">
         <template #default="{ row }">
-          <span v-if="row.policy_id != null" class="mono">policy #{{ row.policy_id }}</span>
+          <span v-if="row.policy_id != null" class="mono">{{ policyName(row.policy_id) }}</span>
           <span v-else-if="describeStrategy(row.extensions)" class="mono">
             {{ describeStrategy(row.extensions) }}</span>
-          <span v-else class="muted">{{ t('campaign.enumerates') }}</span>
+          <span v-else class="muted" :title="t('campaign.enumerates')">{{ t('campaigns.gridAll') }}</span>
         </template>
       </el-table-column>
       <el-table-column :label="t('common.created')" min-width="130">

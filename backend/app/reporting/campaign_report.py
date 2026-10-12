@@ -268,8 +268,20 @@ def render_campaign_report(
     varying = _swept_keys(campaign, runs)
     noise_pct = get_settings().report_noise_threshold_pct
 
-    baseline_runs = [r for r in runs if r.kind == RunKind.BASELINE.value]
-    all_experiments = [r for r in runs if r.kind != RunKind.BASELINE.value]
+    # Production's config, measured in this campaign: in place on the
+    # handed-over service (a BASELINE run), or relaunched on the campaign's own
+    # machines as a baseline candidate. Either way it is the reference, not a
+    # point of the search.
+    def is_baseline(run: Run) -> bool:
+        return run.kind == RunKind.BASELINE.value or is_baseline_candidate(
+            getattr(run, "candidate", None)
+        )
+
+    baseline_runs = [
+        r for r in runs
+        if is_baseline(r) and _stage(r) == SCREEN and r.status == "succeeded"
+    ]
+    all_experiments = [r for r in runs if not is_baseline(r)]
     # Everything below this line ranks the SCREENING stage. Verification is
     # reported separately, above, because it is a different measurement.
     verified = [r for r in all_experiments if _stage(r) == VERIFY]
@@ -366,8 +378,9 @@ def render_campaign_report(
             verdict_heading,
             "",
             f"Best: **{_config_summary(ranked[0].config, varying)}** "
-            f"({_fmt(ranked[0].mean)}). No baseline was measured, so there is "
-            "nothing to compare against — run a canary next time.",
+            f"({_fmt(ranked[0].mean)}). Production's config was not measured "
+            "in this campaign, so there is nothing to compare against: record it "
+            "on Baselines and the next campaign for this model measures it too.",
             "",
         ]
     elif rejected:
@@ -493,7 +506,8 @@ def render_campaign_report(
             )
     if not baseline_runs:
         next_steps.append(
-            "No baseline canary ran, so these numbers float free of production."
+            "Production's config was not measured alongside, so these numbers "
+            "are not compared with what runs today (record it on Baselines)."
         )
     if next_steps:
         lines += ["## Suggested next steps", ""]

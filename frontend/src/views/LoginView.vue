@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { apiErrorText } from '../utils/apiError'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -33,7 +34,7 @@ async function submit() {
     else await auth.login(username.value, password.value)
     router.push(afterLogin())
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? t('login.failed'))
+    ElMessage.error(apiErrorText(error, t('login.failed')))
   } finally {
     busy.value = false
   }

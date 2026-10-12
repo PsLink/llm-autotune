@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { apiErrorText } from '../utils/apiError'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { api, type MetricSpec, type Objective, type Redline } from '../api/client'
@@ -17,10 +18,12 @@ const form = ref({
   name: '',
   description: '',
   target_metric: '',
-  // null = follow whatever the metric implies; set only when the user overrides.
-  direction: null as 'maximize' | 'minimize' | null,
+  // 'auto' = follow whatever the metric implies; set only when the user
+  // overrides. A string rather than null, so the radio shows it selected.
+  direction: 'auto' as 'auto' | 'maximize' | 'minimize',
   redlines: [] as Redline[],
 })
+const defaultTarget = ref('')
 
 /** Grouped by the benchmark that reports them, headline metrics first inside
  *  each group. Flat, the list invited building an objective out of a sweep
@@ -55,7 +58,8 @@ function label(key: string): string {
 const impliedDirection = computed<'maximize' | 'minimize'>(() =>
   spec(form.value.target_metric)?.better === 'lower' ? 'minimize' : 'maximize',
 )
-const effectiveDirection = computed(() => form.value.direction ?? impliedDirection.value)
+const effectiveDirection = computed(() =>
+  form.value.direction === 'auto' ? impliedDirection.value : form.value.direction)
 
 async function load() {
   objectives.value = (await api.get('/objectives')).data
@@ -65,6 +69,7 @@ async function loadMetrics() {
   const { data } = await api.get('/objectives/metrics')
   metrics.value = data.metrics
   operators.value = data.operators
+  defaultTarget.value = data.default_target_metric ?? ''
   return data.default_target_metric as string
 }
 
@@ -73,11 +78,12 @@ function openNew() {
   form.value = {
     name: '',
     description: '',
-    target_metric: metrics.value[0]?.key ?? '',
-    direction: null,
-    // Correctness is not optional: a fast service that answers wrongly is not
-    // a faster service, so every new objective starts holding the pass rate.
-    redlines: [{ metric: 'functional_acceptance.pass_rate', op: '>=', value: 0.99 }],
+    target_metric: defaultTarget.value || metrics.value[0]?.key || '',
+    direction: 'auto',
+    // No redline to start with. A pass-rate floor used to be pre-filled, but
+    // the synthetic sweep never reports a pass rate, and a metric the
+    // benchmark does not report counts as crossed: every config was rejected.
+    redlines: [],
   }
   editorOpen.value = true
 }
@@ -96,15 +102,20 @@ function openEdit(objective: Objective, asCopy = false) {
 }
 
 function addRedline() {
-  const metric = metrics.value.find(
-    (m) => !form.value.redlines.some((r) => r.metric === m.key),
-  )
+  // The usual redline is a latency ceiling on the same benchmark as the
+  // target: p99 time to first token, from the sweep or from a replay.
+  const group = spec(form.value.target_metric)?.group
+  const unused = metrics.value.filter(
+    (m) => !form.value.redlines.some((r) => r.metric === m.key))
+  const metric = unused.find((m) => m.group === group && /^[^.]+\.ttft_p99_ms$/.test(m.key))
+    ?? unused.find((m) => m.group === group) ?? unused[0]
   if (!metric) return
   form.value.redlines.push({
     metric: metric.key,
     // A "lower is better" metric is almost always an upper bound, and vice versa.
     op: metric.better === 'lower' ? '<=' : '>=',
-    value: 0,
+    // Left empty for the author: 0 made "TTFT p99 <= 0 ms", which nothing holds.
+    value: undefined as unknown as number,
   })
 }
 
@@ -117,12 +128,20 @@ async function save() {
     ElMessage.error('Pick a metric to optimise')
     return
   }
+  const unset = form.value.redlines.filter((r) => r.metric
+    && (r.value === undefined || r.value === null || String(r.value).trim() === ''
+      || Number.isNaN(Number(r.value))))
+  if (unset.length) {
+    ElMessage.error(`Give the ${unset.map((r) => label(r.metric)).join(', ')} redline a value`)
+    return
+  }
   const body = {
     name: form.value.name.trim(),
     description: form.value.description,
     target_metric: form.value.target_metric,
     direction: effectiveDirection.value,
-    redlines: form.value.redlines.filter((r) => r.metric),
+    redlines: form.value.redlines.filter((r) => r.metric)
+      .map((r) => ({ ...r, value: Number(r.value) })),
   }
   busy.value = true
   try {
@@ -132,7 +151,7 @@ async function save() {
     await load()
     ElMessage.success('Saved')
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Save failed')
+    ElMessage.error(apiErrorText(error, 'Save failed'))
   } finally {
     busy.value = false
   }
@@ -153,7 +172,7 @@ async function remove(objective: Objective) {
     await api.delete(`/objectives/${objective.id}`)
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Delete failed')
+    ElMessage.error(apiErrorText(error, 'Delete failed'))
   }
 }
 
@@ -168,7 +187,10 @@ const asYaml = computed(() =>
 
 function redlinesOf(objective: Objective): string {
   if (!objective.redlines.length) return 'none'
-  return objective.redlines.map((r) => `${label(r.metric)} ${r.op} ${r.value}`).join(', ')
+  return objective.redlines.map((r) => {
+    const unit = spec(r.metric)?.unit
+    return `${label(r.metric)} ${r.op} ${r.value}${unit ? ` ${unit}` : ''}`
+  }).join(', ')
 }
 
 onMounted(() => {
@@ -238,7 +260,7 @@ onMounted(() => {
       <el-form label-position="top">
         <div class="grid-2">
           <el-form-item label="Name">
-            <el-input v-model="form.name" placeholder="throughput @ TTFT p95 ≤ 3 s" />
+            <el-input v-model="form.name" placeholder="throughput @ TTFT p99 ≤ 3 s" />
           </el-form-item>
           <el-form-item label="Notes">
             <el-input v-model="form.description" placeholder="optional" />
@@ -272,7 +294,7 @@ onMounted(() => {
             </InfoHint>
           </template>
           <el-radio-group v-model="form.direction">
-            <el-radio-button :value="null">
+            <el-radio-button value="auto">
               Auto ({{ impliedDirection }})
             </el-radio-button>
             <el-radio-button value="maximize">Maximize</el-radio-button>
@@ -310,9 +332,14 @@ onMounted(() => {
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column label="Value" width="150">
+            <el-table-column label="Value" width="200">
               <template #default="{ row }">
-                <el-input v-model.number="row.value" class="mono" />
+                <!-- The unit is the metric's own: a latency limit is in ms, a
+                     throughput floor in tokens per second or minute. -->
+                <el-input v-model.number="row.value" class="mono" placeholder="value">
+                  <template v-if="spec(row.metric)?.unit" #append>
+                    {{ spec(row.metric)!.unit }}</template>
+                </el-input>
               </template>
             </el-table-column>
             <el-table-column width="50">

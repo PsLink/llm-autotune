@@ -1,11 +1,18 @@
 <script setup lang="ts">
+import { apiErrorText } from '../utils/apiError'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
 import { api, type Cluster, type Machine, type MachineGroup, type MachineGroupPreflight, type MachineLifecycle } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
 import LinkButton from '../components/LinkButton.vue'
+import { useAuthStore } from '../stores/auth'
 import { usePoll } from '../utils/poll'
 import { relativeTime } from '../utils/time'
+
+/** Adding, editing and probing clusters is for admins; the API refuses the
+ *  rest with a 403, so the buttons are not offered to them at all. */
+const auth = useAuthStore()
+const isAdmin = computed(() => auth.user?.role === 'admin')
 
 /** Reaching `window` from a template needs it bound explicitly under
  *  `<script setup>`; the component instance is not the global object. */
@@ -171,7 +178,7 @@ async function loadNodes(cluster: { id: number; name: string }) {
     pickedNodes.value = nodesView.value!.nodes
       .filter((n) => !n.machine && n.ready && n.schedulable).map((n) => n.hostname)
   } catch (error: any) {
-    nodesError.value = error.response?.data?.detail ?? 'Could not read the cluster\'s nodes'
+    nodesError.value = apiErrorText(error, 'Could not read the cluster\'s nodes')
   }
 }
 
@@ -183,7 +190,7 @@ async function connectCluster() {
     addStep.value = 'nodes'
     await loadNodes(data)
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not add the cluster')
+    ElMessage.error(apiErrorText(error, 'Could not add the cluster'))
   } finally {
     busy.value = false
   }
@@ -207,7 +214,7 @@ async function registerNodes() {
     showAddCluster.value = false
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not register the nodes')
+    ElMessage.error(apiErrorText(error, 'Could not register the nodes'))
   } finally {
     busy.value = false
   }
@@ -237,7 +244,7 @@ async function runGroupPreflight(group: MachineGroup) {
     const { data } = await api.post(`/machine-groups/${group.id}/preflight`, {})
     groupPreflight.value = data
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Preflight failed')
+    ElMessage.error(apiErrorText(error, 'Preflight failed'))
     showGroupPreflight.value = false
   } finally {
     busy.value = false
@@ -356,7 +363,7 @@ async function saveGroup() {
     showGroup.value = false
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Save failed')
+    ElMessage.error(apiErrorText(error, 'Save failed'))
   } finally {
     busy.value = false
   }
@@ -378,7 +385,7 @@ async function removeGroup(group: MachineGroup) {
     ElMessage.success(`Dissolved ${group.name}`)
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not dissolve the group')
+    ElMessage.error(apiErrorText(error, 'Could not dissolve the group'))
   }
 }
 
@@ -425,7 +432,7 @@ async function saveCluster() {
     clusterForm.value = emptyClusterForm()
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Save failed')
+    ElMessage.error(apiErrorText(error, 'Save failed'))
   } finally {
     busy.value = false
   }
@@ -447,7 +454,7 @@ async function removeCluster(c: Cluster) {
     ElMessage.success(`Removed ${c.name}`)
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not remove the cluster')
+    ElMessage.error(apiErrorText(error, 'Could not remove the cluster'))
   }
 }
 
@@ -466,7 +473,7 @@ async function probeCluster(c: Cluster) {
     else ElMessage.success(`${c.name}: ${summary}`)
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Probe failed')
+    ElMessage.error(apiErrorText(error, 'Probe failed'))
   } finally {
     probingCluster.value = null
   }
@@ -484,7 +491,7 @@ async function save() {
     showAdd.value = false
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Save failed')
+    ElMessage.error(apiErrorText(error, 'Save failed'))
   } finally {
     busy.value = false
   }
@@ -506,7 +513,7 @@ async function removeMachine(machine: Machine) {
     await load()
   } catch (error: any) {
     // 409 carries the reason (campaigns pinned / live run) — show it verbatim.
-    ElMessage.error(error.response?.data?.detail ?? 'Remove failed')
+    ElMessage.error(apiErrorText(error, 'Remove failed'))
   }
 }
 
@@ -526,7 +533,7 @@ async function lease(machine: Machine) {
     })
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not lease the machine')
+    ElMessage.error(apiErrorText(error, 'Could not lease the machine'))
   }
 }
 
@@ -562,7 +569,7 @@ async function endLease(machine: Machine, mode: 'polite' | 'eager') {
     ElMessage.success(mode === 'eager' ? 'Stopping runs' : 'No new runs will start')
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not end the lease')
+    ElMessage.error(apiErrorText(error, 'Could not end the lease'))
   }
 }
 
@@ -616,7 +623,7 @@ async function runSmoke() {
     })
     smoke.value.result = data
   } catch (error: any) {
-    smoke.value.error = error.response?.data?.detail ?? 'Smoke test failed to run'
+    smoke.value.error = apiErrorText(error, 'Smoke test failed to run')
   } finally {
     smoke.value.running = false
   }
@@ -639,7 +646,7 @@ async function probeCapacity(machine: Machine) {
     else ElMessage.success(`Probed: ${summary}`)
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Probe failed')
+    ElMessage.error(apiErrorText(error, 'Probe failed'))
   } finally {
     busyMachine.value = null
   }
@@ -715,7 +722,7 @@ onMounted(async () => {
         <el-button @click="openClusters">Clusters</el-button>
         <el-button @click="openAddGroup">Group machines</el-button>
         <el-button @click="openAdd">Add machine</el-button>
-        <el-button type="primary" @click="openAddCluster">Add GPU cluster</el-button>
+        <el-button v-if="isAdmin" type="primary" @click="openAddCluster">Add GPU cluster</el-button>
       </div>
     </div>
 
@@ -780,7 +787,8 @@ onMounted(async () => {
 
     <div v-if="!machines.length" class="empty muted">
       No machines.
-      <el-button link type="primary" @click="openAddCluster">Add a GPU cluster</el-button>
+      <el-button v-if="isAdmin" link type="primary" @click="openAddCluster">Add a GPU cluster</el-button>
+      <span v-else>An admin adds GPU clusters.</span>
     </div>
 
     <div v-for="m in machines" :key="m.id" class="card">
@@ -804,7 +812,8 @@ onMounted(async () => {
           </el-tag>
           <span class="mono muted">{{ m.host }}</span>
           <el-tag :type="(leaseLook(m).type as any)" size="small">{{ leaseLook(m).text }}</el-tag>
-          <el-tag v-if="stageOf(m)" size="small" effect="plain"
+          <el-tag v-if="stageOf(m) && (m.lease_state === 'active' || m.lease_state === 'draining')"
+            size="small" effect="plain"
             :type="(readinessLook[stageOf(m)!.readiness]?.type as any) ?? 'info'"
             title="What an external fleet manager is told when it asks for this machine">
             {{ readinessLook[stageOf(m)!.readiness]?.text ?? stageOf(m)!.readiness }}
@@ -908,7 +917,7 @@ onMounted(async () => {
               <a :href="setupDocs" target="_blank" rel="noopener">Setup guide</a>
             </InfoHint>
           </template>
-          <el-select v-model="form.driver" style="width: 100%">
+          <el-select v-model="form.driver" style="width: 100%" :empty-values="[null, undefined]">
             <el-option label="SSH + Docker" value="" />
             <el-option label="Kubernetes" value="k8s" />
           </el-select>
@@ -1008,7 +1017,7 @@ onMounted(async () => {
         </el-form-item>
         <div class="grid-2">
           <el-form-item label="Substrate">
-            <el-select v-model="groupForm.driver" style="width: 100%">
+            <el-select v-model="groupForm.driver" style="width: 100%" :empty-values="[null, undefined]">
               <el-option label="(each machine's own)" value="" />
               <el-option label="SSH + Docker" value="ssh_docker" />
               <el-option label="Kubernetes" value="k8s" />
@@ -1240,7 +1249,7 @@ onMounted(async () => {
               no credential
             </el-tag>
           </div>
-          <div class="acts">
+          <div v-if="isAdmin" class="acts">
             <el-button size="small" type="primary" plain @click="openNodes(c)">Nodes</el-button>
             <el-button size="small" :loading="probingCluster === c.id"
               @click="probeCluster(c)">Probe</el-button>
@@ -1265,8 +1274,8 @@ onMounted(async () => {
       </div>
       <div v-if="!clusters.length" class="empty muted">
         No clusters.
-        <el-button link type="primary" @click="showClusters = false; openAddCluster()">
-          Add a GPU cluster</el-button>
+        <el-button v-if="isAdmin" link type="primary"
+          @click="showClusters = false; openAddCluster()">Add a GPU cluster</el-button>
       </div>
 
       <template v-if="editingClusterId !== null">

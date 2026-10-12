@@ -22,6 +22,21 @@ const emit = defineEmits<{
   (e: 'update:until', v: string | null): void
 }>()
 
+/** Every night, or no window at all. Said as a choice: clearing both time
+ *  pickers was the only way to run a campaign by hand, and nothing said so. */
+const mode = computed(() => (props.start || props.end ? 'nightly' : 'manual'))
+let remembered = { start: '23:00', end: '08:00' }
+function setMode(next: string | number | boolean | undefined) {
+  if (next === 'manual') {
+    if (props.start && props.end) remembered = { start: props.start, end: props.end }
+    emit('update:start', '')
+    emit('update:end', '')
+  } else {
+    emit('update:start', remembered.start)
+    emit('update:end', remembered.end)
+  }
+}
+
 /** The browser's own zone first: it is right nearly always, and being wrong
  *  here means a campaign wakes at the wrong hour with no visible symptom. */
 const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -65,6 +80,11 @@ const summary = computed(() => {
 
 <template>
   <div class="window">
+    <el-radio-group :model-value="mode" size="small" class="mode" @update:model-value="setMode">
+      <el-radio-button value="nightly">Every night</el-radio-button>
+      <el-radio-button value="manual">No window (start it by hand)</el-radio-button>
+    </el-radio-group>
+    <template v-if="mode === 'nightly'">
     <div class="row">
       <!-- A picker with real hour and minute columns, not a list of half hours.
            `el-time-select` could only offer a fixed step, so a window that had
@@ -118,13 +138,17 @@ const summary = computed(() => {
     <p v-if="summary.text" class="summary" :class="{ bad: summary.bad }">
       {{ summary.text }}
     </p>
-    <p v-else-if="!start && !end" class="summary muted">
-      No window: start it by hand.
+    </template>
+    <p v-else class="summary muted">
+      The campaign runs when you press Start, until its search is done or you stop it.
     </p>
   </div>
 </template>
 
 <style scoped>
+.mode {
+  margin-bottom: 12px;
+}
 .row {
   display: flex;
   align-items: flex-end;

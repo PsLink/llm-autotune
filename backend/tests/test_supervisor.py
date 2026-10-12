@@ -437,6 +437,9 @@ def test_a_benchmark_failure_captures_the_engine_log(tmp_path, monkeypatch):
         assert run.log_path, "the engine log was saved before teardown"
         with open(run.log_path, encoding="utf-8") as f:
             assert "CUDA out of memory" in f.read()
+        # Its end is in the row too: the API reads the file only when it shares
+        # the worker's volume.
+        assert "CUDA out of memory" in (run.log_tail or "")
     # And the container was still torn down afterwards.
     assert supervisor.driver.torn_down == [f"autotune-run-{run.id}"]
 
@@ -498,6 +501,47 @@ def test_user_stop_request_kills_run_and_releases_machine():
         machine = session.get(Machine, 1)
         assert machine.state == MachineState.AVAILABLE.value
     assert supervisor.driver.torn_down == ["autotune-run-1"]
+
+
+def test_a_campaign_stop_gives_the_cut_off_configs_back():
+    """Stop, then Start, used to finish the campaign with the stopped configs
+    never measured. A campaign-level stop queues them again; a Stop on one run
+    stays final."""
+    supervisor, factory = make_supervisor()
+
+    supervisor.tick()  # launch
+    with factory() as session:
+        # What POST /campaigns/{id}/force-stop records: a pause, and a stop
+        # request per live run.
+        session.get(Campaign, 1).status = CampaignStatus.PAUSED.value
+        run = session.scalars(select(Run)).first()
+        session.add(Event(actor="alice", kind="stop_requested", run_id=run.id,
+                          payload={"reason": "force stop"}))
+        session.commit()
+    supervisor.tick()
+
+    with factory() as session:
+        assert len(session.scalars(select(Run)).all()) == 1, "paused: nothing relaunched"
+        run = session.scalars(select(Run)).first()
+        assert run.status == RunStatus.KILLED.value
+        assert run.failure_class == "released"
+        assert run.candidate.status == CandidateStatus.VALID.value
+
+
+def test_stopping_one_run_is_final_for_that_config():
+    supervisor, factory = make_supervisor()
+
+    supervisor.tick()
+    with factory() as session:
+        run = session.scalars(select(Run)).first()
+        session.add(Event(actor="alice", kind="stop_requested", run_id=run.id, payload={}))
+        session.commit()
+    supervisor.tick()
+
+    with factory() as session:
+        run = session.scalars(select(Run)).first()
+        assert run.status == RunStatus.KILLED.value
+        assert run.candidate.status != CandidateStatus.VALID.value
 
 
 def _request_stop(factory):
