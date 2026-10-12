@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import { apiErrorText } from '../utils/apiError'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { api, type Run } from '../api/client'
 import { useI18n } from '../i18n'
 import { useRowLink } from '../utils/nav'
 import { usePoll } from '../utils/poll'
-import { isLive, runLabel, runStatus } from '../utils/status'
+import { failureLabel, isLive, runLabel, runStatus } from '../utils/status'
 import { duration, exactTime, relativeTime } from '../utils/time'
 
 const { t } = useI18n()
@@ -35,7 +36,7 @@ async function stopRun(run: Run) {
     ElMessage.success(t('runs.stopRequested'))
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? t('runs.stopFailed'))
+    ElMessage.error(apiErrorText(error, t('runs.stopFailed')))
   }
 }
 
@@ -64,7 +65,9 @@ onMounted(() => {
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="failure_class" :label="t('runs.failure')" width="120" />
+      <el-table-column :label="t('runs.failure')" width="130">
+        <template #default="{ row }">{{ failureLabel(row.failure_class || '') }}</template>
+      </el-table-column>
       <el-table-column prop="container_name" :label="t('runs.container')" min-width="170" class-name="mono" />
       <el-table-column prop="llmbench_submission_id" :label="t('runs.submission')" width="130" />
       <el-table-column :label="t('common.started')" min-width="130">

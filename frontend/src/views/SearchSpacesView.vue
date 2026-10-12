@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { apiErrorText } from '../utils/apiError'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
 import { api, type CatalogParam, type SearchSpace, type SearchSpacePreview } from '../api/client'
@@ -112,7 +113,11 @@ function rangeSummary(row: Row): string {
   if (step <= 0) return 'step must be positive'
   if (max < min) return 'max is below min'
   const count = Math.floor((max - min) / step + 1e-9) + 1
-  const first = [0, 1, 2].filter((i) => i < count).map((i) => min + i * step)
+  // Rounded to the step's own precision, as the platform enumerates it:
+  // 0.8 + 0.05 is 0.8500000000000001 in floating point.
+  const decimals = (String(row.step).split('.')[1] ?? '').length
+  const first = [0, 1, 2].filter((i) => i < count)
+    .map((i) => Number((min + i * step).toFixed(decimals)))
   return `${count} value(s): ${first.join(', ')}${count > first.length ? ', …' : ''}`
 }
 
@@ -284,6 +289,15 @@ async function save() {
     ElMessage.error('Give the search space a name')
     return
   }
+  const empty = form.value.rows
+    .filter((r) => (r.mode === 'fixed' ? String(r.fixed).trim() === ''
+      : r.mode === 'range' ? false
+        : !r.values.some((v) => String(v).trim() !== '')))
+    .map((r) => r.name)
+  if (empty.length) {
+    ElMessage.error(`Give ${empty.join(', ')} a value, or remove ${empty.length === 1 ? 'it' : 'them'}`)
+    return
+  }
   busy.value = true
   try {
     if (editingId.value) await api.put(`/search-spaces/${editingId.value}`, body)
@@ -292,7 +306,7 @@ async function save() {
     await load()
     ElMessage.success('Saved')
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Save failed')
+    ElMessage.error(apiErrorText(error, 'Save failed'))
   } finally {
     busy.value = false
   }
@@ -456,7 +470,8 @@ onMounted(() => {
         </div>
 
         <el-form-item label="Add a parameter">
-          <el-select v-model="addName" filterable allow-create placeholder="search parameters…"
+          <el-select v-model="addName" filterable allow-create default-first-option
+            placeholder="search parameters…"
             style="width: 100%" @change="addRow">
             <el-option-group label="Commonly tuned">
               <el-option v-for="p in tunable" :key="p.name" :value="p.name"
@@ -523,12 +538,19 @@ onMounted(() => {
                   {{ rangeSummary(row) }}
                 </div>
               </template>
-              <el-select v-else v-model="row.values" multiple filterable allow-create
+              <el-select v-else-if="spec(row.name)?.choices?.length" v-model="row.values"
+                multiple filterable allow-create default-first-option
                 :reserve-keyword="false" style="width: 100%"
-                :placeholder="row.mode === 'tied' ? 'values, in group order' : 'values (Enter after each)'">
-                <el-option v-for="c in spec(row.name)?.choices ?? []" :key="String(c)"
+                :placeholder="row.mode === 'tied' ? 'values, in group order' : 'pick values'">
+                <el-option v-for="c in spec(row.name)!.choices" :key="String(c)"
                   :label="String(c)" :value="String(c)" />
               </el-select>
+              <!-- Free values: a tag input, not a select. With no options to show,
+                   the select's first Enter only opened its empty dropdown, so the
+                   first value typed was glued to the second ("1", "8" -> "18"). -->
+              <el-input-tag v-else v-model="row.values" delimiter="," style="width: 100%"
+                :placeholder="row.mode === 'tied'
+                  ? 'values in group order, Enter after each' : 'type a value, Enter after each'" />
 
               <div class="when-row">
                 <span class="muted tiny">when</span>
@@ -537,7 +559,7 @@ onMounted(() => {
                   <el-option v-for="g in gateChoices(row)" :key="g" :value="g" :label="g" />
                 </el-select>
                 <el-select v-if="row.whenName" v-model="row.whenValues" size="small" multiple
-                  filterable allow-create :reserve-keyword="false" placeholder="is…"
+                  filterable allow-create default-first-option :reserve-keyword="false" placeholder="is…"
                   style="width: 200px">
                   <el-option v-for="v in gateValues(row.whenName)" :key="v" :value="v"
                     :label="v" />
@@ -652,7 +674,13 @@ onMounted(() => {
   gap: 6px;
 }
 .range-row .el-input {
-  width: 90px;
+  /* A third of the column each: at a fixed 90px the label took most of the
+     box and a value like 16384 or 0.05 was cut off. */
+  flex: 1 1 0;
+  min-width: 0;
+}
+.range-row :deep(.el-input-group__prepend) {
+  padding: 0 8px;
 }
 .when-row {
   display: flex;

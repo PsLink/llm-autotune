@@ -58,9 +58,15 @@ def stage_of_run(run: Run) -> str:
 
 
 def benchmark_slug(campaign: Campaign, stage: str) -> str:
-    """The LLMBench benchmark this stage submits to. "" = platform default."""
+    """The LLMBench benchmark this stage submits to. "" = platform default.
+
+    A verify-stage run with no verify benchmark is a policy's finalist being
+    measured again by the platform. It repeats the campaign's own benchmark:
+    the platform default would judge the finalists on a workload the search
+    never saw.
+    """
     if stage == VERIFY:
-        return campaign.verify_benchmark_slug or ""
+        return campaign.verify_benchmark_slug or campaign.benchmark_slug or ""
     return campaign.benchmark_slug or ""
 
 
@@ -73,8 +79,11 @@ def objective(campaign: Campaign, stage: str) -> dict[str, Any]:
     would score every replay result None and quietly finish the campaign with
     "nothing stayed inside the redlines".
     """
-    if stage == VERIFY:
+    if stage == VERIFY and campaign.verify_benchmark_slug:
         return campaign.verify_objective or {"target_metric": DEFAULT_VERIFY_TARGET_METRIC}
+    # No second benchmark: a verify-stage run (a policy's finalist measured
+    # again) ran the campaign's own benchmark, so the campaign's objective
+    # judges it.
     return campaign.objective or {}
 
 

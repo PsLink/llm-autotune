@@ -1,14 +1,17 @@
 import os
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.control.launch import MachineInfo, get_driver
+from app.control.launch.base import DeploymentHandle
 from app.core.auth import get_current_user
 from app.db.base import get_async_session
-from app.db.models import TERMINAL_RUN_STATES, Candidate, Event, Result, Run, User
+from app.db.models import TERMINAL_RUN_STATES, Candidate, Event, Machine, Result, Run, User
 from app.schemas.core import ResultOut, RunDetailOut, RunOut
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -92,7 +95,31 @@ async def get_run_log(
     run = await session.get(Run, run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such run")
-    if not run.log_path or not os.path.exists(run.log_path):
-        return "(no captured log for this run)"
-    with open(run.log_path, encoding="utf-8") as f:
-        return f.read()
+    if run.log_path and os.path.exists(run.log_path):
+        with open(run.log_path, encoding="utf-8") as f:
+            return f.read()
+    # The file is on the worker's disk, readable here only when the two share
+    # a volume. The end of it is kept in the row.
+    if run.log_tail:
+        return run.log_tail
+    if run.status not in _TERMINAL and run.container_name and run.machine_id:
+        machine = await session.get(Machine, run.machine_id)
+        if machine is not None:
+            live = await anyio.to_thread.run_sync(_live_log, machine, run.container_name)
+            if live:
+                return live
+        return "(no log yet — the engine has not started writing one)"
+    return "(no captured log for this run)"
+
+
+def _live_log(machine: Machine, container_name: str) -> str:
+    """Best-effort read of a running engine's log, straight from its container."""
+    try:
+        driver = get_driver(machine.driver or "ssh_docker", cluster_id=machine.cluster_id)
+        handle = DeploymentHandle(
+            driver=getattr(driver, "name", ""), container_name=container_name,
+            machine=MachineInfo.of(machine), endpoint_url="",
+        )
+        return driver.logs(handle, tail=2000) or ""
+    except Exception:
+        return ""

@@ -252,6 +252,8 @@ export interface ApiKey {
   last_used_at: string | null
   revoked_at: string | null
   created_at: string
+  /** Who minted it. An admin sees every user's keys; a user only their own. */
+  owner?: string
 }
 
 /** Only ever returned by the mint call — the plaintext exists in one response
@@ -586,6 +588,8 @@ export interface Candidate {
   status: string
   validation_error: string
   cards: number
+  /** Production's config, measured in this campaign as the reference. */
+  is_baseline?: boolean
 }
 
 /** A production reference config, keyed by (served model, engine, card type).

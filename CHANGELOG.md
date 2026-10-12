@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A user guide, [docs/guide](docs/guide/README.md): the concepts and words, a
+  first campaign from a fresh install with a screenshot of every step, and a
+  page for each part of the UI (machines, search spaces, objectives, policies,
+  creating, running and reading campaigns, baselines, runs and failures,
+  accounts and API keys), plus troubleshooting.
+- The end of every captured engine and policy log is kept in the database
+  (migration `007_log_tails`), so a run's log shows in the UI on an install
+  without a shared log volume; a running engine's log is read live.
+- New campaign's **Schedule** step asks **Every night** or **No window (start it
+  by hand)**, instead of needing both times cleared.
+
+### Security
+
+- API keys: a user lists and revokes only their own keys; an admin sees every
+  user's, with its owner. Keys the platform mints for a policy session are no
+  longer listed or revocable from the page, where revoking one cut a running
+  search off.
+
+### Fixed
+
+- A policy's finalists were measured on the platform's default benchmark and
+  ranked by the replay metric when the campaign had no verify stage. They are
+  measured on the campaign's own benchmark and judged by its own objective, on
+  a board titled "The policy's finalists, measured again".
+- **Stop**, then **Start**, finished a campaign with the configs Stop cut off
+  never measured. A campaign Stop queues them again.
+- The campaign report said no baseline was measured when a recorded baseline
+  had been relaunched in the campaign; it now compares against it.
+- On Kubernetes, a crash-looping engine's log was read from the restarted,
+  empty container, so an out-of-memory crash was filed as `crash_loop`. The
+  log from before the restart is read too, and every captured log is decoded
+  text instead of a Python bytes literal.
+- **Add machine** with an empty form created a machine with no name or host;
+  a name, and a host for an ssh machine, are required.
+- Error messages from a refused form (a list of field errors) showed as an
+  empty red toast on every page.
+- Search spaces: Enter now adds the parameter or value typed (the first value
+  typed into an empty list was glued to the next one), a range previews
+  without float noise (`0.8500000000000001`), its inputs are wide enough to
+  read, and a parameter left without a value is named on save instead of
+  dropped.
+- A new objective started with a functional-pass-rate redline that the
+  synthetic sweep never reports, so every config was rejected. It starts with
+  none; **Add redline** suggests p99 TTFT with an empty limit, shows the
+  metric's unit, and the **Auto** direction shows as selected.
+- New campaign: the **Check** step showed a green tick before any check ran;
+  **Create campaign** went ahead with known blocking problems without asking;
+  an imported or drafted search space showed 0 candidates; importing a file
+  with `daily_start: null` failed; the Strategy and replay Dataset selects
+  showed "Select" for Grid and the example set; the default name used the UTC
+  date.
+- Campaign page: the schedule line of a finished campaign read "Awake now";
+  Start read "Force-started — running until" a date a month away; a failed
+  run's error sat below its long launch command (now first, with the command
+  folded); stopped runs offered "Re-run failed"; the policy panel showed its
+  end reason as an identifier.
+- Wording: run cards show as `#0 #1` (a bare `0` read as no GPUs), stopped runs
+  as "stopped", the platform's own withdrawals as "queued again", the policy
+  runs' role (engine, benchmark, finalist), the baseline on the Candidates tab,
+  the policy's name in the campaign list, the parameter names over the
+  leaderboard bars, and plain words instead of "canary" in the report.
+- Users who are not admins no longer see cluster actions the API refuses them;
+  the Account page's note on what admins can do was wrong.
+- The API key dialog's example call used a fixed sample address instead of the
+  platform's.
+- Smaller fixes: the Baselines table no longer overflows the page, the
+  Policies page header lays out like the others, an unleased machine no longer
+  shows a fleet-manager readiness tag, and the smoke test's card-type warning
+  names the menu item that exists.
+
 ## [0.2.1] - 2026-10-10
 
 ### Added

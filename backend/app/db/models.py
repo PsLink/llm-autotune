@@ -716,6 +716,11 @@ class Run(Base):
     failure_class: Mapped[str] = mapped_column(String(64), default="")
     error: Mapped[str] = mapped_column(Text, default="")
     log_path: Mapped[str] = mapped_column(String(255), default="")
+    # The end of the captured log, kept in the database as well. The file
+    # above is written on the WORKER's disk, which the API process can read
+    # only when the two share a volume; without one, the log of a failed run
+    # was never shown anywhere.
+    log_tail: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Set when a policy session asked for this run (delegated launch, external
     # bench, contender validation). The session view lists its runs by this,
     # and session teardown knows what to kill by this.
@@ -1215,6 +1220,9 @@ class PolicySession(Base):
     # Exact command, with the session token redacted before storing — this is
     # shown in the UI and must never leak the credential.
     launch_command: Mapped[str] = mapped_column(Text, default="")
+    # The end of the policy container's captured log, for the same reason as
+    # Run.log_tail: the captured file lives on the worker's disk.
+    log_tail: Mapped[str | None] = mapped_column(Text, nullable=True)
     env_snapshot: Mapped[dict] = mapped_column(JsonCol, default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     first_heartbeat_at: Mapped[datetime | None] = mapped_column(

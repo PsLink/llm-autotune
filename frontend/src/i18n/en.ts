@@ -88,7 +88,7 @@ export default {
     changed: 'Password changed',
     changeFailed: 'Could not change the password',
     users: 'Users',
-    usersNote: 'admins can lease machines, mint API keys and change roles',
+    usersNote: 'admins also add GPU clusters, see and revoke every user\'s API keys, and change roles',
     promote: 'Make admin',
     demote: 'Make user',
     lastAdmin: 'The only admin — promote someone else first',
@@ -138,6 +138,7 @@ export default {
     search: 'Search',
     oneOff: 'one-off window',
     manual: 'manual',
+    gridAll: 'grid (every config)',
   },
 
 
@@ -211,6 +212,10 @@ export default {
       candidates: 'Candidates',
     },
     verifiedOn: 'Verified on real traffic',
+    finalists: "The policy's finalists, measured again",
+    finalistsHint: 'The platform launched the configs the policy named as its best and '
+      + 'benchmarked each one itself, on this campaign\'s own benchmark. This '
+      + 'measurement decides the winner; the policy never grades its own results.',
     // The lower board in a two-stage campaign: every candidate, screened. Neutral
     // wording so a single-stage campaign's one board is never titled "Screening".
     screening: 'All candidates',

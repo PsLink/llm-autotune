@@ -150,6 +150,9 @@ logger = logging.getLogger(__name__)
 # roughly 50 minutes of a night spent re-hitting the same bug. It stays failed
 # and visible; a human can re-queue it once the bug is fixed.
 MAX_ATTEMPTS_PER_CANDIDATE = 3
+# How much of a captured log is kept in the database: the end, where a crash
+# explains itself. Enough for a Python traceback and the lines before it.
+LOG_TAIL_CHARS = 64_000
 
 # Where a multi-node run's rendezvous port is searched from, on the master. Above
 # the usual service ports and outside the k8s NodePort range; the allocator walks
@@ -822,6 +825,19 @@ class Supervisor:
             if run.llmbench_submission_id:
                 self.bench.cancel(run.llmbench_submission_id)
             self._finish(session, run, RunStatus.KILLED, error=USER_STOP_ERROR)
+            # Stop on the campaign ends what is running, not the search: the
+            # configs it cut off were never measured, so they are queued again
+            # for the next start, charged nothing, as a pause would give them
+            # back. A Stop on one run is a choice about that config and stays
+            # final. A policy's own runs are the policy's to retry.
+            if (
+                (event.payload or {}).get("reason") == "force stop"
+                and run.kind not in (RunKind.POLICY_LAUNCH.value, RunKind.EXTERNAL.value)
+                and run.candidate is not None
+            ):
+                run.failure_class = RELEASED
+                run.error = "stopped with the campaign; measured again when it starts"
+                run.candidate.status = CandidateStatus.VALID.value
 
     def reconcile(self) -> None:
         """On worker startup: re-attach to whatever was in flight."""
@@ -2264,10 +2280,17 @@ class Supervisor:
         rather than pointing at an empty file."""
         if not log_text:
             return
+        # In the row first: the file below is on this worker's disk, which the
+        # API can read only when the two share a volume.
+        run.log_tail = log_text[-LOG_TAIL_CHARS:]
         os.makedirs(self.settings.run_log_dir, exist_ok=True)
         log_path = os.path.join(self.settings.run_log_dir, f"run-{run.id}.log")
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write(log_text)
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(log_text)
+        except OSError:
+            logger.exception("could not write the log file of run %d", run.id)
+            return
         run.log_path = log_path
 
     def _snapshot_environment(self, run: Run, handle) -> None:

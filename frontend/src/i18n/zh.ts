@@ -90,7 +90,7 @@ const zh: typeof en = {
     changed: '密码已修改',
     changeFailed: '修改密码失败',
     users: '用户',
-    usersNote: 'admin 可以租借机器、创建 API keys、修改角色',
+    usersNote: 'admin 还可以添加 GPU 集群、查看和撤销所有用户的 API keys、修改角色',
     promote: '设为 admin',
     demote: '设为 user',
     lastAdmin: '这是唯一的 admin —— 请先提升另一个人',
@@ -140,6 +140,7 @@ const zh: typeof en = {
     search: '搜索方式',
     oneOff: '单次窗口',
     manual: '手动',
+    gridAll: '网格（全部配置）',
   },
 
 
@@ -209,6 +210,9 @@ const zh: typeof en = {
       candidates: '候选配置',
     },
     verifiedOn: '真实流量 replay 结果',
+    finalists: 'policy 的决赛候选（平台复测）',
+    finalistsHint: '平台重新启动 policy 选出的最佳配置，并用本 campaign 自己的 benchmark '
+      + '逐一复测。胜者由这次测量决定，policy 从不给自己的结果打分。',
     screening: '全部候选',
     replayedOn: '回放数据集',
     datasetAdopted: '沿用',

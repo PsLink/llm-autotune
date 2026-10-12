@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { apiErrorText } from '../utils/apiError'
 /** The search algorithms a campaign can run: container images registered by
  *  name. A campaign picks one on its Search step; the platform launches it
  *  and judges every config it proposes. */
@@ -90,7 +91,7 @@ async function save() {
     await load()
   } catch (error: any) {
     ElMessage.error(
-      error instanceof YamlError ? error.message : (error.response?.data?.detail ?? 'Save failed'),
+      error instanceof YamlError ? error.message : (apiErrorText(error, 'Save failed')),
     )
   } finally {
     busy.value = false
@@ -108,7 +109,7 @@ async function remove(p: Policy) {
     await api.delete(`/policies/${p.id}`)
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Remove failed')
+    ElMessage.error(apiErrorText(error, 'Remove failed'))
   }
 }
 
@@ -231,6 +232,13 @@ onMounted(load)
 </template>
 
 <style scoped>
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  margin-bottom: 12px;
+}
 .empty {
   padding: 24px;
   line-height: 1.6;

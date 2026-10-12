@@ -891,6 +891,9 @@ class PolicySessionEngine:
             return
         if not text:
             return
+        # Kept in the row as well: the file is on the worker's disk, which the
+        # API reads only when the two share a volume.
+        session.log_tail = text[-64_000:]
         log_dir = self.sup.settings.run_log_dir
         os.makedirs(log_dir, exist_ok=True)
         with open(policy_log_path(log_dir, session.id), "w", encoding="utf-8") as f:

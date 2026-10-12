@@ -40,3 +40,33 @@ def test_client_api_construction_and_resolution_need_no_cluster():
     assert api._resource_for_kind("Deployment") == "deployment"
     assert api._resource_for_kind("Service") == "service"
     assert api._resource_for_kind("TuningRun") == "tuningruns.tuning.modelsphere.dev"
+
+
+def test_client_logs_include_the_container_before_a_crash_restart():
+    """A crash-looping engine is restarted at once, so its current log is
+    empty and the crash (out of memory, a refused flag) was classified as a
+    bare crash_loop. The log before the restart is what explains it."""
+    from types import SimpleNamespace as NS
+
+    class FakeCore:
+        def __init__(self):
+            self.calls = []
+
+        def list_namespaced_pod(self, ns, label_selector=""):
+            status = NS(container_statuses=[NS(restart_count=2)])
+            return NS(items=[NS(metadata=NS(name="run-1-abc"), status=status)])
+
+        def read_namespaced_pod_log(self, name, ns, tail_lines=200, previous=False,
+                                    _preload_content=True):
+            self.calls.append(previous)
+            # Raw, as the real client returns it with _preload_content=False.
+            text = "torch.OutOfMemoryError: CUDA out of memory\n" if previous else ""
+            return NS(data=text.encode())
+
+    api = ClientApi(_s(k8s_namespace="runs"))
+    api._core = FakeCore()
+    api._ApiException = Exception
+    text = api.logs("autotune.modelsphere.dev/run=1")
+    assert "CUDA out of memory" in text
+    assert "b'" not in text, "decoded text, not the repr of the bytes"
+    assert api._core.calls == [True, False]

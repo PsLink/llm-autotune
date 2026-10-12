@@ -92,6 +92,21 @@ async def test_edit_rejects_a_name_already_taken(client):
     assert "taken" in resp.json()["detail"]
 
 
+async def test_a_machine_needs_a_name_and_an_ssh_machine_a_host(client):
+    """An empty Add machine form used to create a nameless, hostless machine."""
+    blank = await client.post("/api/machines", json={"name": "  ", "host": "", "gpu_count": 8})
+    assert blank.status_code == 422
+    assert "name" in str(blank.json()["detail"])
+    no_host = await client.post("/api/machines", json={"name": "box", "host": "", "gpu_count": 8})
+    assert no_host.status_code == 422
+    assert "host" in str(no_host.json()["detail"])
+    # A Kubernetes slice is reached through its cluster, not a host.
+    k8s = await client.post(
+        "/api/machines", json={"name": "slice", "host": "", "driver": "k8s", "gpu_count": 4}
+    )
+    assert k8s.status_code == 200, k8s.text
+
+
 # -- delete -------------------------------------------------------------------
 
 

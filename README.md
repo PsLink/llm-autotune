@@ -59,6 +59,8 @@ deploy/gpu-cluster.sh --context <gpu-cluster> # 2. an account on a GPU cluster; 
 4. Create a search space and a campaign, with no policy or the `random-search`
    one the install registers; the **Check** step tries the images and model
    path on the nodes before anything starts.
+   [Your first campaign](docs/guide/first-campaign.md) walks through it with a
+   screenshot of every step.
 
 The full walkthrough, with a cluster that can't reach Docker Hub, the whole
 thing on a laptop with two kind clusters, and what to do when a step fails:
@@ -112,6 +114,10 @@ docs/        architecture, the API contracts, deployment
 
 ## Documentation
 
+- [User guide](docs/guide/README.md) — using the platform, page by page:
+  [concepts and words](docs/guide/concepts.md),
+  [your first campaign](docs/guide/first-campaign.md), machines, search
+  spaces, objectives, policies, campaigns, results and troubleshooting
 - [Architecture](docs/architecture.md) — what the system is and the few choices
   that decide the rest. 中文：[架构概览](docs/architecture.zh.md)
 - [How it works](docs/workflow.md) — the product walkthrough, no code.

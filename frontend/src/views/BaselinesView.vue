@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { apiErrorText } from '../utils/apiError'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -100,7 +101,7 @@ async function parseCommand() {
     ElMessage.success(`Parsed — ${data.cards} card(s)`)
     for (const w of data.warnings ?? []) ElMessage.warning(w)
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not parse that command')
+    ElMessage.error(apiErrorText(error, 'Could not parse that command'))
   } finally {
     parsing.value = false
   }
@@ -147,7 +148,7 @@ async function save() {
     await load()
     ElMessage.success('Saved')
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Save failed')
+    ElMessage.error(apiErrorText(error, 'Save failed'))
   } finally {
     busy.value = false
   }
@@ -169,7 +170,7 @@ async function remove(b: Baseline) {
     await api.delete(`/baselines/${b.id}`)
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Delete failed')
+    ElMessage.error(apiErrorText(error, 'Delete failed'))
   }
 }
 
@@ -244,12 +245,12 @@ onMounted(async () => {
       <el-table-column label="Cards" width="70">
         <template #default="{ row }">{{ row.cards }}</template>
       </el-table-column>
-      <el-table-column label="Config" min-width="280">
+      <el-table-column label="Config" min-width="200">
         <template #default="{ row }">
           <span class="mono tiny">{{ argsSummary(row.engine_args) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="Source" width="200">
+      <el-table-column label="Source" width="100">
         <template #default="{ row }">
           <el-tag size="small" :type="row.source === 'manual' ? 'warning' : 'info'"
             effect="plain">{{ row.source }}</el-tag>
@@ -261,7 +262,7 @@ onMounted(async () => {
             {{ relativeTime(row.updated_at ?? row.created_at) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="" width="260">
+      <el-table-column label="" width="270">
         <template #default="{ row }">
           <el-button size="small" @click="tuneFromThis(row)">{{ t('baselines.tuneFromThis') }}</el-button>
           <el-button size="small" @click="openEdit(row)">Edit</el-button>

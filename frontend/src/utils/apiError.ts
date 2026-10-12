@@ -14,7 +14,8 @@ export function apiErrorText(error: unknown, fallback: string): string {
         const loc = Array.isArray(d?.loc)
           ? d.loc.filter((part: unknown) => part !== 'body').join('.')
           : ''
-        const msg = String(d?.msg ?? '')
+        // A model-level check arrives as "Value error, <what we said>".
+        const msg = String(d?.msg ?? '').replace(/^Value error, /, '')
         return loc ? `${loc}: ${msg}` : msg
       })
       .filter(Boolean)

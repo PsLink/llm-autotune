@@ -112,7 +112,28 @@ def test_failures_are_explained_and_turned_into_advice():
 def test_missing_baseline_is_called_out():
     runs = [_run(1, "experiment", "succeeded", {"tp": 2})]
     report = render_campaign_report(_campaign(), runs, {1: _result(1, 1.0)}, MACHINES)
-    assert "No baseline canary ran" in report
+    assert "Production's config was not measured alongside" in report
+    assert "canary" not in report, "say what it is, not the platform's jargon"
+
+
+def test_a_relaunched_baseline_is_the_reference():
+    """A recorded baseline is measured by relaunching it as a candidate of the
+    campaign. The report used to look only for the older in-place baseline run,
+    and said no baseline was measured while the leaderboard showed one."""
+    production = _run(3, "experiment", "succeeded", {"tp": 1, "schedule_policy": "fcfs"})
+    production.candidate.is_baseline = True
+    runs = [
+        _run(1, "experiment", "succeeded", {"tp": 1, "schedule_policy": "lpm"}),
+        _run(2, "experiment", "succeeded", {"tp": 2, "schedule_policy": "lpm"}),
+        production,
+    ]
+    results = {1: _result(1, 120.0), 2: _result(2, 60.0), 3: _result(3, 100.0)}
+    report = render_campaign_report(_campaign(), runs, results, MACHINES)
+
+    assert "beats production by **+20.0%**" in report
+    assert "production (as handed over) | 100.0" in report
+    assert "not measured" not in report
+    assert "2 succeeded" in report, "the baseline is not counted as a search run"
 
 
 def test_no_successful_runs_does_not_pretend_otherwise():

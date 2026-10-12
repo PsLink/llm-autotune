@@ -7,6 +7,12 @@ Understanding it:
 - [Platform architecture](api/platform-architecture.md): the policy and a
   campaign, step by step. 中文：[平台架构](api/platform-architecture.zh.md)
 
+Using it:
+
+- [User guide](guide/README.md): the platform page by page, with screenshots.
+  Start with [Concepts and words](guide/concepts.md) and
+  [Your first campaign](guide/first-campaign.md).
+
 Running it:
 
 - [Installing](install.md): the platform cluster, GPU clusters, a policy and

@@ -173,10 +173,12 @@ async def run_log(
     run = await session.get(Run, run_id)
     if run is None:
         raise _error(status.HTTP_404_NOT_FOUND, "no_such_run", run_id=run_id)
-    if not run.log_path or not os.path.exists(run.log_path):
-        return "(no captured log for this run)"
-    with open(run.log_path, encoding="utf-8", errors="replace") as f:
-        return "".join(deque(f, maxlen=tail))
+    if run.log_path and os.path.exists(run.log_path):
+        with open(run.log_path, encoding="utf-8", errors="replace") as f:
+            return "".join(deque(f, maxlen=tail))
+    if run.log_tail:  # the file is on the worker's disk; its end is in the row
+        return "".join(deque(run.log_tail.splitlines(keepends=True), maxlen=tail))
+    return "(no captured log for this run)"
 
 
 # -- campaigns ---------------------------------------------------------------

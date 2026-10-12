@@ -51,5 +51,15 @@ export function runStatus(status: string): StatusLook {
 
 /** Run states read better as words than as identifiers. */
 export function runLabel(status: string): string {
+  // "killed" is how the database says it; to a person, the run was stopped
+  // (by them, by the window closing, or by a lease ending).
+  if (status === 'killed') return 'stopped'
   return status.replace(/_/g, ' ')
+}
+
+/** A failure class as a person reads it. `released` is the platform's word for
+ *  a run it took back itself, whose config is queued again. */
+export function failureLabel(failureClass: string): string {
+  if (failureClass === 'released') return 'queued again'
+  return failureClass.replace(/_/g, ' ')
 }

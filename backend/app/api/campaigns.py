@@ -1194,7 +1194,8 @@ async def list_candidates(
     # is what the UI shows, rather than a second tp×dp×pp implementation.
     return [
         CandidateOut.model_validate(c).model_copy(
-            update={"cards": 0 if is_in_place_baseline(c) else cards_used(c.config)}
+            update={"cards": 0 if is_in_place_baseline(c) else cards_used(c.config),
+                    "is_baseline": is_baseline_candidate(c)}
         )
         for c in candidates
     ]

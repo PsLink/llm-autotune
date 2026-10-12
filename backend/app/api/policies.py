@@ -281,6 +281,8 @@ async def policy_session_log(
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             return f.read()
+    if session.log_tail:
+        return session.log_tail
     return "(no captured log yet — the policy container is still starting or has left none)"
 
 

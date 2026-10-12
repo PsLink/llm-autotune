@@ -108,6 +108,11 @@ function fmt(value: number): string {
       {{ label }}<span v-if="unit"> ({{ unit }})</span>
       <span class="sep">·</span>
       {{ scored.length }} measured, bars from zero
+      <template v-if="sweptKeys.length">
+        <!-- Each bar is labelled with values only; say once whose they are. -->
+        <span class="sep">·</span>
+        labelled <span class="mono">{{ sweptKeys.join(' · ') }}</span>
+      </template>
       <template v-if="hasBaseline">
         <span class="sep">·</span>
         <span class="legend">

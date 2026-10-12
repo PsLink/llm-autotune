@@ -117,6 +117,10 @@ registration at it. The script remembers the registry. Writing your own:
 
 ## 5. Run a first campaign
 
+[Your first campaign](guide/first-campaign.md) walks through this with a
+screenshot of every step; the [user guide](guide/README.md) covers each page.
+In short:
+
 1. **Search spaces ▸ New search space**: the engine settings to try. Start small, a few
    values of one or two settings.
 2. **Campaigns ▸ New campaign**, step by step:

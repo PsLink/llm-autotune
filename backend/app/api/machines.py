@@ -341,9 +341,9 @@ async def smoke_test(
     if not machine.gpu_type:
         result["checks"].append({
             "name": "card type", "status": "warn",
-            "detail": "no GPU type recorded on the platform — anything that matches "
-                      "machines by card type passes this one by; set it on Edit "
-                      "(or Refresh capacity)",
+            "detail": "the platform does not know this machine's GPU model, so "
+                      "baselines and campaigns that name a card type skip it; set "
+                      "it with More ▸ Edit, or More ▸ Re-read GPUs",
         })
     session.add(
         Event(

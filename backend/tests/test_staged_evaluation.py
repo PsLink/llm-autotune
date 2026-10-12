@@ -547,3 +547,25 @@ def test_a_verified_campaign_is_not_told_to_go_and_validate_it():
     report = render_campaign_report(_campaign(), runs, results, MACHINES)
 
     assert "Validate the winner against current traffic" not in report
+
+
+def test_a_finalist_without_a_verify_benchmark_repeats_the_campaigns_own():
+    """A policy's finalists are measured again as verify-stage runs. With no
+    verify benchmark set, they used to go to the platform's default benchmark
+    and be ranked by the replay objective, which that benchmark never reports:
+    the policy's winner was judged on a workload the search never saw."""
+    from types import SimpleNamespace
+
+    from app import staging
+
+    campaign = SimpleNamespace(
+        benchmark_slug="autotune-sweep-abc", verify_benchmark_slug="",
+        objective={"target_metric": "perf_guidellm_sweep.output_tpm_card_norm"},
+        verify_objective={},
+    )
+    assert staging.benchmark_slug(campaign, staging.VERIFY) == "autotune-sweep-abc"
+    assert staging.objective(campaign, staging.VERIFY) == campaign.objective
+
+    staged = SimpleNamespace(**{**vars(campaign), "verify_benchmark_slug": "replay-1"})
+    assert staging.benchmark_slug(staged, staging.VERIFY) == "replay-1"
+    assert staging.objective(staged, staging.VERIFY)["target_metric"].startswith("replay")

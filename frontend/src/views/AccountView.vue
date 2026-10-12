@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { apiErrorText } from '../utils/apiError'
 /** Your account: who you are, your password, and — for an admin — who else
  *  there is.
  *
@@ -50,7 +51,7 @@ async function saveContributor() {
     me.value = (await api.put('/auth/me/contributor', { contributor: name })).data
     ElMessage.success(t('account.publish.nameSaved'))
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? t('account.publish.saveFailed'))
+    ElMessage.error(apiErrorText(error, t('account.publish.saveFailed')))
   } finally {
     publishBusy.value = false
   }
@@ -63,7 +64,7 @@ async function clearContributor() {
     contributor.value = ''
     ElMessage.success(t('account.publish.nameCleared'))
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? t('account.publish.saveFailed'))
+    ElMessage.error(apiErrorText(error, t('account.publish.saveFailed')))
   } finally {
     publishBusy.value = false
   }
@@ -101,7 +102,7 @@ async function changePassword() {
     form.value = { current: '', next: '', confirm: '' }
     ElMessage.success(t('account.changed'))
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? t('account.changeFailed'))
+    ElMessage.error(apiErrorText(error, t('account.changeFailed')))
   } finally {
     busy.value = false
   }
@@ -113,7 +114,7 @@ async function setRole(user: AccountUser, role: string) {
     await load()
     ElMessage.success(t('account.roleChanged', { user: user.username, role }))
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? t('account.roleFailed'))
+    ElMessage.error(apiErrorText(error, t('account.roleFailed')))
   }
 }
 
