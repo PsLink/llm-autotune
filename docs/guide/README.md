@@ -21,6 +21,7 @@ running campaigns and reading the results. Installation is covered in
 | [Machines and GPU clusters](machines.md) | adding GPU clusters and ssh machines, leases, smoke tests, node groups | **Resources** |
 | [Search spaces](search-spaces.md) | fixed, swept, ranged and tied parameters, conditions, YAML | **Automatic Tuning ▸ Search spaces** |
 | [Objectives](objectives.md) | target metric, direction, redlines; choosing a metric | **Automatic Tuning ▸ Objectives** |
+| [Datasets](datasets.md) | samples of production traffic for a Replay workload, and when they are refreshed | **Automatic Tuning ▸ Datasets** |
 | [Search policies](policies.md) | grid search and policies, `random-search`, registering a policy | **Automatic Tuning ▸ Policies** |
 | [Creating a campaign](campaigns.md) | each step of New campaign; drafting from a baseline; YAML | **Automatic Tuning ▸ Campaigns ▸ New campaign** |
 | [Running a campaign](running-campaigns.md) | statuses, run controls, schedules, pre-flight checks, the policy panel | a campaign's page |
@@ -57,7 +58,7 @@ running campaigns and reading the results. Installation is covered in
 ## Further reading
 
 - [After installing](../after-installing.md): settings, more GPUs, ingress,
-  datasets, building policies.
+  replay datasets, building policies.
 - [How it works](../workflow.md): the product view, with diagrams of a
   campaign and a tuning window.
 - [Policy contract](../api/policy-contract.md) and

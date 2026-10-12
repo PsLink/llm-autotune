@@ -160,6 +160,12 @@ Then follow steps 3 to 5 at <http://localhost:8080>:
   parameters, such as `mock_token_ms: [2, 20]`. Keep the benchmark small (128
   input and 32 output tokens, concurrency `1, 4`, 5 requests per slot), since
   the benchmark client runs on the same machine.
+- **Datasets** (optional): `deploy/dev/demo-traffic.sh --context kind-autotune`
+  loads a day of made-up gateway traffic into a VictoriaLogs store on the
+  platform cluster. Run the install again with
+  `VICTORIALOGS_URL=http://victorialogs.victorialogs:9428` to turn on
+  LLMBench's collector, then use **Automatic Tuning ▸ Datasets** and a
+  Replay workload.
 
 If the workstation uses a local proxy (`HTTPS_PROXY=http://127.0.0.1:…`),
 create the platform cluster without it:

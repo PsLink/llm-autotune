@@ -106,4 +106,4 @@ methods:
 
 ---
 
-← [Objectives](objectives.md) · [User guide](README.md) · Next: [Creating a campaign](campaigns.md) →
+← [Datasets](datasets.md) · [User guide](README.md) · Next: [Creating a campaign](campaigns.md) →

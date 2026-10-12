@@ -78,9 +78,12 @@ changes. The platform, not a timer, decides when the sample is rebuilt.
 
 ![Production traffic is sampled into a dataset profile on LLMBench, which builds only when the platform asks; campaigns pin, adopt or rebuild](assets/rolling-dataset.svg)
 
-- **The platform triggers builds.** The profile has
-  `schedule_interval_hours: 0`, so only the platform rebuilds it. The platform
-  never reads the data; it records the build id each result reports.
+- **The platform triggers builds.** A profile set up on the Datasets page has
+  `schedule_interval_hours: 0`, so only the platform rebuilds it: on the
+  dataset's interval, and at a campaign's start when it asks for a fresh
+  sample, but never while an unfinished campaign holds the current build.
+  The platform never reads the data; it records the build id each result
+  reports.
 - **A campaign pins one build** at its first measurement and keeps it, so all
   its candidates face the same requests.
 - **A campaign that starts while another holds the current build adopts it**

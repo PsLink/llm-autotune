@@ -98,7 +98,8 @@ Every run is benchmarked by an external platform; the adapter targets
 [LLMBench](https://github.com/modelsphere/llm-bench), installed from its own chart.
 The two are wired by one shared secret: a **service account** on LLMBench that
 AutoTune acts as. It can submit, read and trigger rolling-dataset builds, and
-create and change only the benchmarks it created itself. It is never an admin.
+create and change only the benchmarks and dataset collection profiles it
+created itself. It is never an admin.
 
 ```bash
 # 1. In a clone of llm-bench: secrets for LLMBench, including the service key
@@ -143,6 +144,19 @@ stamping) is in llm-bench's `docs/api/for-autotune.md`.
 `llmbench.webUrl` is where a person's browser reaches LLMBench; the run pages
 link there. It defaults to `llmbench.url`, which is usually a cluster-internal
 address, so set it to LLMBench's ingress.
+
+Replay datasets ([Datasets](guide/datasets.md)) are collected by LLMBench's
+dataset collector from a VictoriaLogs store of the gateway's request logs.
+Turn the collector on in LLMBench's values (`datasets.enabled` and
+`datasetBuilder.enabled`; the datasets volume is shared by LLMBench's
+backend, workers and collector, so a multi-node cluster needs ReadWriteMany
+storage), and give AutoTune the store's address as LLMBench's pods reach it,
+which the dataset form starts from:
+
+```yaml
+llmbench:
+  victoriaLogsUrl: http://victorialogs.logging:9428
+```
 
 Without a benchmark platform, runs launch and then have nothing to measure
 them. To work on AutoTune without one, layer `values-mock.yaml` on

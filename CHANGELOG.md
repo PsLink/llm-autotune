@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Automatic Tuning ▸ Datasets** sets up replay datasets without leaving
+  AutoTune: a model, optionally the nodes serving it, a sample size and how
+  often to take a new sample. The model and node lists come from the
+  gateway's request logs in VictoriaLogs, the form counts the requests that
+  match before saving, and everything else has a default under **Advanced**.
+  LLMBench collects each sample; the page shows what it holds (window, prompt
+  and output lengths, prefix-cache hits) and its recent samples. **New
+  dataset…** in a Replay workload's dataset list opens the same form
+  ([Datasets](docs/guide/datasets.md)). Needs an LLMBench whose service
+  account may create collection profiles.
+- New samples are taken by AutoTune on each dataset's interval, and not while
+  an unfinished campaign is measuring on the current one (migration
+  `008_replay_datasets`).
+- `llmbench.victoriaLogsUrl` (`AUTOTUNE_LLMBENCH_VICTORIALOGS_URL`): the
+  store the dataset form starts from. `VICTORIALOGS_URL=… deploy/quickstart.sh`
+  sets it and turns on LLMBench's dataset collector and volume.
+- `deploy/dev/demo-traffic.sh` loads a day of made-up gateway traffic into a
+  VictoriaLogs store, to try datasets on a local kind setup.
+
 ## [0.2.2] - 2026-10-12
 
 ### Added
