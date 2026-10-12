@@ -2,7 +2,7 @@ import os
 import shlex
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,8 @@ from app.db.models import (
     Machine,
     Result,
     Run,
+    RunKind,
+    RunStatus,
     User,
     is_baseline_config,
 )
@@ -35,22 +37,52 @@ async def list_runs(
     _: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
     limit: int = 200,
+    status_in: list[str] | None = Query(
+        None, alias="status",
+        description="Run statuses to keep; `live` stands for every state a run is still in "
+        "while it runs. Repeat the parameter for several.",
+    ),
+    campaign_id: list[int] | None = Query(None, description="Repeat for several campaigns."),
+    owner: list[str] | None = Query(
+        None, description="Usernames of the campaign owners. Repeat for several."
+    ),
 ):
+    query = select(Run).join(Campaign, Campaign.id == Run.campaign_id)
+    if status_in:
+        wanted = set(status_in)
+        if "live" in wanted:
+            wanted.discard("live")
+            wanted |= {s.value for s in RunStatus} - _TERMINAL
+        query = query.where(Run.status.in_(wanted))
+    if campaign_id:
+        query = query.where(Run.campaign_id.in_(campaign_id))
+    if owner:
+        query = query.join(User, User.id == Campaign.owner_id).where(User.username.in_(owner))
     # The candidate comes along because RunOut reports which stage the run
     # belongs to, and that is read off it. Lazy-loading it during serialization
     # raises MissingGreenlet under the async session rather than fetching.
-    return (
-        (
-            await session.execute(
-                select(Run)
-                .options(selectinload(Run.candidate))
-                .order_by(Run.id.desc())
-                .limit(limit)
-            )
+    runs = (
+        await session.execute(
+            query.options(selectinload(Run.candidate)).order_by(Run.id.desc()).limit(limit)
         )
-        .scalars()
-        .all()
-    )
+    ).scalars().all()
+    ids = {run.campaign_id for run in runs}
+    names = {
+        row.id: (row.name, row.username or "")
+        for row in (
+            await session.execute(
+                select(Campaign.id, Campaign.name, User.username)
+                .outerjoin(User, User.id == Campaign.owner_id)
+                .where(Campaign.id.in_(ids))
+            )
+        ).all()
+    } if ids else {}
+    out = []
+    for run in runs:
+        row = RunOut.model_validate(run)
+        row.campaign_name, row.owner_name = names.get(run.campaign_id, ("", ""))
+        out.append(row)
+    return out
 
 
 @router.get("/{run_id}", response_model=RunDetailOut)
@@ -146,7 +178,28 @@ async def get_run_log(
             if live:
                 return live
         return "(no log yet — the engine has not started writing one)"
-    return "(no captured log for this run)"
+    return _why_no_log(run)
+
+
+def _why_no_log(run: Run) -> str:
+    """What an empty log means, so it does not read as a platform fault. The
+    campaign's activity log (GET /campaigns/{id}/activity) has the steps either
+    way."""
+    if run.kind == RunKind.EXTERNAL.value:
+        return (
+            "(This run benchmarked an engine that another run serves, so it has no "
+            "container of its own. The engine's log is under that run.)"
+        )
+    if not run.launch_command:
+        return (
+            f"(No engine log: run {run.id} ended before its engine was launched. "
+            "The campaign's Activity log shows what happened.)"
+        )
+    return (
+        f"(No engine log was captured for run {run.id}: the engine printed nothing before "
+        "it ended, or its container was already gone. The campaign's Activity log shows "
+        "what happened.)"
+    )
 
 
 def _live_log(machine: Machine, container_name: str) -> str:

@@ -32,12 +32,13 @@ export function absoluteTime(value: string | null | undefined): string {
   })
 }
 
-/** "just now" / "12 min ago" / "3 h ago", falling back to a date past a day. */
+/** "just now" / "12 min ago" / "3 h ago", falling back to a date past a day.
+ *  A time ahead reads "in 12 min" / "in 5 h" / "in 3 days". */
 export function relativeTime(value: string | null | undefined): string {
   const date = parse(value)
   if (!date) return '—'
   const delta = Date.now() - date.getTime()
-  if (delta < 0) return absoluteTime(value) // scheduled in the future
+  if (delta < 0) return untilTime(-delta, value) // scheduled in the future
   if (delta < MINUTE) return 'just now'
   if (delta < HOUR) return `${Math.floor(delta / MINUTE)} min ago`
   if (delta < DAY) {
@@ -45,6 +46,21 @@ export function relativeTime(value: string | null | undefined): string {
     return `${hours} h ago`
   }
   return absoluteTime(value)
+}
+
+function untilTime(ahead: number, value: string | null | undefined): string {
+  if (ahead < MINUTE) return 'in a moment'
+  if (ahead < HOUR) return `in ${Math.round(ahead / MINUTE)} min`
+  if (ahead < DAY) return `in ${Math.round(ahead / HOUR)} h`
+  if (ahead < 7 * DAY) return `in ${Math.round(ahead / DAY)} days`
+  return absoluteTime(value)
+}
+
+/** "23:00" — the clock time alone, for a time later today or tomorrow. */
+export function clockTime(value: string | null | undefined): string {
+  const date = parse(value)
+  if (!date) return '—'
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
 /** Full timestamp for a tooltip — the precise value is still one hover away. */

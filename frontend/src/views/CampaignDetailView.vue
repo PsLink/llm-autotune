@@ -2,8 +2,9 @@
 import { apiErrorText } from '../utils/apiError'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  AlarmClock, CircleCheck, CopyDocument, Delete, Document, Download, MoreFilled, RefreshRight, Tickets,
-  VideoPause, VideoPlay,
+  AlarmClock, Aim, ArrowDown, ArrowUp, CircleCheck, CircleCheckFilled, CircleCloseFilled, Coin,
+  CopyDocument, Cpu, Delete, Document, Download, EditPen, MagicStick, MoreFilled, Odometer,
+  RefreshRight, Tickets, Timer, Top, Bottom, VideoPause, VideoPlay, WarningFilled,
 } from '@element-plus/icons-vue'
 import { computed, h, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -12,6 +13,7 @@ import { describeStrategy } from '../plugins'
 import {
   api,
   downloadText,
+  fetchCampaignActivity,
   fetchPolicySessionLog,
   fetchRunLog,
   type Campaign,
@@ -32,6 +34,7 @@ import LogDialog from '../components/LogDialog.vue'
 import NightlyWindow from '../components/NightlyWindow.vue'
 import ConfigChips from '../components/ConfigChips.vue'
 import CopyButton from '../components/CopyButton.vue'
+import FactTile from '../components/FactTile.vue'
 import ScoreBars from '../components/ScoreBars.vue'
 import SpaceMap from '../components/SpaceMap.vue'
 import { useI18n } from '../i18n'
@@ -41,7 +44,7 @@ import { copyText } from '../utils/clipboard'
 import { usePoll } from '../utils/poll'
 import { sweptKeysOf, type SpaceShape } from '../utils/space'
 import { campaignStatus, failureLabel, isLive, runLabel, runStatus } from '../utils/status'
-import { absoluteTime, duration, exactTime, relativeTime } from '../utils/time'
+import { absoluteTime, clockTime, duration, exactTime, relativeTime } from '../utils/time'
 import { toYaml } from '../utils/yaml'
 
 const route = useRoute()
@@ -139,15 +142,15 @@ function sessionStepClass(step: string, i: number) {
   if (i === at) return s.status === 'failed' ? 'bad' : 'now'
   return ''
 }
-/** Why a policy's search ended, as a sentence rather than an identifier. */
+/** Why a policy's search ended, in a few words rather than an identifier. */
 const END_REASON: Record<string, string> = {
-  policy_exhausted: 'the policy had nothing more to try',
-  deadline: 'the window ran out',
+  policy_exhausted: 'nothing more to try',
+  deadline: 'window ran out',
   explicit: 'stopped by request',
-  policy_error: 'the policy reported an error',
-  policy_idle: 'the policy stopped asking for runs',
-  policy_wedged: 'the policy stopped responding',
-  container_died: 'the policy container exited',
+  policy_error: 'policy error',
+  policy_idle: 'policy went idle',
+  policy_wedged: 'policy stopped responding',
+  container_died: 'container exited',
 }
 
 const sessionLine = computed(() => {
@@ -155,24 +158,19 @@ const sessionLine = computed(() => {
   if (!s) return ''
   const finalists = s.contenders.length
   switch (s.status) {
-    case 'pending': return 'Waiting for a machine'
+    case 'pending': return 'waiting for a machine'
     case 'starting':
-      return s.started_at
-        ? `Starting for ${duration(s.started_at, new Date().toISOString())}` : 'Starting'
+      return s.started_at ? `for ${duration(s.started_at, new Date().toISOString())}` : ''
     case 'searching': {
       const parts = [`${s.trials.length} trial(s)`, `${finalists} finalist(s)`]
-      if (s.last_heartbeat_at) parts.push(`heard from ${relativeTime(s.last_heartbeat_at)}`)
-      if (s.finalize_requested_at) parts.push('stop requested')
+      if (s.finalize_requested_at) parts.push('wrapping up')
       return parts.join(' · ')
     }
-    case 'finalizing': return 'Winding down its engines'
-    case 'validating': return `Measuring ${finalists} finalist(s)`
-    case 'done': {
-      const why = END_REASON[s.search_end_reason] ?? s.search_end_reason
-      return why ? `Finished: ${why}` : 'Finished'
-    }
-    case 'failed': return s.failure_class ? `Failed: ${s.failure_class}` : 'Failed'
-    case 'aborted': return 'Aborted'
+    case 'finalizing': return 'winding down its engines'
+    case 'validating': return `measuring ${finalists} finalist(s)`
+    case 'done': return END_REASON[s.search_end_reason] ?? s.search_end_reason.replace(/_/g, ' ')
+    case 'failed': return s.failure_class.replace(/_/g, ' ')
+    case 'aborted': return ''
   }
   return ''
 })
@@ -180,6 +178,9 @@ const sessionLine = computed(() => {
 function openPolicyLog() {
   logOpen.value = true
 }
+
+/** The session's particulars, behind a toggle: most nights nobody needs them. */
+const sessionDetails = ref(false)
 
 async function abortSession() {
   if (!session.value) return
@@ -356,24 +357,9 @@ const exportOpen = ref(false)
 const router = useRouter()
 
 /** A new campaign with this one's definition — never its results or window —
- *  validated server-side exactly like a new one, then opened for editing. */
-async function cloneCampaign() {
-  if (!campaign.value) return
-  let name: string
-  try {
-    ({ value: name } = await ElMessageBox.prompt(t('campaign.cloneName'), t('campaign.clone'), {
-      inputValue: `${campaign.value.name} (copy)`,
-      inputValidator: (v: string) => !!v.trim(),
-    }))
-  } catch {
-    return
-  }
-  try {
-    const { data } = await api.post(`/campaigns/${campaign.value.id}/clone`, { name: name.trim() })
-    router.push(`/campaigns/${data.id}`)
-  } catch (error: any) {
-    ElMessage.error(apiErrorText(error, t('campaign.cloneFailed')))
-  }
+ *  filled into the New campaign form, to change before it is created. */
+function copyToNew() {
+  router.push({ path: '/campaigns/new', query: { from: String(campaignId) } })
 }
 
 const exportYaml = computed(() =>
@@ -582,10 +568,6 @@ const preflightCounts = computed(() => {
   }
 })
 
-const statusLook: Record<string, string> = {
-  pass: '✓', warn: '!', fail: '✕', skip: '–',
-}
-
 // -- the clock ---------------------------------------------------------------
 
 const schedule = ref<CampaignSchedule | null>(null)
@@ -658,6 +640,56 @@ const scheduleLine = computed(() => {
   return s.summary
 })
 
+// -- the summary tiles: one fact each, the rest in their tooltips -------------
+
+const scheduleFact = computed(() => {
+  const c = campaign.value
+  const s = schedule.value
+  if (!c) return { value: '', sub: '' }
+  const windowed = !!(c.daily_start && c.daily_end)
+  const value = windowed ? `${c.daily_start}–${c.daily_end}` : t('campaign.fact.manual')
+  const override = !!c.override_until && new Date(c.override_until) > new Date()
+    && c.status === 'active'
+  let sub = ''
+  if (c.status === 'done') sub = t('campaign.fact.finished')
+  else if (override || (!windowed && c.status === 'active')) sub = t('campaign.fact.runningNow')
+  else if (!windowed) sub = t('campaign.fact.byHand')
+  else if (s?.finished) sub = t('campaign.fact.noNightsLeft')
+  else if (s?.current_window) sub = t('campaign.fact.awakeUntil', { time: clockTime(s.current_window.end) })
+  else if (s?.next_window) sub = t('campaign.fact.next', { when: relativeTime(s.next_window.start) })
+  return { value, sub }
+})
+
+const searchFact = computed(() => {
+  const c = campaign.value
+  if (!c) return { value: '', sub: '', tip: '' }
+  const size = spaceSize.value
+  return {
+    value: c.policy_id != null
+      ? (policy.value?.name ?? `#${c.policy_id}`)
+      : (describeStrategy(c.extensions) ?? t('campaign.fact.everyConfig')),
+    sub: [spaceName.value, size ? t('campaign.fact.configs', { n: size }) : '']
+      .filter(Boolean).join(' · '),
+    tip: [
+      c.policy_id != null ? (policy.value?.image ?? '') : t('campaign.enumerates'),
+      sweptKeys.value.length ? `${t('campaign.fact.swept')}: ${sweptKeys.value.join(', ')}` : '',
+    ].filter(Boolean).join('\n'),
+  }
+})
+
+const progressFact = computed(() => {
+  const { done, total } = progress.value
+  const failed = new Set(runs.value.filter((r) => r.status === 'failed').map((r) => r.candidate_id))
+  return {
+    percent: total ? Math.min(100, Math.round((done / total) * 100)) : 0,
+    text: total ? `${done} / ${total}` : `${done}`,
+    sub: [
+      liveRuns.value.length ? t('campaign.fact.running', { n: liveRuns.value.length }) : '',
+      failed.size ? t('campaign.fact.failed', { n: failed.size }) : '',
+    ].filter(Boolean).join(' · '),
+  }
+})
+
 /** A leaderboard row opens the run that produced its score. */
 function openBoardRow(row: { run_id?: number | null }) {
   if (row.run_id) void openRun({ id: row.run_id } as Run)
@@ -686,12 +718,19 @@ const logOpen = ref(false)
 
 const logSources = computed<LogSource[]>(() => {
   const name = campaign.value?.name ?? 'campaign'
-  const sources: LogSource[] = []
+  // What the platform did, from its own record: there even when a container
+  // printed nothing or never started.
+  const sources: LogSource[] = [{
+    key: 'activity',
+    label: t('campaign.activityLog'),
+    fetch: () => fetchCampaignActivity(campaignId),
+    filename: `${name}-activity.log`,
+  }]
   // Each policy session's container log (policy campaigns), newest first.
   for (const sid of sessionIds.value) {
     sources.push({
       key: `policy-${sid}`,
-      label: `Policy container · session ${sid}`,
+      label: t('campaign.policyLog', { id: sid }),
       fetch: () => fetchPolicySessionLog(sid),
       filename: `${name}-policy-session-${sid}.log`,
     })
@@ -702,7 +741,7 @@ const logSources = computed<LogSource[]>(() => {
     if (r.kind === 'external') continue
     sources.push({
       key: `run-${r.id}`,
-      label: `Engine · run ${r.id} (${r.kind}) · ${r.status}`,
+      label: t('campaign.engineLog', { id: r.id, status: runLabel(r.status) }),
       fetch: () => fetchRunLog(r.id),
       filename: `${name}-run-${r.id}.log`,
     })
@@ -716,7 +755,7 @@ const logSources = computed<LogSource[]>(() => {
 /** "≈ 6 min startup + 22 min benchmark", or a note that nothing ran yet. */
 function moreAction(command: string) {
   if (command === 'logs') logOpen.value = true
-  else if (command === 'clone') void cloneCampaign()
+  else if (command === 'clone') copyToNew()
   else if (command === 'export') exportOpen.value = true
   else if (command === 'delete') void deleteCampaign()
   else if (command === 'done') void markDone()
@@ -983,6 +1022,14 @@ function openCandidateRun(candidate: Candidate) {
   if (run) openRun(run)
 }
 
+/** Columns that would say "—" on every row are left out. */
+function hasCards(rows: LeaderboardEntry[]): boolean {
+  return rows.some((r) => !!r.card_type)
+}
+function hasBaseline(rows: LeaderboardEntry[]): boolean {
+  return rows.some((r) => r.is_baseline || r.vs_baseline != null)
+}
+
 /** 68586.56244036907 is twelve digits of a number whose last six are noise. */
 function fmtScore(value: number | null): string {
   if (value === null || value === undefined) return '—'
@@ -1097,27 +1144,19 @@ onMounted(() => {
 <template>
   <div class="page" v-if="campaign">
     <div class="header-row">
-      <div>
+      <div class="title-block">
         <h1 class="page-title">{{ campaign.name }}</h1>
-        <span class="muted">
-          {{ campaign.engine }} · {{ campaign.served_model_name }} ·
-          <template v-if="campaign.policy_id != null">
-            {{ t('campaign.policy') }}: {{ policy?.name ?? `#${campaign.policy_id}` }} ·
-          </template>
-          <template v-else>
-            {{ describeStrategy(campaign.extensions) ?? t('campaign.enumerates') }} ·
-          </template>
-          {{ t('campaign.evaluated', { done: progress.done, total: progress.total }) }}
-          <template v-if="spaceName"><br />{{ t('campaign.grid') }}: <b>{{ spaceName }}</b></template>
-          <template v-if="objective.name"> · {{ t('campaign.objective') }}:
-            <b>{{ objective.name }}</b></template>
+        <el-tag :type="campaignStatus(campaign.status).type" effect="light"
+          :class="['status-tag', campaignStatus(campaign.status).cls]">
+          <span v-if="campaign.status === 'active'" class="live-dot" />{{ campaign.status }}
+        </el-tag>
+        <span class="muted tiny owner">
+          <template v-if="campaign.owner_name">{{ campaign.owner_name }} · </template>
+          <span :title="exactTime(campaign.created_at)">{{ relativeTime(campaign.created_at) }}</span>
         </span>
       </div>
       <div class="actions">
-        <el-tag size="large" :type="campaignStatus(campaign.status).type"
-          :class="campaignStatus(campaign.status).cls">
-          {{ campaign.status }}
-        </el-tag>
+        <el-button :icon="Tickets" @click="logOpen = true">{{ t('campaign.logs') }}</el-button>
         <el-button :icon="Document" @click="openReport">{{ t('campaign.report') }}</el-button>
         <!-- The occasional actions, one click away instead of a row of buttons
              nobody reads past. -->
@@ -1125,11 +1164,8 @@ onMounted(() => {
           <el-button :icon="MoreFilled" :aria-label="t('campaign.more')" />
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-if="logSources.length" command="logs" :icon="Tickets">
-                {{ t('campaign.logs') }}
-              </el-dropdown-item>
               <el-dropdown-item command="clone" :icon="CopyDocument">
-                {{ t('campaign.clone') }}
+                {{ t('campaign.copyToNew') }}
               </el-dropdown-item>
               <el-dropdown-item command="export" :icon="Download"
                 title="Everything needed to recreate this campaign — import it on the New campaign page">
@@ -1189,6 +1225,59 @@ onMounted(() => {
       </div>
     </div>
 
+    <!-- The campaign in one row: each tile is one fact, with the detail one
+         hover away and the whole definition on the Configuration tab. -->
+    <div class="facts">
+      <FactTile :icon="Cpu" :label="t('campaign.fact.model')">
+        {{ campaign.served_model_name }}
+        <template #sub><span class="mono">{{ campaign.engine }}</span></template>
+        <template #tip>{{ campaign.image }}
+{{ campaign.model_path }}</template>
+      </FactTile>
+      <FactTile :icon="MagicStick" :label="t('campaign.fact.search')">
+        {{ searchFact.value }}
+        <template v-if="searchFact.sub" #sub>{{ searchFact.sub }}</template>
+        <template v-if="searchFact.tip" #tip>{{ searchFact.tip }}</template>
+      </FactTile>
+      <FactTile :icon="Aim" :label="t('campaign.fact.objective')">
+        <el-icon class="dir"><Bottom v-if="objective.direction === 'minimize'" /><Top v-else /></el-icon>
+        {{ objective.name || objective.label }}
+        <template #sub>{{ objective.redlines.length
+          ? t('campaign.fact.redlines', { n: objective.redlines.length })
+          : t('campaign.fact.noRedlines') }}</template>
+        <template #tip>{{ objective.direction }} {{ objective.label }} ({{ objective.key }})<template
+          v-for="(r, i) in objective.redlines" :key="i">
+{{ r.metric }} {{ r.op }} {{ r.value }}</template></template>
+      </FactTile>
+      <FactTile :icon="Timer" :label="t('campaign.fact.schedule')">
+        {{ scheduleFact.value }}
+        <template #action>
+          <el-button link type="primary" size="small" :icon="EditPen"
+            :aria-label="schedule?.daily_start ? t('campaign.editSchedule') : t('campaign.addSchedule')"
+            :title="schedule?.daily_start ? t('campaign.editSchedule') : t('campaign.addSchedule')"
+            @click="openScheduleEditor" />
+        </template>
+        <template v-if="scheduleFact.sub" #sub>{{ scheduleFact.sub }}</template>
+        <template #tip>{{ scheduleLine }}<template v-if="campaign.schedule_timezone">
+{{ campaign.schedule_timezone }}</template></template>
+      </FactTile>
+      <FactTile :icon="Odometer" :label="t('campaign.fact.progress')">
+        <div class="progress">
+          <el-progress :percentage="progressFact.percent" :show-text="false" :stroke-width="6"
+            :status="campaign.status === 'done' ? 'success' : undefined" />
+          <span>{{ progressFact.text }}</span>
+        </div>
+        <template v-if="progressFact.sub" #sub>{{ progressFact.sub }}</template>
+        <template #tip>{{ t('campaign.evaluated', { done: progress.done, total: progress.total }) }}</template>
+      </FactTile>
+      <FactTile v-if="campaign.dataset_profile" :icon="Coin" :label="t('campaign.fact.dataset')">
+        {{ campaign.dataset_profile }}
+        <template #sub><span :class="{ mono: !!campaign.dataset_build_id }">{{
+          campaign.dataset_build_id || t('campaign.fact.notPinned') }}</span></template>
+        <template #tip>{{ t('campaign.fact.datasetTip') }}</template>
+      </FactTile>
+    </div>
+
     <!-- Lease readiness of the pinned machines, before a run is placed. -->
     <el-alert
       v-for="w in (campaign.machine_warnings ?? [])"
@@ -1200,91 +1289,103 @@ onMounted(() => {
       :title="w.detail"
     />
 
-    <div class="clock">
-      <span class="muted">{{ scheduleLine }}</span>
-      <el-button link type="primary" size="small" @click="openScheduleEditor">
-        {{ schedule?.daily_start ? t('campaign.editSchedule') : t('campaign.addSchedule') }}
-      </el-button>
-    </div>
-
-    <!-- Every pre-run finding in one place, run on demand rather than as a
-         banner. Parity used to live here as its own alert and read as an error
-         nobody could act on; it is one check among several now, alongside the
-         ones that actually stop a run. -->
-    <!-- Only while a start is still ahead. On a running campaign the port
-         check reports our OWN engine holding the port, and on a finished one
-         every answer is about a machine the campaign is no longer using —
-         findings that look like problems and are not. -->
-    <div v-if="preflightUseful" class="preflight-bar">
-      <span v-if="!preflight" class="muted">Pre-flight checks not run</span>
-      <span v-else class="muted counts">
-        <b v-if="preflightCounts.fail" class="fail-text">
-          {{ preflightCounts.fail }} blocking
-        </b>
-        <b v-if="preflightCounts.warn" class="warn-text">
-          {{ preflightCounts.warn }} warning(s)
-        </b>
-        <b class="ok-text">{{ preflightCounts.pass }} passed</b>
-      </span>
-      <span class="spacer" />
-      <el-button size="small" :loading="checking" @click="runPreflight">
-        {{ preflight ? 'Re-check' : 'Run pre-flight checks' }}
-      </el-button>
-    </div>
-
-    <div v-if="preflight" class="preflight-list">
-      <div v-for="(c, i) in preflightIssues" :key="i" class="check" :class="c.status">
-        <span class="icon">{{ statusLook[c.status] }}</span>
-        <div>
-          <div>
-            <span class="mono muted">{{ c.machine }}</span>
-            <b> {{ c.label }}</b> — {{ c.detail }}
-            <InfoHint v-if="c.hint">{{ c.hint }}</InfoHint>
-          </div>
-        </div>
-      </div>
-      <!-- Passes as chips: present, countable, and not competing for attention
-           with the ones that need a decision. -->
-      <div v-if="preflightPassed.length" class="passed">
-        <span v-for="(c, i) in preflightPassed" :key="i" class="ok-chip"
-          :title="`${c.machine}: ${c.detail}`">
-          ✓ {{ c.label }}
-        </span>
-      </div>
-    </div>
-
     <el-alert v-if="stall" type="warning" :closable="false" :title="stall.title"
-      style="margin-bottom: 12px" show-icon>
+      class="warn-banner" show-icon>
       <template #default>
         <div v-for="(line, i) in stall.lines" :key="i" class="stall-line">{{ line }}</div>
       </template>
     </el-alert>
 
-    <!-- The policy's night, for a policy campaign: where its search container
-         is, and what it waits on when it is stuck. -->
-    <div v-if="session" class="policy-card">
-      <div class="policy-head">
-        <b>Policy</b>
-        <span class="mono">{{ policy?.name ?? `#${campaign.policy_id}` }}</span>
-        <span class="muted tiny">session {{ session.id }}</span>
-        <el-tag size="small" :type="(sessionLook.type as any)">{{ sessionLook.text }}</el-tag>
+    <!-- The policy's night in one line: where its container is on the way
+         through, and why it ended. The particulars are behind Details. -->
+    <div v-if="session" class="session-strip">
+      <div class="session-line">
+        <el-icon class="strip-icon"><MagicStick /></el-icon>
+        <b>{{ policy?.name ?? `#${campaign.policy_id}` }}</b>
+        <span class="session-track">
+          <span v-for="(step, i) in SESSION_STEPS" :key="step" class="session-step"
+            :class="sessionStepClass(step, i)" :title="step">
+            <span class="pip" /><span class="step-name">{{ step }}</span>
+          </span>
+        </span>
+        <!-- The track already says where it is; the tag only for what it cannot
+             (failed, aborted, a stop on the way). -->
+        <el-tag v-if="!(SESSION_STEPS as readonly string[]).includes(sessionLook.text)"
+          size="small" :type="(sessionLook.type as any)">{{ sessionLook.text }}</el-tag>
+        <span v-if="sessionLine" class="muted tiny">{{ sessionLine }}</span>
         <span class="spacer" />
+        <el-button size="small" text @click="sessionDetails = !sessionDetails">
+          {{ t('campaign.details') }}
+          <el-icon class="el-icon--right"><ArrowUp v-if="sessionDetails" /><ArrowDown v-else /></el-icon>
+        </el-button>
         <el-button size="small" text @click="openPolicyLog">{{ t('campaign.logs') }}</el-button>
         <el-button v-if="!sessionEnded" size="small" text class="risky" @click="abortSession">
-          Abort
+          {{ t('campaign.abort') }}
         </el-button>
       </div>
-      <div class="session-track">
-        <span v-for="(step, i) in SESSION_STEPS" :key="step" class="session-step"
-          :class="sessionStepClass(step, i)">
-          <span class="pip" />{{ step }}
-        </span>
+      <div v-if="session.waiting" class="session-warn tiny">
+        <el-icon><WarningFilled /></el-icon> {{ session.waiting }}</div>
+      <div v-if="session.error" class="session-bad tiny">
+        <el-icon><CircleCloseFilled /></el-icon> {{ session.error }}</div>
+      <el-collapse-transition>
+        <dl v-if="sessionDetails" class="session-details">
+          <dt>{{ t('campaign.session') }}</dt><dd class="mono">{{ session.id }}</dd>
+          <dt>{{ t('common.started') }}</dt>
+          <dd :title="exactTime(session.started_at)">{{ session.started_at ? absoluteTime(session.started_at) : '—' }}</dd>
+          <dt>{{ t('campaign.lastHeard') }}</dt>
+          <dd :title="exactTime(session.last_heartbeat_at)">{{ relativeTime(session.last_heartbeat_at) }}</dd>
+          <template v-if="session.search_deadline">
+            <dt>{{ t('campaign.searchUntil') }}</dt><dd>{{ absoluteTime(session.search_deadline) }}</dd>
+          </template>
+          <dt>{{ t('campaign.trials') }}</dt><dd>{{ session.trials.length }}</dd>
+          <dt>{{ t('campaign.finalistsShort') }}</dt><dd>{{ session.contenders.length }}</dd>
+          <template v-if="session.policy_message">
+            <dt>{{ t('campaign.policySays') }}</dt><dd>{{ session.policy_message }}</dd>
+          </template>
+          <template v-if="session.search_end_reason">
+            <dt>{{ t('campaign.endedBecause') }}</dt><dd class="mono">{{ session.search_end_reason }}</dd>
+          </template>
+        </dl>
+      </el-collapse-transition>
+    </div>
+
+    <!-- Every pre-run finding in one place, run on demand rather than as a
+         banner, and only while a start is still ahead: on a running campaign
+         the port check reports our OWN engine holding the port, and on a
+         finished one every answer is about a machine it no longer uses. -->
+    <div v-if="preflightUseful" class="preflight-bar">
+      <b class="preflight-label">{{ t('campaign.preflight') }}</b>
+      <span v-if="!preflight" class="muted">{{ t('campaign.preflightNotRun') }}</span>
+      <span v-else class="counts">
+        <span v-if="preflightCounts.fail" class="fail-text">
+          <el-icon><CircleCloseFilled /></el-icon>
+          {{ t('campaign.preflightBlocking', { n: preflightCounts.fail }) }}</span>
+        <span v-if="preflightCounts.warn" class="warn-text">
+          <el-icon><WarningFilled /></el-icon>
+          {{ t('campaign.preflightWarnings', { n: preflightCounts.warn }) }}</span>
+        <el-tooltip :disabled="!preflightPassed.length" placement="bottom">
+          <template #content>
+            <div v-for="(c, i) in preflightPassed" :key="i">{{ c.machine }}: {{ c.label }}</div>
+          </template>
+          <span class="ok-text"><el-icon><CircleCheckFilled /></el-icon>
+            {{ t('campaign.preflightPassed', { n: preflightCounts.pass }) }}</span>
+        </el-tooltip>
+      </span>
+      <span class="spacer" />
+      <el-button size="small" :loading="checking" @click="runPreflight">
+        {{ preflight ? t('campaign.recheck') : t('campaign.runPreflight') }}
+      </el-button>
+    </div>
+
+    <div v-if="preflight && preflightIssues.length" class="preflight-list">
+      <div v-for="(c, i) in preflightIssues" :key="i" class="check" :class="c.status">
+        <el-icon class="icon"><CircleCloseFilled v-if="c.status === 'fail'" /><WarningFilled v-else /></el-icon>
+        <div>
+          <span class="mono muted">{{ c.machine }}</span>
+          <b> {{ c.label }}</b> — {{ c.detail }}
+          <InfoHint v-if="c.hint">{{ c.hint }}</InfoHint>
+        </div>
       </div>
-      <div class="muted tiny">{{ sessionLine }}<template
-        v-if="session.policy_message && !sessionEnded">
-        · {{ session.policy_message }}</template></div>
-      <div v-if="session.waiting" class="session-warn tiny">Waiting on: {{ session.waiting }}</div>
-      <div v-if="session.error" class="session-bad tiny">{{ session.error }}</div>
     </div>
 
     <!-- Sections installed plugins add about this campaign (src/plugins). -->
@@ -1301,31 +1402,27 @@ onMounted(() => {
               {{ staged ? t('campaign.verifiedOn') : t('campaign.finalists') }}
               <InfoHint v-if="!staged" :width="340">{{ t('campaign.finalistsHint') }}</InfoHint>
             </h3>
-            <span class="mono muted">
+            <span class="chip-plain mono" :title="t('campaign.benchmark')">
               {{ campaign?.verify_benchmark_slug || campaign?.benchmark_slug }}</span>
-          </div>
-          <p class="muted objective-line">
-            <b>{{ verifyObjective.direction }} {{ verifyObjective.label }}</b>
-            <span class="mono key">{{ verifyObjective.key }}</span>
+            <el-tooltip :content="`${verifyObjective.direction} ${verifyObjective.key}`" placement="top">
+              <span class="chip-plain">
+                <el-icon><Bottom v-if="verifyObjective.direction === 'minimize'" /><Top v-else /></el-icon>
+                {{ verifyObjective.label }}</span>
+            </el-tooltip>
+            <el-tooltip v-if="datasetPin" placement="top" :width="320">
+              <template #content>{{ t('campaign.replayedTip') }}</template>
+              <span class="chip-plain">
+                <el-icon><Coin /></el-icon>
+                <span class="mono">{{ datasetPin.build }}</span>
+                <template v-if="datasetPin.adopted"> · {{ t('campaign.datasetAdopted') }}</template>
+              </span>
+            </el-tooltip>
             <InfoHint v-if="staged">
               Production was measured with the screening benchmark, not this one, so there
               is no like-for-like comparison against it here.
             </InfoHint>
-          </p>
-          <p v-if="datasetPin" class="muted objective-line">
-            <span>{{ t('campaign.replayedOn') }}</span>
-            <span class="mono key">{{ datasetPin.build }}</span>
-            <el-tag v-if="datasetPin.adopted" size="small" type="info" effect="plain">
-              {{ t('campaign.datasetAdopted') }}
-            </el-tag>
-            <InfoHint>
-              Every candidate here replayed this one sample of the dataset, so their
-              scores compare. Another campaign's numbers only compare to these if it
-              replayed the same sample (the same id).
-            </InfoHint>
-          </p>
+          </div>
           <ScoreBars :rows="verifiedBoard" :swept-keys="sweptKeys"
-            :label="verifyObjective.label" :unit="verifyObjective.unit"
             :direction="verifyObjective.direction" />
           <el-table :data="verifiedBoard" class="clickable" @row-click="openBoardRow">
             <el-table-column prop="run_id" :label="t('campaign.run')" width="80" />
@@ -1334,7 +1431,7 @@ onMounted(() => {
                 <ConfigChips :config="row.config" :keys="sweptKeys" />
               </template>
             </el-table-column>
-            <el-table-column label="GPU" width="90">
+            <el-table-column v-if="hasCards(verifiedBoard)" label="GPU" width="90">
               <template #default="{ row }">
                 <el-tag v-if="row.card_type" size="small" effect="plain"
                   :type="offChip(row) ? 'warning' : 'info'"
@@ -1344,14 +1441,15 @@ onMounted(() => {
                 <span v-else class="muted">—</span>
               </template>
             </el-table-column>
-            <el-table-column prop="score" :label="verifyObjective.label" width="180" sortable>
+            <el-table-column prop="score" :label="verifyObjective.unit ? `${verifyObjective.label} (${verifyObjective.unit})` : verifyObjective.label"
+              min-width="170" sortable>
               <template #default="{ row }">
                 <el-tag v-if="row.is_baseline" size="small" type="info" effect="plain"
                   class="baseline-tag">{{ t('campaign.baselineRow') }}</el-tag>
                 {{ fmtScore(row.score) }}
               </template>
             </el-table-column>
-            <el-table-column :label="t('campaign.vsBaseline')" width="110">
+            <el-table-column v-if="hasBaseline(verifiedBoard)" :label="t('campaign.vsBaseline')" width="110">
               <template #default="{ row }">
                 <span v-if="row.is_baseline" class="muted">—</span>
                 <span v-else-if="row.vs_baseline != null"
@@ -1361,91 +1459,92 @@ onMounted(() => {
                 <span v-else class="muted">—</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('campaign.redlines')" min-width="200">
+            <el-table-column :label="t('campaign.redlines')" width="110" align="center">
               <template #default="{ row }">
-                <el-tag v-if="!row.comparable" type="warning" size="small"
-                  :title="row.dataset_build_id">
-                  {{ t('campaign.otherDataset') }}
-                </el-tag>
-                <el-tag v-else-if="row.holds_redlines" type="success" size="small">{{ t('campaign.held') }}</el-tag>
-                <template v-else>
-                  <el-tag type="danger" size="small">{{ t('campaign.crossed') }}</el-tag>
-                  <span class="muted breach">{{ row.breaches.join('; ') }}</span>
-                </template>
+                <el-tag v-if="row.comparable === false" type="warning" size="small"
+                  :title="row.dataset_build_id">{{ t('campaign.otherDataset') }}</el-tag>
+                <el-icon v-else-if="row.holds_redlines" class="held" :title="t('campaign.held')">
+                  <CircleCheckFilled /></el-icon>
+                <el-tooltip v-else placement="top"
+                  :content="row.breaches.join('; ') || t('campaign.crossed')">
+                  <el-icon class="crossed"><CircleCloseFilled /></el-icon>
+                </el-tooltip>
               </template>
             </el-table-column>
           </el-table>
-          <h3 class="board-title screening">{{ t('campaign.screening') }}</h3>
         </template>
 
-        <p class="muted objective-line">
-          <b>{{ objective.direction }} {{ objective.label }}</b>
-          <span class="mono key">{{ objective.key }}</span>
-          <template v-if="objective.redlines.length">
-            <span class="sep">·</span>
-            <span v-for="(r, i) in objective.redlines" :key="i" class="mono">
-              {{ i ? ', ' : '' }}{{ r.metric }} {{ r.op }} {{ r.value }}</span>
-            <InfoHint>
-              Redlines. A config that crosses one is rejected however fast it was — and a
-              metric the benchmark never reported counts as crossed, because we cannot
-              certify an SLO we did not measure.
-            </InfoHint>
-          </template>
-        </p>
-        <p v-if="staged && !verifiedBoard.length" class="muted tiny pending-note">
-          Top {{ campaign?.verify_top_k }} → verify on
-          <span class="mono">{{ campaign?.verify_benchmark_slug }}</span>
-        </p>
+        <div class="board-head" :class="{ screening: verifiedBoard.length }">
+          <h3 v-if="verifiedBoard.length" class="board-title">{{ t('campaign.screening') }}</h3>
+          <el-tooltip :content="`${objective.direction} ${objective.key}`" placement="top">
+            <span class="chip-plain">
+              <el-icon><Bottom v-if="objective.direction === 'minimize'" /><Top v-else /></el-icon>
+              {{ objective.label }}</span>
+          </el-tooltip>
+          <span v-for="(r, i) in objective.redlines" :key="i" class="chip-plain mono redline">
+            {{ r.metric }} {{ r.op }} {{ r.value }}</span>
+          <InfoHint v-if="objective.redlines.length">
+            Redlines. A config that crosses one is rejected however fast it was — and a
+            metric the benchmark never reported counts as crossed, because we cannot
+            certify an SLO we did not measure.
+          </InfoHint>
+          <span v-if="staged && !verifiedBoard.length" class="muted tiny">
+            {{ t('campaign.thenVerify', { n: campaign?.verify_top_k ?? 0 }) }}
+            <span class="mono">{{ campaign?.verify_benchmark_slug }}</span>
+          </span>
+        </div>
         <ScoreBars :rows="screenBoard" :swept-keys="sweptKeys"
-          :label="objective.label" :unit="objective.unit"
           :direction="objective.direction" />
-        <el-table :data="screenBoard" class="clickable" @row-click="openBoardRow">
-          <el-table-column prop="run_id" :label="t('campaign.run')" width="80" />
-          <el-table-column :label="t('common.config')" min-width="280">
-            <template #default="{ row }">
-              <ConfigChips :config="row.config" :keys="sweptKeys" />
-            </template>
-          </el-table-column>
-          <el-table-column label="GPU" width="90">
-            <template #default="{ row }">
-              <el-tag v-if="row.card_type" size="small" effect="plain"
-                :type="offChip(row) ? 'warning' : 'info'"
-                :title="offChip(row)
-                  ? 'Ran on a different card than the baseline — not comparable per-card'
-                  : ''">{{ row.card_type }}</el-tag>
-              <span v-else class="muted">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="score" :label="objective.unit
-            ? `${objective.label} (${objective.unit})` : objective.label"
-            width="170" sortable>
-            <template #default="{ row }">
-              <el-tag v-if="row.is_baseline" size="small" type="info" effect="plain"
-                class="baseline-tag">{{ t('campaign.baselineRow') }}</el-tag>
-              {{ fmtScore(row.score) }}
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('campaign.vsBaseline')" width="110">
-            <template #default="{ row }">
-              <span v-if="row.is_baseline" class="muted">—</span>
-              <span v-else-if="row.vs_baseline != null"
-                :class="beatsBaseline(row.vs_baseline, objective.direction) ? 'better' : 'worse'">
-                {{ fmtVsBaseline(row.vs_baseline, objective.direction) }}
-              </span>
-              <span v-else class="muted">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('campaign.redlines')" min-width="200">
-            <template #default="{ row }">
-              <el-tag v-if="row.holds_redlines" type="success" size="small">{{ t('campaign.held') }}</el-tag>
-              <template v-else>
-                <el-tag type="danger" size="small">{{ t('campaign.crossed') }}</el-tag>
-                <span class="muted breach">{{ row.breaches.join('; ') }}</span>
+          <el-table v-if="screenBoard.length" :data="screenBoard" class="clickable" @row-click="openBoardRow">
+            <el-table-column prop="run_id" :label="t('campaign.run')" width="80" />
+            <el-table-column :label="t('common.config')" min-width="280">
+              <template #default="{ row }">
+                <ConfigChips :config="row.config" :keys="sweptKeys" />
               </template>
-            </template>
-          </el-table-column>
-        </el-table>
-        <p v-if="screenBoard.length === 0" class="muted">{{ t('campaign.noRuns') }}</p>
+            </el-table-column>
+            <el-table-column v-if="hasCards(screenBoard)" label="GPU" width="90">
+              <template #default="{ row }">
+                <el-tag v-if="row.card_type" size="small" effect="plain"
+                  :type="offChip(row) ? 'warning' : 'info'"
+                  :title="offChip(row)
+                    ? 'Ran on a different card than the baseline — not comparable per-card'
+                    : ''">{{ row.card_type }}</el-tag>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="score" :label="objective.unit ? `${objective.label} (${objective.unit})` : objective.label"
+              min-width="170" sortable>
+              <template #default="{ row }">
+                <el-tag v-if="row.is_baseline" size="small" type="info" effect="plain"
+                  class="baseline-tag">{{ t('campaign.baselineRow') }}</el-tag>
+                {{ fmtScore(row.score) }}
+              </template>
+            </el-table-column>
+            <el-table-column v-if="hasBaseline(screenBoard)" :label="t('campaign.vsBaseline')" width="110">
+              <template #default="{ row }">
+                <span v-if="row.is_baseline" class="muted">—</span>
+                <span v-else-if="row.vs_baseline != null"
+                  :class="beatsBaseline(row.vs_baseline, objective.direction) ? 'better' : 'worse'">
+                  {{ fmtVsBaseline(row.vs_baseline, objective.direction) }}
+                </span>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('campaign.redlines')" width="110" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="row.comparable === false" type="warning" size="small"
+                  :title="row.dataset_build_id">{{ t('campaign.otherDataset') }}</el-tag>
+                <el-icon v-else-if="row.holds_redlines" class="held" :title="t('campaign.held')">
+                  <CircleCheckFilled /></el-icon>
+                <el-tooltip v-else placement="top"
+                  :content="row.breaches.join('; ') || t('campaign.crossed')">
+                  <el-icon class="crossed"><CircleCloseFilled /></el-icon>
+                </el-tooltip>
+              </template>
+            </el-table-column>
+          </el-table>
+        <el-empty v-if="screenBoard.length === 0 && !verifiedBoard.length" :image-size="64"
+          :description="t('campaign.noRuns')" />
       </el-tab-pane>
 
       <el-tab-pane :label="t('campaign.tabs.runs')">
@@ -1478,7 +1577,7 @@ onMounted(() => {
               <span class="muted tiny">{{ runRole(row) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="Failure" width="130">
+          <el-table-column v-if="runs.some((r) => r.failure_class)" label="Failure" width="130">
             <template #default="{ row }">{{ failureLabel(row.failure_class || '') }}</template>
           </el-table-column>
           <!-- Which cards, by number: "0" read as "no GPUs". -->
@@ -1488,7 +1587,6 @@ onMounted(() => {
                 ? row.gpu_indices.map((i: number) => `#${i}`).join(' ') : '—' }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="endpoint_url" label="Endpoint" min-width="180" class-name="mono" />
           <el-table-column label="Started" min-width="130">
             <template #default="{ row }">
               <span :title="exactTime(row.started_at)">{{ relativeTime(row.started_at) }}</span>
@@ -1640,44 +1738,45 @@ onMounted(() => {
     <el-drawer v-model="drawerOpen" :title="`Run ${selectedRun?.id}`" size="50%"
       :with-header="true">
       <template v-if="selectedRun">
+        <div class="run-facts">
+          <el-tag :type="runStatus(selectedRun.status).type">{{ runLabel(selectedRun.status) }}</el-tag>
+          <span v-if="selectedRun.failure_class" class="mono">{{ failureLabel(selectedRun.failure_class) }}</span>
+          <span class="muted" :title="exactTime(selectedRun.started_at)">
+            <el-icon><Timer /></el-icon> {{ duration(selectedRun.started_at, selectedRun.finished_at) }}</span>
+          <span v-if="selectedRun.gpu_indices?.length" class="muted mono">
+            GPU {{ selectedRun.gpu_indices.join(',') }}</span>
+          <span v-if="selectedRun.endpoint_url" class="muted mono">{{ selectedRun.endpoint_url }}</span>
+          <span v-if="selectedRun.llmbench_submission_id" class="muted">
+            LLMBench <span class="mono">#{{ selectedRun.llmbench_submission_id }}</span></span>
+        </div>
         <el-alert v-if="selectedRun.error && selectedRun.status !== 'succeeded'"
           :type="selectedRun.status === 'failed' ? 'error' : 'info'" :closable="false"
-          show-icon class="run-error"
-          :title="selectedRun.failure_class ? `${selectedRun.status}: ${selectedRun.failure_class}`
-            : selectedRun.status">
+          show-icon class="run-error" :title="selectedRun.status">
           <pre class="mono run-error-text">{{ selectedRun.error }}</pre>
-          <div class="tiny">The engine's log is at the bottom of this panel.</div>
         </el-alert>
-        <div v-if="runVerdict" class="verdict-box">
-          <div class="goal-line">
-            <span class="muted tiny lead-in">measured by</span>
-            <el-tag size="small" effect="plain"
-              :type="runVerdict.stage === 'verify' ? 'warning' : 'info'">
-              {{ runVerdict.stage === 'verify' ? 'replay' : (staged ? 'screening' : 'benchmark') }}
-            </el-tag>
-            <span class="mono muted">{{ runVerdict.benchmark }}</span>
-          </div>
-          <div class="goal-line">
-            <span class="muted tiny lead-in">ranked on</span>
-            <span class="mono">{{ runVerdict.key }}</span>
-          </div>
-          <div class="goal-line">
-            <span class="muted tiny lead-in">score</span>
+
+        <div v-if="runVerdict" class="verdict">
+          <div class="verdict-score">
+            <span class="muted tiny">{{ runVerdict.label }}</span>
             <b class="headline">{{ fmtScore(runVerdict.value) }}</b>
             <span v-if="runVerdict.unit" class="muted tiny">{{ runVerdict.unit }}</span>
-            <span class="muted tiny">({{ runVerdict.direction }})</span>
           </div>
-          <div class="goal-line">
-            <span class="muted tiny lead-in">redlines</span>
-            <el-tag v-if="runVerdict.feasible" type="success" size="small">{{ t('campaign.held') }}</el-tag>
-            <template v-else>
-              <el-tag type="danger" size="small">{{ t('campaign.crossed') }}</el-tag>
-              <span class="muted tiny">{{ runVerdict.breaches.join('; ') || 'no score' }}</span>
-            </template>
+          <div class="verdict-side">
+            <span :class="runVerdict.feasible ? 'ok-text' : 'fail-text'">
+              <el-icon><CircleCheckFilled v-if="runVerdict.feasible" /><CircleCloseFilled v-else /></el-icon>
+              {{ runVerdict.feasible ? t('campaign.redlinesHeld') : t('campaign.redlinesCrossed') }}
+            </span>
+            <span v-if="!runVerdict.feasible" class="muted tiny">
+              {{ runVerdict.breaches.join('; ') || 'no score' }}</span>
+            <span class="muted tiny">
+              <el-tag size="small" effect="plain"
+                :type="runVerdict.stage === 'verify' ? 'warning' : 'info'">
+                {{ runVerdict.stage === 'verify' ? 'replay' : (staged ? 'screening' : 'benchmark') }}
+              </el-tag>
+              <span class="mono"> {{ runVerdict.benchmark }}</span>
+            </span>
           </div>
         </div>
-
-        <h3 v-if="runKeyMetrics.length">What the objective looked at</h3>
         <div v-if="runKeyMetrics.length" class="key-metrics">
           <div v-for="m in runKeyMetrics" :key="m.key" class="metric-row">
             <span class="mono muted">{{ m.key }}</span>
@@ -1685,47 +1784,41 @@ onMounted(() => {
           </div>
         </div>
 
-        <template v-if="selectedRun.serve_command">
-          <div class="log-head">
-            <h3>{{ t('runs.engineCommand') }}</h3>
-            <el-button size="small"
-              @click="copyText(selectedRun.serve_command, t('runs.engineCommandCopied'))">
-              {{ t('common.copy') }}</el-button>
-          </div>
-          <pre class="mono block">{{ selectedRun.serve_command }}</pre>
-          <dl class="run-image">
-            <dt>Image</dt><dd class="mono">{{ selectedRun.image }}</dd>
-            <dt>Weights</dt><dd class="mono">{{ selectedRun.model_path }}</dd>
-          </dl>
-          <p class="muted tiny">{{ t('runs.engineCommandNote') }}</p>
-        </template>
-        <h3>Config</h3>
-        <pre class="mono block">{{ JSON.stringify(selectedRun.config, null, 2) }}</pre>
-        <el-collapse class="launch-collapse">
-          <el-collapse-item :title="t('runs.launchCommandApplied')">
+        <h3>{{ t('common.config') }}</h3>
+        <ConfigChips :config="selectedRun.config" :keys="sweptKeys" />
+
+        <el-collapse class="run-more">
+          <el-collapse-item :title="t('campaign.fullConfig')" name="config">
+            <pre class="mono block">{{ JSON.stringify(selectedRun.config, null, 2) }}</pre>
+          </el-collapse-item>
+          <el-collapse-item v-if="selectedRun.serve_command" name="serve">
+            <template #title>{{ t('runs.engineCommand') }}</template>
+            <div class="log-head">
+              <span class="muted tiny">{{ t('runs.engineCommandNote') }}</span>
+              <el-button size="small"
+                @click="copyText(selectedRun.serve_command, t('runs.engineCommandCopied'))">
+                {{ t('common.copy') }}</el-button>
+            </div>
+            <pre class="mono block">{{ selectedRun.serve_command }}</pre>
+            <dl class="run-image">
+              <dt>Image</dt><dd class="mono">{{ selectedRun.image }}</dd>
+              <dt>Weights</dt><dd class="mono">{{ selectedRun.model_path }}</dd>
+            </dl>
+          </el-collapse-item>
+          <el-collapse-item :title="t('runs.launchCommandApplied')" name="launch">
             <pre class="mono block">{{ selectedRun.launch_command || '(not launched yet)' }}</pre>
           </el-collapse-item>
-        </el-collapse>
-        <h3>Results</h3>
-        <el-table :data="selectedRun.results">
-          <el-table-column prop="source" label="Source" width="110" />
-          <el-table-column label="Passed" width="90">
-            <template #default="{ row }">{{ row.passed ? 'yes' : 'no' }}</template>
-          </el-table-column>
-          <el-table-column label="Metrics" min-width="260">
-            <template #default="{ row }">
-              <el-collapse v-if="Object.keys(row.metrics ?? {}).length">
-                <el-collapse-item
-                  :title="`${Object.keys(row.metrics).length} metrics`">
-                  <pre class="mono block small">{{ JSON.stringify(row.metrics, null, 2) }}</pre>
-                </el-collapse-item>
-              </el-collapse>
-              <span v-else class="muted tiny">none</span>
+          <el-collapse-item v-for="(r, i) in selectedRun.results" :key="i" :name="`result-${i}`">
+            <template #title>
+              {{ t('runs.metrics') }} · {{ r.source }}
+              <span class="muted tiny metric-count">{{ t('runs.metricCount', { n: Object.keys(r.metrics ?? {}).length }) }}</span>
             </template>
-          </el-table-column>
-        </el-table>
+            <pre class="mono block small">{{ JSON.stringify(r.metrics, null, 2) }}</pre>
+          </el-collapse-item>
+        </el-collapse>
+
         <div class="log-head">
-          <h3>Captured log</h3>
+          <h3>{{ t('runs.capturedLog') }}</h3>
           <el-button v-if="runLog" size="small" @click="downloadRunLog">
             {{ t('common.download') }}
           </el-button>
@@ -1888,7 +1981,6 @@ onMounted(() => {
 .warn-banner {
   margin-bottom: 12px;
 }
-.clock,
 /* Flex with an explicit gap, not inline elements: Vue collapses the
    whitespace between them, which ran "ranked on" straight into the metric. */
 .goal-line {
@@ -1900,16 +1992,6 @@ onMounted(() => {
 }
 .goal-line:last-child {
   margin-bottom: 0;
-}
-.verdict-box {
-  background: var(--autotune-bg);
-  border: 1px solid var(--autotune-border);
-  border-radius: 6px;
-  padding: 12px 14px;
-  margin-bottom: 18px;
-}
-.verdict-box .lead-in {
-  min-width: 84px;
 }
 .headline {
   font-size: 16px;
@@ -1995,30 +2077,6 @@ onMounted(() => {
   display: flex;
   gap: 14px;
 }
-.passed {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 0;
-  border-top: 1px solid var(--autotune-border);
-}
-.preflight-list > .passed:first-child {
-  border-top: none;
-}
-.ok-chip {
-  font-size: 11.5px;
-  line-height: 20px;
-  padding: 0 7px;
-  border-radius: 4px;
-  background: #f0fdf4;
-  color: #15803d;
-  border: 1px solid #bbf7d0;
-  cursor: help;
-}
-.lead {
-  margin: 0 0 14px;
-  line-height: 1.6;
-}
 .block {
   background: #f1f5f9;
   padding: 12px;
@@ -2035,24 +2093,6 @@ onMounted(() => {
   overflow: auto;
   font-size: 12.5px;
   line-height: 1.5;
-}
-.policy-card {
-  background: #fff;
-  border: 1px solid var(--autotune-border);
-  border-radius: 8px;
-  padding: 10px 14px;
-  margin-bottom: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.policy-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.policy-head .spacer {
-  flex: 1;
 }
 .session-track {
   display: flex;
@@ -2124,5 +2164,187 @@ onMounted(() => {
 }
 .launch-collapse {
   margin: 12px 0;
+}
+.title-block {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.title-block .page-title {
+  margin: 0;
+}
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+.owner {
+  margin-left: 2px;
+}
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px 22px;
+  padding: 14px 18px;
+  margin-bottom: 12px;
+  background: #fff;
+  border: 1px solid var(--autotune-border);
+  border-radius: 8px;
+}
+.facts .dir {
+  vertical-align: -2px;
+  color: var(--el-color-primary);
+}
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.progress .el-progress {
+  flex: 1;
+  min-width: 50px;
+}
+.strip-icon {
+  color: var(--el-color-primary);
+}
+.session-strip {
+  background: #fff;
+  border: 1px solid var(--autotune-border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.session-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.session-line .el-button + .el-button {
+  margin-left: 0;
+}
+.session-line .risky {
+  color: var(--el-color-danger);
+}
+.session-details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 6px 0 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--autotune-border);
+  font-size: 12.5px;
+}
+.session-details dt {
+  color: var(--autotune-muted);
+}
+.session-details dd {
+  margin: 0;
+  word-break: break-word;
+}
+.session-warn,
+.session-bad {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.preflight-label {
+  font-size: 13px;
+}
+.counts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.chip-plain {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  line-height: 22px;
+  font-size: 12px;
+  border: 1px solid var(--autotune-border);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--el-text-color-regular);
+}
+.chip-plain.redline {
+  font-size: 11.5px;
+}
+.board-head {
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.board-head.screening {
+  margin-top: 26px;
+}
+.held {
+  color: var(--el-color-success);
+  font-size: 16px;
+}
+.crossed {
+  color: var(--el-color-danger);
+  font-size: 16px;
+  cursor: help;
+}
+.run-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+}
+.run-facts .el-icon {
+  vertical-align: -2px;
+}
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: var(--autotune-bg);
+  border: 1px solid var(--autotune-border);
+  border-radius: 6px;
+}
+.verdict-score {
+  display: flex;
+  flex-direction: column;
+}
+.verdict-score .headline {
+  font-size: 22px;
+  line-height: 1.2;
+}
+.verdict-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.verdict-side .el-icon {
+  vertical-align: -2px;
+}
+.run-more {
+  margin: 14px 0;
+}
+.metric-count {
+  margin-left: 8px;
 }
 </style>

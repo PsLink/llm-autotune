@@ -522,7 +522,10 @@ class ClientApi(K8sApi):
                 text = self._read_log(pod_name, tail)
             except self._ApiException:
                 continue  # best-effort: a log we cannot read must not fail a run
-            chunks.append(f"[{pod_name}]\n{text}")
+            # A pod that printed nothing adds nothing: its name alone, saved as
+            # the log, reads as a log with something wrong in it.
+            if text.strip():
+                chunks.append(f"[{pod_name}]\n{text}")
         return "\n".join(chunks).strip()
 
     def _read_log(self, pod_name: str, tail: int, previous: bool = False) -> str:

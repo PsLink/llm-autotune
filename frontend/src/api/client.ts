@@ -300,6 +300,8 @@ export interface MachineLifecycle {
 export interface Campaign {
   id: number
   owner_id: number
+  /** The owner's username. */
+  owner_name?: string
   /** What installed plugins keep about the campaign, by plugin name. */
   extensions?: Record<string, Record<string, unknown>>
   name: string
@@ -439,6 +441,9 @@ export interface Run {
   started_at: string | null
   finished_at: string | null
   created_at: string
+  /** Filled by the runs list (GET /runs), which spans every campaign. */
+  campaign_name?: string
+  owner_name?: string
 }
 
 export interface RunDetail extends Run {
@@ -780,6 +785,11 @@ export interface PolicySessionDetail {
   trials: unknown[]
   contenders: { id: number; status?: string }[]
   waiting: string
+}
+
+/** What the platform did for a campaign, one line per recorded step. */
+export async function fetchCampaignActivity(campaignId: number): Promise<string> {
+  return (await api.get(`/campaigns/${campaignId}/activity`, { responseType: 'text' })).data
 }
 
 export async function fetchPolicySessionLog(sessionId: number): Promise<string> {

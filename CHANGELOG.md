@@ -27,6 +27,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sets it and turns on LLMBench's dataset collector and volume.
 - `deploy/dev/demo-traffic.sh` loads a day of made-up gateway traffic into a
   VictoriaLogs store, to try datasets on a local kind setup.
+- **Start from ▸ A previous campaign** on New campaign fills the wizard in from
+  a campaign's definition, named with the next version (*sweep v2*), and stays
+  on the first step to be changed. **⋯ ▸ Copy to a new campaign** on a
+  campaign's page opens the same thing.
+- The image, model path and served name fields suggest what was typed before
+  in this browser and what the platform's campaigns use.
+- The Campaigns list filters by status, owner, model and engine, and searches
+  names, models and images. The Runs page filters by status, campaign and
+  owner (`GET /runs?status=…&campaign_id=…&owner=…`; `status=live` is every
+  live state), and names each run's campaign and owner. The filters are kept
+  in the page's address.
+- **Logs ▸ Activity** on a campaign (`GET /campaigns/{id}/activity`): what the
+  platform did for it, one line per recorded step. It is there even when a
+  container printed nothing or never started.
+
+### Changed
+
+- The campaign page is shorter. The lines of text under the name are now a
+  row of tiles (model, search, objective, schedule, progress, replay sample)
+  with their details in tooltips; the policy panel is one strip with its
+  particulars behind **Details**; the pre-flight result is a row of counts.
+  On the leaderboard, the objective and redlines are chips, a column empty on
+  every row is left out, and the redline verdict is an icon. The run details
+  put the score and the error first and fold the commands and metrics away.
+  **Logs** moved out of **⋯** next to **Report**.
+- **⋯ ▸ Clone** became **⋯ ▸ Copy to a new campaign**, which opens New
+  campaign filled in instead of creating the copy at once. `POST
+  /campaigns/{id}/clone` is unchanged.
+- New campaign's **Start from a baseline** and **Import YAML** buttons are one
+  **Start from** menu.
+- A future time reads "in 5 h" rather than as a date, and a window's next
+  start is no longer shown twice.
+- An empty run or policy log says why it is empty (stopped before its engine
+  launched, no container of its own, or printed nothing) instead of
+  "(no captured log)".
+
+### Fixed
+
+- Policy containers start with `PYTHONUNBUFFERED=1`, so what a Python policy
+  prints reaches its log; buffered output was lost when the container was
+  removed. The random-search policy's logs were also empty because its SDK
+  logged nothing; the SDK in llm-autotune-policies now logs each step.
+- A pod that printed nothing no longer leaves its name as the whole saved log.
+- A policy log that cannot be written to the worker's disk no longer stops the
+  policy container's teardown.
+- A run held up for a policy (*serving*) counts as live in the UI: it has a
+  **Stop** button and is not counted as finished.
 
 ## [0.2.2] - 2026-10-12
 

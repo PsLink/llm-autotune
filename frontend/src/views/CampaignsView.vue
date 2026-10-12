@@ -3,8 +3,10 @@ import { describeStrategy } from '../plugins'
 import { computed, onMounted, ref } from 'vue'
 import { api, type Campaign, type Policy } from '../api/client'
 import LinkButton from '../components/LinkButton.vue'
+import ListFilters from '../components/ListFilters.vue'
 import { useI18n } from '../i18n'
 import { useRowLink } from '../utils/nav'
+import { countOptions, useQueryFilters } from '../utils/queryFilters'
 import { campaignStatus } from '../utils/status'
 import { exactTime, relativeTime } from '../utils/time'
 
@@ -39,6 +41,30 @@ function schedule(c: Campaign): { text: string; auto: boolean } {
   return { text: t('campaigns.manual'), auto: false }
 }
 
+// -- filters -------------------------------------------------------------------
+const STATUS_ORDER = ['active', 'scheduled', 'paused', 'draft', 'done']
+const { selected, search, passes } = useQueryFilters(['status', 'owner', 'model', 'engine'])
+const filterFields = computed(() => [
+  {
+    key: 'status', label: t('common.status'),
+    // Statuses are identifiers and read the same in every language.
+    options: countOptions(campaigns.value, (c) => c.status, (v) => v, STATUS_ORDER),
+  },
+  { key: 'owner', label: t('filters.owner'), options: countOptions(campaigns.value, (c) => c.owner_name ?? '') },
+  { key: 'model', label: t('common.model'), width: 190,
+    options: countOptions(campaigns.value, (c) => c.served_model_name) },
+  { key: 'engine', label: t('filters.engine'), width: 130,
+    options: countOptions(campaigns.value, (c) => c.engine) },
+])
+const shown = computed(() => {
+  const text = search.value.trim().toLowerCase()
+  return campaigns.value.filter((c) =>
+    passes('status', c.status) && passes('owner', c.owner_name ?? '')
+    && passes('model', c.served_model_name) && passes('engine', c.engine)
+    && (!text || [c.name, c.served_model_name, c.image, String(c.id)]
+      .some((v) => v.toLowerCase().includes(text))))
+})
+
 const running = computed(() => campaigns.value.filter((c) => c.status === 'active').length)
 const waiting = computed(() => campaigns.value.filter((c) => c.status === 'scheduled').length)
 
@@ -60,7 +86,11 @@ onMounted(load)
       </LinkButton>
     </div>
 
-    <el-table :data="campaigns" v-bind="campaignRows" style="cursor: pointer">
+    <ListFilters v-model="selected" v-model:search="search" :fields="filterFields"
+      :search-placeholder="t('filters.searchCampaigns')" :shown="shown.length"
+      :total="campaigns.length" />
+
+    <el-table :data="shown" v-bind="campaignRows" style="cursor: pointer">
       <el-table-column prop="id" :label="t('common.id')" width="70" />
       <el-table-column :label="t('common.name')" min-width="200">
         <template #default="{ row }">
@@ -80,6 +110,9 @@ onMounted(load)
             {{ row.status }}
           </el-tag>
         </template>
+      </el-table-column>
+      <el-table-column :label="t('filters.owner')" width="110">
+        <template #default="{ row }"><span class="muted">{{ row.owner_name || '—' }}</span></template>
       </el-table-column>
       <el-table-column :label="t('campaigns.window')" width="150">
         <template #default="{ row }">

@@ -9,12 +9,14 @@ import { apiErrorText } from '../utils/apiError'
  *  better, and when — and the panel on the right is the answer so far, visible
  *  the entire time rather than at a review screen nobody reads.
  */
+import { ArrowDown, CopyDocument, Document, Medal } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   api,
   type Baseline,
+  type Campaign,
   type DatasetProfile,
   type Machine,
   type MachineGroup,
@@ -34,7 +36,9 @@ import {
   strategyValue,
   type Extensions,
 } from '../plugins'
-import { campaignFromYaml } from '../utils/campaignYaml'
+import { campaignFromYaml, campaignToYaml } from '../utils/campaignYaml'
+import { rememberValues, withPlatformValues } from '../utils/recent'
+import { absoluteTime } from '../utils/time'
 import { sweptKeysOf } from '../utils/space'
 import { defaultWorkload, specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
@@ -526,10 +530,17 @@ const importText = ref('')
  *  here keeps pointing at the original. */
 function adopt<T extends { id: number; name: string }>(
   list: Ref<T[]>, incoming: Record<string, unknown>, id: number, extra: Partial<T>,
+  exact = false,
 ): number {
-  const name = String(incoming.name ?? '')
+  let name = String(incoming.name ?? '')
   const saved = name ? list.value.find((row: T) => row.name === name) : undefined
-  if (saved) return saved.id
+  // A copy of a campaign keeps the space and objective it RAN with: a saved
+  // row of the same name that was edited since is not that, so it is left be.
+  const same = (row: T) => Object.entries(incoming).every(([key, value]) =>
+    key === 'name' || JSON.stringify((row as Record<string, unknown>)[key] ?? null)
+      === JSON.stringify(value ?? null))
+  if (saved && (!exact || same(saved))) return saved.id
+  if (saved) name = `${name} (as copied)`
   const row = { ...extra, ...incoming, id, name: name || '(imported)' } as unknown as T
   list.value = [row, ...list.value.filter((r: T) => r.id !== id)]
   return id
@@ -552,7 +563,9 @@ async function countInlineSpace() {
   }
 }
 
-function applyImport() {
+/** `review`: fill the form in and leave it on the first step to be changed
+ *  (a copy of a campaign), rather than going straight to the checks. */
+function applyImport(opts: { review?: boolean } = {}) {
   let parsed
   try {
     parsed = campaignFromYaml(importText.value)
@@ -591,20 +604,20 @@ function applyImport() {
     selectedSpaceId.value = adopt(searchSpaces, parsed.search_space, -1, {
       owner_id: 0, engine: form.value.engine, description: 'from the imported file',
       base: {}, grid: {}, tied: [], range: {}, conditions: {}, candidate_count: 0,
-    } as any)
+    } as any, opts.review)
     void countInlineSpace()
   }
   if (parsed.objective) {
     selectedObjectiveId.value = adopt(objectives, parsed.objective, -2, {
       owner_id: null, description: 'from the imported file', redlines: [],
       direction: 'maximize', is_builtin: false, created_at: '', updated_at: '',
-    } as any)
+    } as any, opts.review)
   }
   if (parsed.verify_objective && Object.keys(parsed.verify_objective).length) {
     verifyObjectiveId.value = adopt(objectives, parsed.verify_objective, -3, {
       owner_id: null, description: 'from the imported file', redlines: [],
       direction: 'maximize', is_builtin: false, created_at: '', updated_at: '',
-    } as any)
+    } as any, opts.review)
   }
   // Both halves or neither — the checkbox is the wizard's own state, not a
   // field in the file. Open the split disclosure when the file actually uses it,
@@ -626,12 +639,80 @@ function applyImport() {
     ElMessage.warning(`Ignored unknown field(s): ${parsed.unknown.join(', ')}`)
   }
 
+  visited.value = new Set([0, 1, 2, 3, 4, 5])
+  if (opts.review) {
+    step.value = 0
+    return
+  }
   // Straight to the checks: an imported campaign is one nobody has reviewed
   // against tonight's machines, and that is the whole point of this step.
-  visited.value = new Set([0, 1, 2, 3, 4, 5])
   step.value = STEPS.length - 1
   ElMessage.success('Imported — running the pre-flight checks')
   runPreflight()
+}
+
+// -- start from a previous campaign --------------------------------------------
+
+/** Every campaign on the platform, newest first: the ones to start from, and
+ *  where the field suggestions come from. */
+const pastCampaigns = ref<Campaign[]>([])
+const fromOpen = ref(false)
+const fromId = ref<number | null>(null)
+/** The campaign this form was filled in from, until the author starts over. */
+const copiedFrom = ref<{ id: number; name: string } | null>(null)
+
+async function loadPastCampaigns() {
+  try {
+    pastCampaigns.value = (await api.get('/campaigns')).data
+  } catch {
+    pastCampaigns.value = []
+  }
+}
+
+/** "sweep" → "sweep v2" → "sweep v3", skipping names already taken. */
+function nextName(name: string): string {
+  const m = name.match(/^(.*?)\s+v(\d+)$/)
+  const base = m ? m[1] : name
+  let n = m ? Number(m[2]) + 1 : 2
+  const taken = new Set(pastCampaigns.value.map((c) => c.name))
+  while (taken.has(`${base} v${n}`)) n += 1
+  return `${base} v${n}`
+}
+
+/** Fill the form in from a campaign's definition (never its results or its
+ *  window) and leave it on the first step, to change before creating. */
+async function startFromCampaign(id: number) {
+  try {
+    const campaign = (await api.get(`/campaigns/${id}`)).data as Campaign
+    importText.value = campaignToYaml(
+      { ...campaign, name: nextName(campaign.name) } as unknown as Record<string, unknown>)
+    fromOpen.value = false
+    applyImport({ review: true })
+    draftNotes.value = null
+    copiedFrom.value = { id: campaign.id, name: campaign.name }
+    ElMessage.success(`Filled in from ${campaign.name}: change what you need, then check and create`)
+  } catch (error: any) {
+    ElMessage.error(apiErrorText(error, 'Could not load that campaign'))
+  }
+}
+
+function startFrom(command: string) {
+  if (command === 'campaign') {
+    fromId.value = pastCampaigns.value[0]?.id ?? null
+    fromOpen.value = true
+  } else if (command === 'baseline') void openDraft()
+  else if (command === 'yaml') importOpen.value = true
+}
+
+/** What was typed here before and what the platform's campaigns used, as
+ *  suggestions for a text field. */
+function suggest(field: 'image' | 'model_path' | 'served_model_name') {
+  return (query: string, done: (items: { value: string }[]) => void) => {
+    const q = query.trim().toLowerCase()
+    done(withPlatformValues(field, pastCampaigns.value.map((c) => c[field]))
+      .filter((v) => !q || v.toLowerCase().includes(q))
+      .map((value) => ({ value })))
+  }
 }
 
 // -- draft -------------------------------------------------------------------
@@ -691,6 +772,7 @@ async function draftFrom(req: Record<string, unknown>) {
     importText.value = toYaml(campaign)
     draftOpen.value = false
     applyImport()
+    copiedFrom.value = null
     draftNotes.value = { provenance: data.provenance, warnings: data.warnings }
   } catch (error: any) {
     ElMessage.error(apiErrorText(error, 'Could not draft a campaign'))
@@ -782,6 +864,11 @@ async function create() {
       verify_objective: verifyObjectivePayload.value,
       dataset_policy: form.value.dataset_policy,
     })
+    rememberValues({
+      image: form.value.image,
+      model_path: form.value.model_path,
+      served_model_name: form.value.served_model_name,
+    })
     router.push(`/campaigns/${data.id}`)
   } catch (error: any) {
     ElMessage.error(
@@ -795,7 +882,14 @@ async function create() {
 }
 
 onMounted(async () => {
-  await load()
+  await Promise.all([load(), loadPastCampaigns()])
+  // "Copy to a new campaign" on a campaign's page opens this page with ?from=<id>.
+  const from = Number(route.query.from)
+  if (from) {
+    router.replace({ query: {} })
+    await startFromCampaign(from)
+    return
+  }
   // "Tune from this" on the Baselines page opens this page with ?baseline=<id>.
   const fromBaseline = Number(route.query.baseline)
   if (fromBaseline) {
@@ -810,11 +904,28 @@ onMounted(async () => {
   <div class="page wide">
     <div class="header-row">
       <h1 class="page-title">New campaign</h1>
-      <div>
-        <el-button type="primary" plain @click="openDraft">Start from a baseline</el-button>
-        <el-button @click="importOpen = true">Import YAML</el-button>
+      <div class="header-actions">
+        <el-dropdown trigger="click" @command="startFrom">
+          <el-button type="primary" plain>
+            Start from<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="campaign" :icon="CopyDocument">
+                A previous campaign…</el-dropdown-item>
+              <el-dropdown-item command="baseline" :icon="Medal">A baseline…</el-dropdown-item>
+              <el-dropdown-item command="yaml" :icon="Document">A YAML file…</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button text @click="router.push('/campaigns')">Cancel</el-button>
       </div>
+    </div>
+    <div v-if="copiedFrom" class="copied-from muted tiny">
+      <el-icon><CopyDocument /></el-icon>
+      Copied from
+      <router-link :to="`/campaigns/${copiedFrom.id}`" class="nav-link" target="_blank">
+        {{ copiedFrom.name }}</router-link>
     </div>
 
     <el-steps :active="step" finish-status="success" align-center class="steps">
@@ -831,7 +942,8 @@ onMounted(async () => {
               <el-input v-model="form.name" :placeholder="defaultName" />
             </el-form-item>
             <el-form-item label="Container image">
-              <el-input v-model="form.image" class="mono"
+              <el-autocomplete v-model="form.image" class="mono wide-input"
+                :fetch-suggestions="suggest('image')"
                 placeholder="lmsysorg/sglang:v0.5.13.post1" />
             </el-form-item>
             <el-form-item>
@@ -839,7 +951,8 @@ onMounted(async () => {
                 <span>Model path on the machine</span>
                 <InfoHint>Bind-mounted into the container at <span class="mono">/model</span>.</InfoHint>
               </template>
-              <el-input v-model="form.model_path" class="mono" placeholder="/data/models/qwen3.6" />
+              <el-autocomplete v-model="form.model_path" class="mono wide-input"
+                :fetch-suggestions="suggest('model_path')" placeholder="/data/models/qwen3.6" />
             </el-form-item>
             <el-collapse v-model="modelAdvanced" class="advanced">
               <el-collapse-item name="model" title="Advanced">
@@ -851,7 +964,8 @@ onMounted(async () => {
                       so by default it is the last part of the model path.
                     </InfoHint>
                   </template>
-                  <el-input v-model="form.served_model_name"
+                  <el-autocomplete v-model="form.served_model_name" class="wide-input"
+                    :fetch-suggestions="suggest('served_model_name')"
                     :placeholder="servedName || 'from the model path'" />
                 </el-form-item>
                 <el-form-item>
@@ -1322,12 +1436,36 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="fromOpen" title="Start from a previous campaign" width="560px">
+      <p class="muted tiny dialog-lead">
+        Its definition fills the form in — model, machines, search, benchmark and schedule —
+        to change before you create the new one. Its results and window stay with it.
+      </p>
+      <el-select v-model="fromId" filterable class="from-pick" placeholder="Pick a campaign">
+        <el-option v-for="c in pastCampaigns" :key="c.id" :value="c.id"
+          :label="`${c.name} (#${c.id})`">
+          <div class="from-option">
+            <span>{{ c.name }}</span>
+            <span class="muted tiny">{{ c.served_model_name }} · {{ c.status }} ·
+              {{ absoluteTime(c.created_at) }}</span>
+          </div>
+        </el-option>
+      </el-select>
+      <template #footer>
+        <el-button @click="fromOpen = false">Cancel</el-button>
+        <el-button type="primary" :disabled="fromId == null" @click="startFromCampaign(fromId!)">
+          Fill in
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="importOpen" title="Import a campaign" width="720px">
       <el-input v-model="importText" type="textarea" :rows="16" class="mono"
         placeholder="name: ...&#10;engine: sglang&#10;image: ..." />
       <template #footer>
         <el-button @click="importOpen = false">Cancel</el-button>
-        <el-button type="primary" :disabled="!importText.trim()" @click="applyImport">
+        <el-button type="primary" :disabled="!importText.trim()"
+          @click="copiedFrom = null; applyImport()">
           Import and check
         </el-button>
       </template>
@@ -1635,5 +1773,31 @@ dd.empty {
   /* The summary panel's dt/dd spacing would offset each key from its value. */
   margin: 0;
   font-size: 12px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.copied-from {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -6px 0 10px;
+}
+.wide-input {
+  width: 100%;
+}
+.from-pick {
+  width: 100%;
+}
+.from-option {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.dialog-lead {
+  margin: 0 0 12px;
+  line-height: 1.5;
 }
 </style>

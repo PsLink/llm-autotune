@@ -283,7 +283,12 @@ async def policy_session_log(
             return f.read()
     if session.log_tail:
         return session.log_tail
-    return "(no captured log yet — the policy container is still starting or has left none)"
+    if not session.terminal:
+        return "(no log yet — the policy container is still starting)"
+    return (
+        f"(The policy container of session {session_id} printed nothing, or never started. "
+        "The campaign's Activity log shows what the policy asked for and what the platform did.)"
+    )
 
 
 @router.post("/policy-sessions/{session_id}/abort", response_model=SessionOut)
