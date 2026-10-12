@@ -654,6 +654,19 @@ async function openDraft() {
   }
 }
 
+/** A drafted objective's name: the saved objective it is identical to (the
+ *  built-in one, usually), so the import selects that row; else its metric. */
+function objectiveName(objective: Partial<Objective>): string {
+  const key = (o: Partial<Objective>) => JSON.stringify([
+    o.target_metric, o.direction ?? 'maximize',
+    [...(o.redlines ?? [])].map((r) => [r.metric, r.op, Number(r.value)]).sort(),
+  ])
+  const same = objectives.value
+    .filter((o) => o.id > 0 && key(o) === key(objective))
+    .sort((a, b) => Number(b.is_builtin) - Number(a.is_builtin))
+  return same[0]?.name ?? `${objective.target_metric} (drafted)`
+}
+
 /** Ask the server for a campaign derived from a baseline, the fleet and
  *  LLMBench, then take it in exactly as an imported file — same fields, same
  *  jump to the checks. */
@@ -663,13 +676,11 @@ async function draftFrom(req: Record<string, unknown>) {
     const { data } = await api.post('/campaigns/draft', req)
     const campaign = { ...data.campaign }
     const model = campaign.served_model_name || 'model'
-    campaign.search_space = { name: `drafted: ${model}`, ...campaign.search_space }
-    campaign.objective = { name: `drafted: ${campaign.objective.target_metric}`,
-      ...campaign.objective }
+    campaign.search_space = { name: `${model} (drafted)`, ...campaign.search_space }
+    campaign.objective = { name: objectiveName(campaign.objective), ...campaign.objective }
     if (campaign.verify_objective?.target_metric) {
       campaign.verify_objective = {
-        name: `drafted: ${campaign.verify_objective.target_metric}`,
-        ...campaign.verify_objective,
+        name: objectiveName(campaign.verify_objective), ...campaign.verify_objective,
       }
     }
     importText.value = toYaml(campaign)

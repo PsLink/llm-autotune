@@ -1877,7 +1877,7 @@ class Supervisor:
             "benchmark_slug": _benchmark_slug(campaign, stage) or None,  # None -> default
             "description_summary": f"{label} run {run.id}: {config_summary}"[:100],
             "description_detail": (
-                f"Automated tuning run from the LLM Autotune platform.\n\n"
+                f"Automated tuning run from the LLM AutoTune platform.\n\n"
                 f"- campaign: {campaign.name} (#{campaign.id})\n"
                 f"- engine: {campaign.engine}\n"
                 f"- image: {campaign.image}\n"

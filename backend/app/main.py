@@ -106,7 +106,7 @@ class SpaStaticFiles(StaticFiles):
             raise
 
 app = FastAPI(
-    title="LLM Autotune",
+    title="LLM AutoTune",
     version="0.2.1",
     description=DESCRIPTION,
     openapi_tags=TAGS,

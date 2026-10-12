@@ -1,6 +1,6 @@
-"""A cluster machine's campaign preflight: a probe Job on the machine's node
-pulls every image the campaign runs and mounts the model as a run would, and
-the pod's own state says what a run would have hit."""
+"""A cluster machine's campaign preflight: probe Jobs on the machine's node
+pull every image the campaign runs and mount the model as a run would, and
+the pods' own state says what a run would have hit."""
 
 from app.control.launch.base import MachineInfo
 from app.control.launch.k8s import PREFLIGHT_LABEL, K8sDriver, render_preflight_job
@@ -32,14 +32,21 @@ def _waiting(name: str, reason: str, message: str = "") -> dict:
 
 
 class ProbeApi(K8sApi):
-    """A cluster whose probe pod shows `statuses` and `events`."""
+    """A cluster whose image probe pod shows `statuses` and `events`, and whose
+    model probe pod shows `model_statuses` and `model_events` (by default, a
+    mount that worked)."""
 
-    def __init__(self, statuses=None, events=None, log=""):
+    def __init__(self, statuses=None, events=None, log="", model_statuses=None,
+                 model_events=None):
         self.statuses = statuses or []
         self.events = events or []
+        self.model_statuses = model_statuses or [_terminated("engine")]
+        self.model_events = model_events if model_events is not None else [
+            {"reason": "Pulled", "type": "Normal"}]
         self.log = log
         self.applied: list[dict] = []
         self.deleted: list[tuple[str, str]] = []
+        self.log_selectors: list[str] = []
 
     def apply(self, manifest):
         self.applied.append(manifest)
@@ -55,17 +62,22 @@ class ProbeApi(K8sApi):
             return [_node()]
         if resource == "pods":
             assert label_selector.startswith(PREFLIGHT_LABEL)
+            model = label_selector.endswith("-model")
             return [{
-                "metadata": {"name": "probe-pod"},
+                "metadata": {"name": "model-pod" if model else "probe-pod"},
                 "spec": {"nodeName": "gpu-node-1"},
-                "status": {"containerStatuses": self.statuses},
+                "status": {"containerStatuses":
+                           self.model_statuses if model else self.statuses},
             }]
         if resource == "events":
-            return [{"involvedObject": {"kind": "Pod", "name": "probe-pod"}, **e}
-                    for e in self.events]
+            return ([{"involvedObject": {"kind": "Pod", "name": "probe-pod"}, **e}
+                     for e in self.events]
+                    + [{"involvedObject": {"kind": "Pod", "name": "model-pod"}, **e}
+                       for e in self.model_events])
         return []
 
     def logs(self, label_selector, tail=200):
+        self.log_selectors.append(label_selector)
         return self.log
 
 
@@ -96,7 +108,8 @@ def test_everything_present_passes_and_cleans_up():
     assert checks["image"].status == "pass"
     assert checks[f"policy_image:{POLICY}"].status == "pass"
     assert checks["model_path"].status == "pass"
-    assert api.deleted and api.deleted[0][0] == "job"
+    assert len(api.applied) == 2
+    assert [kind for kind, _ in api.deleted] == ["job", "job"]
 
 
 def test_an_image_the_node_cannot_pull_fails():
@@ -111,36 +124,74 @@ def test_an_image_the_node_cannot_pull_fails():
 
 def test_a_missing_model_fails_the_mount():
     api = ProbeApi(
-        [_waiting("engine", "ContainerCreating"), _waiting("policy-0", "ContainerCreating")],
-        [{"reason": "FailedMount", "type": "Warning",
-          "message": "hostPath type check failed: /mnt/models/qwen is not a directory"}],
+        [_terminated("engine"), _terminated("policy-0")],
+        model_statuses=[_waiting("engine", "ContainerCreating")],
+        model_events=[{"reason": "FailedMount", "type": "Warning",
+                       "message": "hostPath type check failed: /mnt/models/qwen is not "
+                                  "a directory"}],
     )
     checks = _run(api)
     assert checks["model_path"].status == "fail"
     assert "not a directory" in checks["model_path"].detail
-    assert checks["image"].status == "skip"
-    assert api.deleted
+    # The images are pulled by a pod of their own, so they are still checked.
+    assert checks["image"].status == "pass"
+    assert len(api.deleted) == 2
+
+
+def test_a_wrong_image_and_a_wrong_path_are_both_found_in_one_round():
+    api = ProbeApi(
+        [_waiting("engine", "ErrImagePull", "manifest unknown"), _terminated("policy-0")],
+        model_statuses=[_waiting("engine", "ContainerCreating")],
+        model_events=[{"reason": "FailedMount", "type": "Warning",
+                       "message": "hostPath type check failed"}],
+    )
+    checks = _run(api)
+    assert checks["image"].status == "fail"
+    assert checks["model_path"].status == "fail"
+
+
+def test_only_the_model_probe_mounts_the_model():
+    _run(api := ProbeApi([_terminated("engine"), _terminated("policy-0")]))
+    images, model = (job["spec"]["template"]["spec"] for job in api.applied)
+    assert "volumes" not in images
+    assert [c["name"] for c in images["containers"]] == ["engine", "policy-0"]
+    assert [c["name"] for c in model["containers"]] == ["engine"]
+    assert model["volumes"][0]["hostPath"]["path"] == MODEL
 
 
 def test_a_slow_pull_warns_and_is_left_to_finish():
     api = ProbeApi(
         [_waiting("engine", "ContainerCreating"), _terminated("policy-0")],
         [{"reason": "Pulling", "type": "Normal"}],
+        model_statuses=[_waiting("engine", "ContainerCreating")],
+        model_events=[{"reason": "Pulling", "type": "Normal"}],
     )
     checks = _run(api, timeout=0)
     assert checks["image"].status == "warn"
     # The pull started, so the mount had already worked.
     assert checks["model_path"].status == "pass"
-    assert not api.deleted
+    # The image probe is left to finish its pull; the model probe is done.
+    assert [name for _, name in api.deleted] == [api.applied[1]["metadata"]["name"]]
 
 
 def test_a_weights_claim_is_checked_from_inside():
     api = ProbeApi([_terminated("engine"), _terminated("policy-0")], log="model-missing\n")
     checks = _run(api, k8s_model_pvc="weights", k8s_model_pvc_root="/mnt/models")
     assert checks["model_path"].status == "fail"
-    pod = api.applied[0]["spec"]["template"]["spec"]
+    pod = api.applied[1]["spec"]["template"]["spec"]
     assert pod["volumes"][0]["persistentVolumeClaim"]["claimName"] == "weights"
     assert "/weights/qwen" in pod["containers"][0]["command"][2]
+    assert api.log_selectors and api.log_selectors[0].endswith("-model")
+
+
+def test_a_weights_claim_is_not_judged_when_the_engine_image_is_missing():
+    api = ProbeApi([_waiting("engine", "ErrImagePull", "not found"), _terminated("policy-0")],
+                   model_statuses=[_waiting("engine", "ErrImagePull", "not found")],
+                   model_events=[{"reason": "Pulling", "type": "Normal"}])
+    checks = _run(api, k8s_model_pvc="weights", k8s_model_pvc_root="/mnt/models")
+    assert checks["image"].status == "fail"
+    assert checks["model_path"].status == "skip"
+    assert "could not pull" in checks["model_path"].detail
 
 
 def test_the_probe_runs_where_a_run_would():

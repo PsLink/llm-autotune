@@ -141,3 +141,29 @@ async def test_an_unknown_role_is_refused(client):
     await _register(client, "someone")
     r = await client.put("/auth/users/2/role", json={"role": "superuser"}, headers=admin)
     assert r.status_code == 422
+
+
+# -- sign-up off ---------------------------------------------------------------
+
+
+async def test_with_sign_up_off_only_an_admin_adds_accounts(client, monkeypatch):
+    from app.core.config import get_settings
+
+    admin = await _register(client, "admin")  # the first account is always allowed
+    monkeypatch.setattr(get_settings(), "allow_signup", False)
+    assert (await client.get("/auth/options")).json() == {"signup": False}
+    refused = await client.post("/auth/register",
+                                json={"username": "mallory", "password": "secret123"})
+    assert refused.status_code == 403
+    added = await client.post("/auth/users", headers=admin,
+                              json={"username": "dave", "password": "secret123"})
+    assert added.status_code == 200, added.text
+    assert added.json()["role"] == "user"
+    login = await client.post("/auth/login", json={"username": "dave", "password": "secret123"})
+    assert login.status_code == 200
+    dave = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    assert (await client.post("/auth/users", headers=dave,
+                              json={"username": "eve", "password": "secret123"})).status_code == 403
+    taken = await client.post("/auth/users", headers=admin,
+                              json={"username": "dave", "password": "secret123"})
+    assert taken.status_code == 409

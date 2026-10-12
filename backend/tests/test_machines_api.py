@@ -15,7 +15,11 @@ from app.db.models import (
     Candidate,
     CandidateStatus,
     Machine,
+    MachineGroup,
+    MachineGroupMember,
     MachineState,
+    Policy,
+    PolicySession,
     Run,
     RunStatus,
     User,
@@ -107,6 +111,22 @@ async def test_a_machine_needs_a_name_and_an_ssh_machine_a_host(client):
     assert k8s.status_code == 200, k8s.text
 
 
+async def test_a_machine_whose_cards_cannot_be_read_needs_a_count(client):
+    """The form used to send 8 GPUs whatever the machine had; a machine that
+    does not answer now has to be given its count."""
+    unread = await client.post("/api/machines", json={"name": "box", "host": "10.0.0.9"})
+    assert unread.status_code == 422
+    assert "GPU count" in unread.json()["detail"]
+    given = await client.post(
+        "/api/machines", json={"name": "box", "host": "10.0.0.9", "gpu_count": 4})
+    assert given.json()["gpu_count"] == 4
+    # An edit that leaves the count out keeps the one stored.
+    edited = await client.put(f"/api/machines/{given.json()['id']}",
+                              json={"name": "box", "host": "10.0.0.9", "notes": "rack 2"})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["gpu_count"] == 4
+
+
 # -- delete -------------------------------------------------------------------
 
 
@@ -127,6 +147,10 @@ async def test_delete_detaches_finished_runs_rather_than_erasing_them(client):
                               status=CandidateStatus.EXHAUSTED.value))
         session.add(Run(id=1, campaign_id=1, candidate_id=1, machine_id=m["id"],
                         status=RunStatus.SUCCEEDED.value))
+        # A policy campaign's session names the machine its container ran on.
+        session.add(Policy(id=1, owner_id=1, name="p", image="i"))
+        session.add(PolicySession(id=1, campaign_id=1, policy_id=1, machine_id=m["id"],
+                                  status="done"))
         await session.commit()
 
     assert (await client.delete(f"/api/machines/{m['id']}")).status_code == 200
@@ -134,6 +158,19 @@ async def test_delete_detaches_finished_runs_rather_than_erasing_them(client):
         run = await session.get(Run, 1)
         assert run is not None, "the measurement is kept"
         assert run.machine_id is None, "only the machine link is dropped"
+        assert (await session.get(PolicySession, 1)).machine_id is None
+
+
+async def test_a_node_group_member_is_taken_out_of_its_group_first(client):
+    a = await _machine(client, "node-1")
+    await _machine(client, "node-2")
+    async with client.factory() as session:
+        session.add(MachineGroup(id=1, name="pair"))
+        session.add(MachineGroupMember(group_id=1, machine_id=a["id"], rank=0))
+        await session.commit()
+    resp = await client.delete(f"/api/machines/{a['id']}")
+    assert resp.status_code == 409
+    assert "node group pair" in resp.json()["detail"]
 
 
 # -- the guard ----------------------------------------------------------------

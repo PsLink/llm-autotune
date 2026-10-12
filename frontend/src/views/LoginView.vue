@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { apiErrorText } from '../utils/apiError'
 import { ElMessage } from 'element-plus'
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { api } from '../api/client'
 import { useI18n } from '../i18n'
 import { useAuthStore } from '../stores/auth'
 
@@ -26,6 +27,16 @@ const username = ref('')
 const password = ref('')
 const registering = ref(false)
 const busy = ref(false)
+/** Off when an admin adds the accounts (AUTOTUNE_ALLOW_SIGNUP=false). */
+const signup = ref(false)
+
+onMounted(async () => {
+  try {
+    signup.value = !!(await api.get('/auth/options')).data.signup
+  } catch {
+    signup.value = false
+  }
+})
 
 async function submit() {
   busy.value = true
@@ -44,7 +55,7 @@ async function submit() {
 <template>
   <div class="login-wrap">
     <el-card class="login-card">
-      <h1 class="page-title">LLM Autotune</h1>
+      <h1 class="page-title">LLM AutoTune</h1>
       <p class="muted">{{ t('login.tagline') }}</p>
       <el-form label-position="top" @submit.prevent="submit">
         <el-form-item :label="t('login.username')">
@@ -58,7 +69,7 @@ async function submit() {
           {{ registering ? t('login.createAccount') : t('login.logIn') }}
         </el-button>
       </el-form>
-      <el-button link class="switch" @click="registering = !registering">
+      <el-button v-if="signup" link class="switch" @click="registering = !registering">
         {{ registering ? t('login.haveAccount') : t('login.newHere') }}
       </el-button>
     </el-card>

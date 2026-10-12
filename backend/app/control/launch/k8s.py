@@ -668,8 +668,8 @@ _GPU_RESOURCE = "nvidia.com/gpu"
 SMOKE_POD_IMAGE = "registry.k8s.io/pause:3.9"
 SMOKE_LABEL = "autotune.modelsphere.dev/smoke"
 _SMOKE_POD_WAIT_SECONDS = 40
-# A campaign preflight's probe Job: the campaign's own images, on the machine's
-# node, with the model mounted the way a run mounts it.
+# A campaign preflight's probe Jobs: the campaign's own images, on the
+# machine's node, and the model mounted the way a run mounts it.
 PREFLIGHT_LABEL = "autotune.modelsphere.dev/preflight"
 _PREFLIGHT_WAIT_SECONDS = 45
 # A waiting reason that settles the image question: the node could not get it.
@@ -1491,9 +1491,9 @@ class K8sDriver(DeploymentDriver):
         timeout: float = _PREFLIGHT_WAIT_SECONDS,
     ) -> list[Any]:
         """The campaign's checks, answered by the cluster itself: the node the
-        machine pins, its cards, and one probe Job on that node that pulls
-        every image the campaign runs and mounts the model the way a run does.
-        The node's own registry credentials and mirrors decide the pull, so the
+        machine pins, its cards, and probe Jobs on that node that pull every
+        image the campaign runs and mount the model the way a run does. The
+        node's own registry credentials and mirrors decide the pull, so the
         answer is the one a run would get. Never raises."""
         from app.control.launch import preflight as pf
 
@@ -1529,6 +1529,9 @@ class K8sDriver(DeploymentDriver):
         policy_images: list[str] | tuple[str, ...],
         timeout: float,
     ) -> list[Any]:
+        """Two probe Jobs on the machine's node: one pulls every image, the
+        other mounts the model. A pod mounts its volumes before it pulls, so
+        with one pod a missing path would hide whether the images are right."""
         from app.control.launch import preflight as pf
 
         s = self.settings
@@ -1538,42 +1541,68 @@ class K8sDriver(DeploymentDriver):
             (f"policy-{i}", "Policy image", f"policy_image:{ref}", ref)
             for i, ref in enumerate(dict.fromkeys(p for p in policy_images if p))
         ]
-        if not images and not model_path:
+        jobs: dict[str, tuple[dict, bool]] = {}
+        if images:
+            jobs[name] = render_preflight_job(name, machine, images, "", s)
+        if model_path and image:
+            jobs[f"{name}-model"] = render_preflight_job(
+                f"{name}-model", machine, images[:1], model_path, s)
+        if not jobs:
             return []
-        manifest, reads_log = render_preflight_job(name, machine, images, model_path, s)
         try:
-            api.apply(manifest)
+            for manifest, _ in jobs.values():
+                api.apply(manifest)
         except Exception as exc:  # noqa: BLE001
+            for job_name in jobs:
+                try:
+                    api.delete("job", job_name)
+                except Exception:  # noqa: BLE001
+                    pass
             return [pf.Check("probe", "Probe pod", pf.SKIP,
                              f"could not create a probe Job: {str(exc)[:300]}")]
-        verdict = ProbeVerdict()
+        pulls = ProbeVerdict()
+        mount = ProbeVerdict() if f"{name}-model" in jobs else None
+        reads_log = mount is not None and jobs[f"{name}-model"][1]
+        log = ""
         deadline = time.monotonic() + timeout
         try:
             while True:
-                pods = api.list("pods", label_selector=f"{PREFLIGHT_LABEL}={name}")
-                events = self._events_for(api, pods)
-                verdict = read_probe(pods, events, [c for c, *_ in images])
-                if verdict.settled or time.monotonic() >= deadline:
+                if name in jobs:
+                    pods = api.list("pods", label_selector=f"{PREFLIGHT_LABEL}={name}")
+                    pulls = read_probe(pods, self._events_for(api, pods), [c for c, *_ in images])
+                if mount is not None:
+                    pods = api.list("pods", label_selector=f"{PREFLIGHT_LABEL}={name}-model")
+                    mount = read_probe(pods, self._events_for(api, pods), ["engine"])
+                done = (name not in jobs or pulls.settled) and (
+                    mount is None or mount.mount_settled(reads_log))
+                if done or time.monotonic() >= deadline:
                     break
                 time.sleep(2)
-            log = ""
-            if reads_log and verdict.finished.get("engine"):
+            if reads_log and mount is not None and mount.finished.get("engine"):
                 try:
-                    log = api.logs(f"{PREFLIGHT_LABEL}={name}", tail=5)
+                    log = api.logs(f"{PREFLIGHT_LABEL}={name}-model", tail=5)
                 except Exception:  # noqa: BLE001
                     log = ""
         except Exception as exc:  # noqa: BLE001
-            verdict.error = str(exc)[:300]
-            log = ""
+            pulls.error = str(exc)[:300]
         finally:
-            # A pull still in flight is left to finish: the image lands on the
-            # node for the first run, and the Job reaps itself.
-            if not verdict.pulling:
+            for job_name in jobs:
+                # A pull still in flight is left to finish: the image lands on
+                # the node for the first run, and the Job reaps itself.
+                if job_name == name and pulls.pulling:
+                    continue
                 try:
-                    api.delete("job", name)
+                    api.delete("job", job_name)
                 except Exception:  # noqa: BLE001 — labelled; findable by PREFLIGHT_LABEL
-                    logger.warning("could not delete preflight job %s", name)
-        return verdict.checks(images, model_path, machine.name, log if reads_log else None)
+                    logger.warning("could not delete preflight job %s", job_name)
+        where = pulls.node or (mount.node if mount else "") or machine.name
+        checks = pulls.checks(images, where) if name in jobs else []
+        if mount is not None:
+            if mount.unschedulable and not pulls.unschedulable:
+                checks.insert(0, mount.placement_check())
+            checks.append(mount.model_check(
+                model_path, mount.node or where, log if reads_log else None))
+        return checks
 
     def _events_for(self, api: K8sApi, pods: list[dict]) -> list[dict]:
         names = {(p.get("metadata") or {}).get("name") for p in pods}
@@ -1613,8 +1642,9 @@ def render_preflight_job(
     model_path: str,
     settings: Settings,
 ) -> tuple[dict, bool]:
-    """The preflight probe: one container per image, each doing nothing, on
-    the machine's node, the engine's with the model mounted as a run mounts it.
+    """A preflight probe Job: one container per image, each doing nothing, on
+    the machine's node; given a model path, the engine's container mounts it
+    as a run mounts it.
 
     A hostPath model is mounted with a type check, so a missing path fails the
     mount rather than appearing as an empty directory; the mount happens before
@@ -1716,23 +1746,30 @@ class ProbeVerdict:
     def pulling(self) -> bool:
         return not self.settled and not self.error and bool(self.containers)
 
-    def checks(
-        self,
-        images: list[tuple[str, str, str, str]],
-        model_path: str,
-        machine_name: str,
-        log: str | None,
-    ) -> list[Any]:
+    def mount_settled(self, reads_log: bool) -> bool:
+        """The model probe has answered: the mount failed or worked and, on a
+        weights claim, the engine container has looked for the path."""
+        if self.unschedulable or self.mount_failed:
+            return True
+        engine = self.images.get("engine")
+        if engine and not engine[0]:
+            return True
+        return self.mounted and (not reads_log or bool(self.finished.get("engine")))
+
+    def placement_check(self) -> Any:
         from app.control.launch import preflight as pf
 
-        where = self.node or machine_name
-        out: list[Any] = []
-        if self.unschedulable:
-            out.append(pf.Check(
-                "probe", "Placement", pf.FAIL,
-                f"no node took a pod with this machine's selector: {self.unschedulable[:300]}",
-                "A run is placed the same way, so it would wait here too.",
-            ))
+        return pf.Check(
+            "probe", "Placement", pf.FAIL,
+            f"no node took a pod with this machine's selector: {self.unschedulable[:300]}",
+            "A run is placed the same way, so it would wait here too.",
+        )
+
+    def checks(self, images: list[tuple[str, str, str, str]], where: str) -> list[Any]:
+        """One check per image the probe pulled."""
+        from app.control.launch import preflight as pf
+
+        out: list[Any] = [self.placement_check()] if self.unschedulable else []
         for container_name, label, key, ref in images:
             pulled = self.images.get(container_name)
             if pulled and pulled[0]:
@@ -1743,13 +1780,6 @@ class ProbeVerdict:
                     "Check the name and tag, and that the nodes can reach the registry "
                     "(credentials go in the cluster's image pull secrets).",
                 ))
-            elif self.mount_failed:
-                # One probe pod mounts the path and pulls the images, and the
-                # node mounts before it pulls: say what to do, not only what
-                # did not happen.
-                out.append(pf.Check(key, label, pf.SKIP,
-                                    f"{ref}: not checked yet. The model path failed first; "
-                                    "fix it and run the checks again to check this image"))
             elif self.pulling:
                 out.append(pf.Check(
                     key, label, pf.WARN,
@@ -1760,31 +1790,40 @@ class ProbeVerdict:
             else:
                 out.append(pf.Check(key, label, pf.SKIP,
                                     f"{ref}: not checked{': ' + self.error if self.error else ''}"))
-        if model_path and images and images[0][0] == "engine":
-            if self.mount_failed:
-                out.append(pf.Check(
-                    "model_path", "Model path", pf.FAIL,
-                    f"{model_path} is not on {where}: {self.mount_failed[:300]}",
-                    "Runs mount it from the node; put the weights there, or point the "
-                    "campaign at where they are.",
-                ))
-            elif log is not None and "model-present" in log:
-                out.append(pf.Check("model_path", "Model path", pf.PASS,
-                                    f"{model_path} is on the weights volume"))
-            elif log is not None and "model-missing" in log:
-                out.append(pf.Check(
-                    "model_path", "Model path", pf.FAIL,
-                    f"{model_path} is not on the weights volume",
-                    "Runs mount it from the cluster's weights claim; check the path "
-                    "against the claim's root.",
-                ))
-            elif log is None and self.mounted:
-                out.append(pf.Check("model_path", "Model path", pf.PASS,
-                                    f"{model_path} exists on {where}"))
-            else:
-                out.append(pf.Check("model_path", "Model path", pf.SKIP,
-                                    "not checked: the probe did not get that far"))
         return out
+
+    def model_check(self, model_path: str, where: str, log: str | None) -> Any:
+        """The model probe's answer: `log` is the engine container's output on
+        a weights claim, None for a host path."""
+        from app.control.launch import preflight as pf
+
+        if self.mount_failed:
+            return pf.Check(
+                "model_path", "Model path", pf.FAIL,
+                f"{model_path} is not on {where}: {self.mount_failed[:300]}",
+                "Runs mount it from the node; put the weights there, or point the "
+                "campaign at where they are.",
+            )
+        if log is not None and "model-present" in log:
+            return pf.Check("model_path", "Model path", pf.PASS,
+                            f"{model_path} is on the weights volume")
+        if log is not None and "model-missing" in log:
+            return pf.Check(
+                "model_path", "Model path", pf.FAIL,
+                f"{model_path} is not on the weights volume",
+                "Runs mount it from the cluster's weights claim; check the path "
+                "against the claim's root.",
+            )
+        if log is None and self.mounted:
+            return pf.Check("model_path", "Model path", pf.PASS,
+                            f"{model_path} exists on {where}")
+        engine = self.images.get("engine")
+        if engine and not engine[0]:
+            return pf.Check("model_path", "Model path", pf.SKIP,
+                            "not checked: the weights claim is read from inside the "
+                            "engine image, which the node could not pull")
+        return pf.Check("model_path", "Model path", pf.SKIP,
+                        "not checked: the probe did not get that far")
 
 
 def read_probe(pods: list[dict], events: list[dict], containers: list[str]) -> ProbeVerdict:

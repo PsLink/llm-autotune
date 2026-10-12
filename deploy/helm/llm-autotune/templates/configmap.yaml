@@ -16,6 +16,7 @@ data:
   AUTOTUNE_CORS_ORIGINS: {{ .Values.corsOrigins | quote }}
   AUTOTUNE_RUN_LOG_DIR: /app/runs
   AUTOTUNE_ADMIN_USERNAME: {{ .Values.adminUsername | quote }}
+  AUTOTUNE_ALLOW_SIGNUP: {{ .Values.allowSignup | quote }}
   {{- if .Values.mock.enabled }}
   AUTOTUNE_LLMBENCH_BASE_URL: http://{{ $fullName }}-llmbench-mock:8000
   AUTOTUNE_DOCKER_GPU_MODE: "none"

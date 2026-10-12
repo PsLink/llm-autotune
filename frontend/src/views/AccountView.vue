@@ -108,6 +108,34 @@ async function changePassword() {
   }
 }
 
+const showAddUser = ref(false)
+const newUser = ref({ username: '', password: '', role: 'user' })
+const addUserProblem = computed(() => {
+  if (newUser.value.username.trim().length < 2) return t('login.username')
+  if (newUser.value.password.length < 6) return t('account.tooShort')
+  return ''
+})
+
+function openAddUser() {
+  newUser.value = { username: '', password: '', role: 'user' }
+  showAddUser.value = true
+}
+
+async function addUser() {
+  if (addUserProblem.value) return
+  busy.value = true
+  try {
+    await api.post('/auth/users', { ...newUser.value, username: newUser.value.username.trim() })
+    ElMessage.success(t('account.userAdded', { user: newUser.value.username.trim() }))
+    showAddUser.value = false
+    await load()
+  } catch (error: any) {
+    ElMessage.error(apiErrorText(error, t('account.addUserFailed')))
+  } finally {
+    busy.value = false
+  }
+}
+
 async function setRole(user: AccountUser, role: string) {
   try {
     await api.put(`/auth/users/${user.id}/role`, { role })
@@ -206,6 +234,9 @@ onMounted(load)
       <h3 class="users-head">
         {{ t('account.users') }}
         <InfoHint>{{ t('account.usersNote') }}</InfoHint>
+        <el-button size="small" class="add-user" @click="openAddUser">
+          {{ t('account.addUser') }}
+        </el-button>
       </h3>
       <el-table :data="users" size="small">
         <el-table-column prop="id" :label="t('common.id')" width="70" />
@@ -238,6 +269,30 @@ onMounted(load)
         </el-table-column>
       </el-table>
     </template>
+
+    <el-dialog v-model="showAddUser" :title="t('account.addUser')" width="420px">
+      <el-form label-position="top" @submit.prevent="addUser">
+        <el-form-item :label="t('login.username')">
+          <el-input v-model="newUser.username" autocomplete="off" />
+        </el-form-item>
+        <el-form-item :label="t('login.password')">
+          <el-input v-model="newUser.password" type="password" show-password
+            autocomplete="new-password" :placeholder="t('account.tooShort')" />
+        </el-form-item>
+        <el-form-item :label="t('account.role')">
+          <el-radio-group v-model="newUser.role">
+            <el-radio value="user">user</el-radio>
+            <el-radio value="admin">admin</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <p class="muted small">{{ t('account.addUserNote') }}</p>
+      <template #footer>
+        <el-button @click="showAddUser = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="busy" :disabled="!!addUserProblem"
+          @click="addUser">{{ t('account.addUser') }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -278,5 +333,8 @@ dd {
   display: flex;
   align-items: baseline;
   gap: 10px;
+}
+.add-user {
+  margin-left: auto;
 }
 </style>

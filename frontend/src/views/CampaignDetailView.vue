@@ -2,7 +2,7 @@
 import { apiErrorText } from '../utils/apiError'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  AlarmClock, CopyDocument, Document, Download, MoreFilled, RefreshRight, Tickets,
+  AlarmClock, CircleCheck, CopyDocument, Delete, Document, Download, MoreFilled, RefreshRight, Tickets,
   VideoPause, VideoPlay,
 } from '@element-plus/icons-vue'
 import { computed, h, onMounted, ref } from 'vue'
@@ -453,9 +453,34 @@ async function forceStart() {
 
 const liveRuns = computed(() => runs.value.filter((r) => isLive(r.status)))
 
+/** The Runs tab's rows. A policy trial is two runs, the engine the policy
+ *  asked for and the benchmark of it (same candidate, same endpoint): the
+ *  benchmark is nested under its engine, so each trial is one row. */
+const runRows = computed<(Run & { children?: Run[] })[]>(() => {
+  if (campaign.value?.policy_id == null) return runs.value
+  const engines = new Map<string, Run & { children: Run[] }>()
+  const rows: (Run & { children?: Run[] })[] = []
+  for (const run of runs.value) {
+    if (run.kind !== 'policy_launch') continue
+    const row = { ...run, children: [] as Run[] }
+    engines.set(`${run.candidate_id}|${run.endpoint_url}`, row)
+  }
+  for (const run of runs.value) {
+    if (run.kind === 'policy_launch') {
+      rows.push(engines.get(`${run.candidate_id}|${run.endpoint_url}`)!)
+      continue
+    }
+    const engine = run.kind === 'external'
+      ? engines.get(`${run.candidate_id}|${run.endpoint_url}`) : undefined
+    if (engine) engine.children.push(run)
+    else rows.push(run)
+  }
+  return rows
+})
+
 /** What a run of a policy campaign is for. */
 function runRole(run: Run): string {
-  if (run.kind === 'policy_launch') return 'engine'
+  if (run.kind === 'policy_launch') return 'trial'
   if (run.kind === 'external') return 'benchmark'
   if (run.stage === 'verify') return 'finalist'
   return 'search'
@@ -586,7 +611,9 @@ async function saveSchedule() {
       schedule_until: draft.value.until,
     })
     editingSchedule.value = false
-    ElMessage.success('Schedule saved — it applies from the next worker tick')
+    ElMessage.success(draft.value.start && draft.value.end
+      ? `Window saved: ${draft.value.start}–${draft.value.end} every night`
+      : 'No window: the campaign runs when you start it')
     await load()
   } catch (error: any) {
     ElMessage.error(apiErrorText(error, 'Could not save the schedule'))
@@ -630,6 +657,11 @@ const scheduleLine = computed(() => {
   }
   return s.summary
 })
+
+/** A leaderboard row opens the run that produced its score. */
+function openBoardRow(row: { run_id?: number | null }) {
+  if (row.run_id) void openRun({ id: row.run_id } as Run)
+}
 
 /** Bumped per click: on a slow network a second row clicked before the first
  *  one's answer arrived must not have its drawer replaced by the first. */
@@ -686,6 +718,50 @@ function moreAction(command: string) {
   if (command === 'logs') logOpen.value = true
   else if (command === 'clone') void cloneCampaign()
   else if (command === 'export') exportOpen.value = true
+  else if (command === 'delete') void deleteCampaign()
+  else if (command === 'done') void markDone()
+}
+
+/** Closing a stopped campaign by hand, so it stops holding its machines. */
+const closable = computed(() =>
+  !deletable.value && ['paused', 'scheduled'].includes(campaign.value?.status ?? ''))
+
+async function markDone() {
+  const name = campaign.value?.name ?? ''
+  try {
+    await ElMessageBox.confirm(t('campaign.markDoneConfirm', { name }), t('campaign.markDone'),
+      { confirmButtonText: t('campaign.markDone'), cancelButtonText: 'Cancel', type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await api.put(`/campaigns/${campaignId}/status`, { status: 'done' })
+    ElMessage.success(t('campaign.markedDone', { name }))
+    await load()
+  } catch (error: any) {
+    ElMessage.error(apiErrorText(error, t('campaign.markDoneFailed')))
+  }
+}
+
+/** Only a campaign that never ran can go: one with runs keeps its results. */
+const deletable = computed(() => runs.value.length === 0 && sessionIds.value.length === 0)
+
+async function deleteCampaign() {
+  const name = campaign.value?.name ?? ''
+  try {
+    await ElMessageBox.confirm(t('campaign.deleteConfirm', { name }), t('campaign.deleteCampaign'),
+      { confirmButtonText: t('campaign.deleteCampaign'), cancelButtonText: 'Cancel',
+        type: 'warning', confirmButtonClass: 'el-button--danger' })
+  } catch {
+    return
+  }
+  try {
+    await api.delete(`/campaigns/${campaignId}`)
+    ElMessage.success(t('campaign.deleted', { name }))
+    router.push('/campaigns')
+  } catch (error: any) {
+    ElMessage.error(apiErrorText(error, t('campaign.deleteFailed')))
+  }
 }
 
 function learnedRunLength(c: Campaign): string {
@@ -1007,6 +1083,9 @@ const retryableCount = computed(() => {
 const poll = usePoll(load, 10000) // polling for PoC; SSE later
 onMounted(() => {
   load()
+  // Linked from the Runs page: open that run's details.
+  const linked = Number(route.query.run)
+  if (linked) void openRun({ id: linked } as Run)
   api.get('/objectives/metrics').then(({ data }) => {
     metricSpecs.value = data.metrics
     if (data.default_verify_target_metric) defaultVerifyMetric.value = data.default_verify_target_metric
@@ -1055,6 +1134,12 @@ onMounted(() => {
               <el-dropdown-item command="export" :icon="Download"
                 title="Everything needed to recreate this campaign — import it on the New campaign page">
                 {{ t('campaign.exportYaml') }}
+              </el-dropdown-item>
+              <el-dropdown-item v-if="closable" command="done" :icon="CircleCheck" divided>
+                {{ t('campaign.markDone') }}
+              </el-dropdown-item>
+              <el-dropdown-item v-if="deletable" command="delete" :icon="Delete" divided>
+                {{ t('campaign.deleteCampaign') }}
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -1242,7 +1327,7 @@ onMounted(() => {
           <ScoreBars :rows="verifiedBoard" :swept-keys="sweptKeys"
             :label="verifyObjective.label" :unit="verifyObjective.unit"
             :direction="verifyObjective.direction" />
-          <el-table :data="verifiedBoard">
+          <el-table :data="verifiedBoard" class="clickable" @row-click="openBoardRow">
             <el-table-column prop="run_id" :label="t('campaign.run')" width="80" />
             <el-table-column :label="t('common.config')" min-width="280">
               <template #default="{ row }">
@@ -1314,7 +1399,7 @@ onMounted(() => {
         <ScoreBars :rows="screenBoard" :swept-keys="sweptKeys"
           :label="objective.label" :unit="objective.unit"
           :direction="objective.direction" />
-        <el-table :data="screenBoard">
+        <el-table :data="screenBoard" class="clickable" @row-click="openBoardRow">
           <el-table-column prop="run_id" :label="t('campaign.run')" width="80" />
           <el-table-column :label="t('common.config')" min-width="280">
             <template #default="{ row }">
@@ -1364,8 +1449,9 @@ onMounted(() => {
       </el-tab-pane>
 
       <el-tab-pane :label="t('campaign.tabs.runs')">
-        <el-table :data="runs" @row-click="openRun" style="cursor: pointer">
-          <el-table-column prop="id" label="ID" width="70" />
+        <el-table :data="runRows" row-key="id" @row-click="openRun" style="cursor: pointer">
+          <!-- Wide enough for a nested benchmark row's indent. -->
+          <el-table-column prop="id" label="ID" width="96" />
           <el-table-column label="Status" width="140">
             <template #default="{ row }">
               <el-tag :type="runStatus(row.status).type" size="small">
@@ -1386,7 +1472,7 @@ onMounted(() => {
           </el-table-column>
           <!-- A policy campaign runs two things per trial: the engine the
                policy asked for (held while it serves) and the benchmark of
-               it. Without a word for each they read as two unrelated runs. -->
+               it, nested under the engine (runRows). -->
           <el-table-column v-if="campaign.policy_id != null" label="Role" width="120">
             <template #default="{ row }">
               <span class="muted tiny">{{ runRole(row) }}</span>
@@ -1525,7 +1611,7 @@ onMounted(() => {
       </el-tab-pane>
     </el-tabs>
 
-    <el-dialog v-model="editingSchedule" title="Nightly window" width="560px">
+    <el-dialog v-model="editingSchedule" :title="t('campaign.scheduleTitle')" width="560px">
       <NightlyWindow v-model:start="draft.start" v-model:end="draft.end"
         v-model:timezone="draft.timezone" v-model:until="draft.until" />
       <template #footer>
@@ -1599,10 +1685,24 @@ onMounted(() => {
           </div>
         </div>
 
+        <template v-if="selectedRun.serve_command">
+          <div class="log-head">
+            <h3>{{ t('runs.engineCommand') }}</h3>
+            <el-button size="small"
+              @click="copyText(selectedRun.serve_command, t('runs.engineCommandCopied'))">
+              {{ t('common.copy') }}</el-button>
+          </div>
+          <pre class="mono block">{{ selectedRun.serve_command }}</pre>
+          <dl class="run-image">
+            <dt>Image</dt><dd class="mono">{{ selectedRun.image }}</dd>
+            <dt>Weights</dt><dd class="mono">{{ selectedRun.model_path }}</dd>
+          </dl>
+          <p class="muted tiny">{{ t('runs.engineCommandNote') }}</p>
+        </template>
         <h3>Config</h3>
         <pre class="mono block">{{ JSON.stringify(selectedRun.config, null, 2) }}</pre>
         <el-collapse class="launch-collapse">
-          <el-collapse-item :title="t('runs.launchCommand')">
+          <el-collapse-item :title="t('runs.launchCommandApplied')">
             <pre class="mono block">{{ selectedRun.launch_command || '(not launched yet)' }}</pre>
           </el-collapse-item>
         </el-collapse>
@@ -2004,6 +2104,23 @@ onMounted(() => {
   font-size: 12px;
   max-height: 160px;
   overflow: auto;
+}
+.run-image {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 4px 10px;
+  margin: 8px 0 4px;
+  font-size: 12px;
+}
+.run-image dt {
+  color: var(--autotune-muted);
+}
+.run-image dd {
+  margin: 0;
+  word-break: break-all;
+}
+.clickable :deep(.el-table__row) {
+  cursor: pointer;
 }
 .launch-collapse {
   margin: 12px 0;

@@ -37,7 +37,8 @@ const emptyForm = () => ({
   host: '',
   ssh_user: 'root',
   ssh_port: 22,
-  gpu_count: 8,
+  /** null: read from the machine on save. */
+  gpu_count: null as number | null,
   gpu_type: '',
   driver: '',
   cluster_id: null as number | null,
@@ -136,6 +137,9 @@ const nodesCluster = ref<{ id: number; name: string } | null>(null)
 const nodesView = ref<NodesView | null>(null)
 const nodesError = ref('')
 const pickedNodes = ref<string[]>([])
+/** Lease the nodes as they are registered: one step instead of a Lease press
+ *  per machine. */
+const leaseOnRegister = ref(true)
 const kubeconfigFile = ref<HTMLInputElement | null>(null)
 
 /** A name for the cluster from its API server's host, until one is typed. */
@@ -209,8 +213,16 @@ async function registerNodes() {
   try {
     const { data } = await api.post(`/clusters/${nodesCluster.value.id}/nodes`,
       { nodes: pickedNodes.value })
-    ElMessage.success(data.registered.length
-      ? `Registered ${data.registered.join(', ')}` : 'Nothing new to register')
+    const names: string[] = data.registered
+    if (leaseOnRegister.value) {
+      // The same call as the Lease button, so the machines end up identical.
+      for (const name of names) {
+        await api.post('/machines/lease', { name, lease_note: 'leased when registered' })
+      }
+    }
+    ElMessage.success(names.length
+      ? `${leaseOnRegister.value ? 'Registered and leased' : 'Registered'} ${names.join(', ')}`
+      : 'Nothing new to register')
     showAddCluster.value = false
     await load()
   } catch (error: any) {
@@ -491,7 +503,10 @@ async function save() {
     showAdd.value = false
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Save failed'))
+    const text = apiErrorText(error, 'Save failed')
+    // The machine could not be read: the count it needs is under Advanced.
+    if (text.includes('GPU count')) addAdvanced.value = ['advanced']
+    ElMessage.error(text)
   } finally {
     busy.value = false
   }
@@ -955,7 +970,8 @@ onMounted(async () => {
               GPU count
               <InfoHint>Read from the machine on save; set it only if it cannot be read.</InfoHint>
             </template>
-            <el-input-number v-model="form.gpu_count" :min="1" :max="64" />
+            <el-input-number v-model="form.gpu_count" :min="1" :max="64"
+              :value-on-clear="null" placeholder="read on save" controls-position="right" />
           </el-form-item>
           <el-form-item label="GPU type">
             <el-select v-model="form.gpu_type" clearable placeholder="(any card)"
@@ -1211,6 +1227,12 @@ onMounted(async () => {
               </template>
             </el-table-column>
           </el-table>
+          <el-checkbox v-if="nodesView.nodes.some((n) => !n.machine)" v-model="leaseOnRegister"
+            class="lease-now">
+            Lease them to the platform now
+            <InfoHint>Campaigns only run on leased machines. Untick to register them
+              now and lease each one later from its card.</InfoHint>
+          </el-checkbox>
           <el-alert v-if="nodesView.gone.length" type="warning" :closable="false" show-icon
             class="gone"
             :title="`Gone from the cluster: ${nodesView.gone.map((g) => g.name).join(', ')}`" />
@@ -1387,6 +1409,9 @@ onMounted(async () => {
 }
 .nodes-head {
   margin-bottom: 8px;
+}
+.lease-now {
+  margin-top: 10px;
 }
 .gone {
   margin-top: 10px;

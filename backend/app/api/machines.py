@@ -18,6 +18,7 @@ from app.db.models import (
     MachineGroup,
     MachineGroupMember,
     MachineState,
+    PolicySession,
     Run,
     RunNode,
     User,
@@ -157,11 +158,19 @@ async def _probe_capacity(machine: Machine) -> dict:
 def _apply_probe(machine: Machine, probe: dict) -> None:
     """Overwrite gpu_count/gpu_type from a successful probe. A probe that matched
     no nodes is left alone — it is a selector mistake, not a reason to zero the
-    capacity the operator typed."""
+    capacity the operator typed. A machine left with no count at all is
+    refused: a guessed one would be scheduled against."""
     if probe.get("supported") and probe.get("node_count"):
         machine.gpu_count = probe.get("gpu_count", machine.gpu_count)
         if probe.get("gpu_type"):
             machine.gpu_type = probe["gpu_type"]
+    if not machine.gpu_count:
+        reason = "; ".join(probe.get("warnings") or []) or "the machine did not answer"
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"could not read {machine.name}'s GPUs ({reason}). Set the GPU count "
+            "under Advanced, or fix the access and save again",
+        )
 
 
 @router.get("/gpu-types")
@@ -184,7 +193,7 @@ async def create_machine(
     ).scalar_one_or_none()
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, "machine name taken")
-    machine = Machine(**body.model_dump())
+    machine = Machine(**body.model_dump(exclude={"gpu_count"}), gpu_count=body.gpu_count or 0)
     # Capacity and card type are the machine's to state, not the operator's to
     # type: nvidia-smi over ssh, or the node(s) a k8s selector matches. Whatever
     # was entered stands when the machine cannot be reached yet.
@@ -264,7 +273,8 @@ def _guard_in_use(machine: Machine, blocking: list[str], verb: str) -> None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"cannot {verb} {machine.name}: {len(blocking)} active/draft campaign(s) "
-            f"pinned to it ({', '.join(blocking)}). Finish or unpin them first.",
+            f"pinned to it ({', '.join(blocking)}). Close them first: ⋯ ▸ Mark as done, "
+            "or ⋯ ▸ Delete for one that never ran.",
         )
     if machine.state == MachineState.RESERVED.value:
         raise HTTPException(
@@ -295,6 +305,8 @@ async def update_machine(
         if clash is not None:
             raise HTTPException(status.HTTP_409_CONFLICT, "machine name taken")
     for field, value in body.model_dump().items():
+        if field == "gpu_count" and value is None:
+            continue  # left to the probe, which keeps the stored count
         setattr(machine, field, value)
     probe = await _probe_capacity(machine)
     _apply_probe(machine, probe)
@@ -368,6 +380,17 @@ async def delete_machine(
     the row can go without erasing the night it measured."""
     machine = await _get_machine(machine_id, session)
     _guard_in_use(machine, await _blocking_campaigns(session, machine), "remove")
+    groups = (await session.execute(
+        select(MachineGroup.name)
+        .join(MachineGroupMember, MachineGroupMember.group_id == MachineGroup.id)
+        .where(MachineGroupMember.machine_id == machine_id)
+    )).scalars().all()
+    if groups:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"cannot remove {machine.name}: it is in node group {', '.join(groups)}. "
+            "Take it out of the group first.",
+        )
     name = machine.name
     # Detach finished runs rather than cascade-deleting them: the measurement is
     # the point of the platform, and env_snapshot already carries the card/node.
@@ -378,6 +401,10 @@ async def delete_machine(
     )
     await session.execute(
         update(RunNode).where(RunNode.machine_id == machine_id).values(machine_id=None)
+    )
+    await session.execute(
+        update(PolicySession).where(PolicySession.machine_id == machine_id)
+        .values(machine_id=None)
     )
     await session.delete(machine)
     session.add(Event(actor=user.username, kind="machine_removed", payload={"name": name}))
