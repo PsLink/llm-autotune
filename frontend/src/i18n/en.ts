@@ -42,6 +42,7 @@ export default {
     campaigns: 'Campaigns',
     searchSpaces: 'Search spaces',
     objectives: 'Objectives',
+    datasets: 'Datasets',
     policies: 'Policies',
     tuning: 'Automatic Tuning',
     baselines: 'Baselines',

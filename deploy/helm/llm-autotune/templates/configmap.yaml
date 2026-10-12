@@ -30,6 +30,9 @@ data:
   {{- if .Values.llmbench.email }}
   AUTOTUNE_LLMBENCH_EMAIL: {{ .Values.llmbench.email | quote }}
   {{- end }}
+  {{- if .Values.llmbench.victoriaLogsUrl }}
+  AUTOTUNE_LLMBENCH_VICTORIALOGS_URL: {{ .Values.llmbench.victoriaLogsUrl | quote }}
+  {{- end }}
   {{- if .Values.gpuCluster.inCluster }}
   # The launch driver talks to the API server this release runs in, using the
   # chart's own ServiceAccount — no kubeconfig to mint or paste.

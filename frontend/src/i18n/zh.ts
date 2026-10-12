@@ -47,6 +47,7 @@ const zh: typeof en = {
     campaigns: 'Campaigns',
     searchSpaces: '搜索空间',
     objectives: '优化目标',
+    datasets: '回放数据集',
     policies: 'Policies',
     tuning: '自动调优',
     baselines: '基线',

@@ -14,6 +14,7 @@ from app.api import (
     benchmarks,
     campaigns,
     clusters,
+    datasets,
     leases,
     machine_groups,
     machines,
@@ -81,6 +82,11 @@ TAGS = [
     {"name": "machines", "description": "Fleet inventory and the production-baseline lifecycle."},
     {"name": "search spaces", "description": "Reusable parameter grids."},
     {"name": "objectives", "description": "What 'better' means: a target metric plus redlines."},
+    {
+        "name": "datasets",
+        "description": "Replay datasets: samples of production traffic, collected by LLMBench "
+        "from the gateway's request logs in VictoriaLogs.",
+    },
     {"name": "runs", "description": "Individual benchmarked deployments."},
     {"name": "auth", "description": "Login and the current user."},
     {
@@ -138,6 +144,7 @@ app.include_router(campaigns.router, prefix=api_prefix)
 app.include_router(runs.router, prefix=api_prefix)
 app.include_router(search_spaces.router, prefix=api_prefix)
 app.include_router(objectives.router, prefix=api_prefix)
+app.include_router(datasets.router, prefix=api_prefix)
 app.include_router(benchmarks.router, prefix=api_prefix)
 app.include_router(baselines.router, prefix=api_prefix)
 app.include_router(policies.router, prefix=api_prefix)

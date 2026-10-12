@@ -10,6 +10,7 @@
 import { computed, ref, watch } from 'vue'
 import { api, type DatasetProfile } from '../api/client'
 import { specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
+import DatasetDialog from './DatasetDialog.vue'
 import InfoHint from './InfoHint.vue'
 
 const props = defineProps<{
@@ -21,7 +22,17 @@ const props = defineProps<{
 const w = defineModel<Workload>({ required: true })
 /** Take a fresh sample of a rolling dataset when the campaign starts. */
 const rebuild = defineModel<boolean>('rebuild', { default: true })
-const emit = defineEmits<{ module: [name: string] }>()
+const emit = defineEmits<{
+  module: [name: string]
+  /** A dataset was set up from here: the list of profiles is out of date. */
+  'datasets-changed': []
+}>()
+const newDatasetOpen = ref(false)
+
+function onDatasetSaved(name: string) {
+  w.value.dataset_profile = name
+  emit('datasets-changed')
+}
 
 /** What the workload becomes on LLMBench, from the API — so the page can
  *  name it and say whether it is new or reused. */
@@ -59,7 +70,7 @@ const chosenProfile = computed(
   () => props.profiles.find((p) => p.name === w.value.dataset_profile) ?? null)
 
 function profileNote(p: DatasetProfile): string {
-  const size = p.records != null ? `${p.records} requests` : 'empty'
+  const size = p.records != null ? `${p.records.toLocaleString()} requests` : 'empty'
   return p.managed ? size : `${size} · resampled every ${p.schedule_hours} h`
 }
 </script>
@@ -112,10 +123,11 @@ function profileNote(p: DatasetProfile): string {
         <span class="muted tiny">Dataset
           <InfoHint :width="380">
             Recorded production requests, sent again: the only measurement that sees real
-            prompt lengths and prefix-cache reuse. Datasets are set up on LLMBench under
-            <b>Replay datasets</b>; without one, the 20-request example set is used, which
-            proves the pipeline but measures nothing. A campaign keeps the sample it
-            started with, so every candidate sees the same requests.
+            prompt lengths and prefix-cache reuse. <b>New dataset</b> samples a model's
+            traffic from the gateway's logs (<b>Automatic Tuning ▸ Datasets</b>); without
+            one, the 20-request example set is used, which proves the pipeline but
+            measures nothing. A campaign keeps the sample it started with, so every
+            candidate sees the same requests.
           </InfoHint></span>
         <el-select v-model="w.dataset_profile" size="small" filterable
           :empty-values="[null, undefined]">
@@ -125,8 +137,13 @@ function profileNote(p: DatasetProfile): string {
             <span>{{ p.display_name || p.name }}</span>
             <span class="muted opt-help">{{ profileNote(p) }}</span>
           </el-option>
+          <template #footer>
+            <el-button link type="primary" size="small" @click="newDatasetOpen = true">
+              New dataset…</el-button>
+          </template>
         </el-select>
       </label>
+      <DatasetDialog v-model="newDatasetOpen" @saved="onDatasetSaved" />
       <div class="grid">
         <label class="field">
           <span class="muted tiny">Requests

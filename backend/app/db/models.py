@@ -1015,6 +1015,30 @@ class Dataset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ReplayDataset(Base):
+    """A replay dataset set up from this platform's Datasets page.
+
+    The dataset is a collection profile on LLMBench, which holds its filters,
+    its sample size and its builds; they are read from there, not copied here.
+    This row holds what LLMBench is not told: who set it up, and how often to
+    take a new sample. LLMBench never rebuilds the profile on its own schedule
+    (`schedule_interval_hours` 0). The supervisor rebuilds it every
+    `refresh_hours`, and not while an unfinished campaign is measuring on the
+    current build, so a new sample never lands under a campaign.
+    """
+
+    __tablename__ = "replay_datasets"
+
+    # The profile's name on LLMBench: a slug that cannot change there.
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # 0 = only when someone asks (Collect now, or a campaign's Resample at start).
+    refresh_hours: Mapped[int] = mapped_column(Integer, default=24)
+    created_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Baseline(Base):
     """A production reference config, keyed by what it serves and on what.
 
