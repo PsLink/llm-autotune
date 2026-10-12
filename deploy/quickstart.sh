@@ -33,6 +33,9 @@
 #   NODE_HOST       the node address to print for the NodePorts (default: the first Ready node)
 #   POLICY_IMAGE    the search policy image registered as random-search (default:
 #                   the published one on ghcr.io)
+#   VICTORIALOGS_URL  the VictoriaLogs store of the gateway's request logs, as the
+#                   cluster reaches it: turns on LLMBench's dataset collector for
+#                   replay datasets (Automatic Tuning > Datasets). Remembered.
 #
 # State lives in .quickstart/ (git-ignored): the generated passwords and keys,
 # so running it again upgrades the same install, and two values files of your

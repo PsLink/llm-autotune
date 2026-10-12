@@ -94,6 +94,33 @@ previous engine shuts down. **Logs** on the panel shows the policy's log.
 **The leaderboard stays empty.** No run has succeeded yet. Check the **Runs**
 tab: if every run fails, the cause is shared (below).
 
+## Datasets
+
+**"LLMBench has no dataset collector".** LLMBench was installed without
+one. Run the install again with `VICTORIALOGS_URL`
+([After installing](../after-installing.md#replay-datasets)).
+
+**The model list is empty, or "Could not read the log store".** LLMBench
+cannot reach the VictoriaLogs address from its pods, or the store has no
+requests from the last day. Check the address under **Advanced**.
+
+**No request matches.** The model is matched exactly, as clients send it,
+and a node must be one that served that model. Clear **Nodes** to check
+whether the model alone matches.
+
+**A sample fails: "only N records collected, below the profile's minimum".**
+The window held fewer matching requests than **Fewest requests**. Widen the
+window, clear a node, or lower the minimum under **Advanced**. The previous
+sample stays in use.
+
+**"LLMBench did not let this platform create the dataset".** The installed
+LLMBench is older than this AutoTune and does not let its service account
+create datasets. Upgrade LLMBench.
+
+**No new sample is taken.** A campaign is measuring on the current sample;
+the list shows *waits for* and the campaign. The sample is taken when that
+campaign finishes, or now with **Collect now**.
+
 ## Runs fail
 
 Open the failed run and read **Error** and **Captured log**.

@@ -410,6 +410,22 @@ fi
 # shellcheck disable=SC1091
 . "$STATE/secrets.env"
 
+# Replay datasets: LLMBench collects them from a VictoriaLogs store of the
+# gateway's request logs. Remembered once given, so running the script again
+# without it keeps the collector and the samples on its volume.
+if [ -n "${VICTORIALOGS_URL:-}" ]; then
+  printf '%s\n' "$VICTORIALOGS_URL" > "$STATE/victorialogs-url"
+elif [ -f "$STATE/victorialogs-url" ]; then
+  VICTORIALOGS_URL=$(cat "$STATE/victorialogs-url")
+fi
+# The collector publishes samples onto a volume LLMBench's backend and workers
+# also mount: one node's disk will do on a single-node cluster; otherwise it
+# needs shared storage.
+datasets_access=ReadWriteMany
+if [ -n "${VICTORIALOGS_URL:-}" ] && [ "$(k get nodes --no-headers 2>/dev/null | wc -l)" -le 1 ]; then
+  datasets_access=ReadWriteOnce
+fi
+
 # Values of your own, applied after everything this script sets. Created once,
 # never overwritten, kept by `down`.
 if [ ! -f "$STATE/llm-autotune.custom.yaml" ]; then
@@ -513,6 +529,9 @@ EOF
     if [ -n "${HF_ENDPOINT:-}" ]; then
       printf 'app:\n  extraEnv:\n    - name: HF_ENDPOINT\n      value: "%s"\n' "$HF_ENDPOINT"
     fi
+    if [ -n "${VICTORIALOGS_URL:-}" ]; then
+      printf 'datasets:\n  enabled: true\n  accessMode: %s\ndatasetBuilder:\n  enabled: true\n' "$datasets_access"
+    fi
     if [ "$ACCESS" = nodeport ]; then
       printf 'service:\n  frontend:\n    type: NodePort\n'
       [ -z "$LLMBENCH_NODEPORT" ] || printf '    nodePort: %s\n' "$LLMBENCH_NODEPORT"
@@ -530,6 +549,7 @@ llmbench:
   url: http://llm-bench-backend.$BENCH_NS:8000
   webUrl: "$LLMBENCH_URL"
   apiKey: "$SERVICE_API_KEY"
+  victoriaLogsUrl: "${VICTORIALOGS_URL:-}"
 EOF
     if [ "$MODE" = demo ]; then
       printf 'mockModel:\n  image: "%s"\n' "$mock_image"

@@ -84,4 +84,4 @@ reports.
 
 ---
 
-← [Search spaces](search-spaces.md) · [User guide](README.md) · Next: [Search policies](policies.md) →
+← [Search spaces](search-spaces.md) · [User guide](README.md) · Next: [Datasets](datasets.md) →

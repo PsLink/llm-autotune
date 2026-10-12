@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     # (`<module>.score_card_norm`, `<module>.dataset_id`…). "replay" in
     # LLMBench; set it only for a build of LLMBench that names it otherwise.
     llmbench_replay_module: str = "replay"
+    # The VictoriaLogs store of the gateway's request logs that replay datasets
+    # are collected from (Automatic Tuning ▸ Datasets), as LLMBench's pods reach
+    # it, e.g. http://victorialogs.logging:9428. Pre-fills the dataset form;
+    # empty = the form asks for it.
+    llmbench_victorialogs_url: str = ""
 
     # The window a drafted campaign runs in when its author names none
     # (POST /campaigns/draft). Empty = no clock: the draft starts when started.

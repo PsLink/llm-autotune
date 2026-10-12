@@ -11,6 +11,7 @@ Each tick (non-blocking per run):
 
 import logging
 import os
+import time
 import traceback
 from collections import deque
 from datetime import datetime, timedelta
@@ -75,7 +76,7 @@ from app.control.search.validation import (
     cards_used as _cards_used,
 )
 from app.core.config import get_settings
-from app.datasets import pinning
+from app.datasets import pinning, refresh
 from app.datasets.profiles import (
     BuildInFlight,
     DatasetBuild,
@@ -99,6 +100,7 @@ from app.db.models import (
     MachineState,
     PolicySession,
     PolicyTrial,
+    ReplayDataset,
     Result,
     Run,
     RunKind,
@@ -137,6 +139,10 @@ from app.staging import (
 )
 
 logger = logging.getLogger(__name__)
+
+# How often the supervisor looks for replay datasets due a new sample. Samples
+# are hours apart; looking every tick would only load LLMBench.
+DATASET_REFRESH_CHECK_SECONDS = 300
 
 
 # Which failures are the config's fault and which are the infrastructure's now
@@ -241,6 +247,7 @@ class Supervisor:
         # Built lazily: a platform with no pinned campaigns never calls it, and
         # constructing one reaches for LLMBench credentials.
         self._dataset_profiles = dataset_profiles
+        self._datasets_checked_at = float("-inf")
         self.settings = get_settings()
         self._policy_engine = None
 
@@ -270,6 +277,8 @@ class Supervisor:
             # for this same tick to consider them if it is resumed.
             self._release_queued_while_paused(session)
             self._advance_dataset_pins(session)
+            # After the pins: a campaign that pinned this tick holds its build.
+            self._refresh_datasets(session)
             self._plan(session)
             # After the baseline lifecycle (a session needs a CLEARED machine),
             # before scheduling (its machine must be reserved before _schedule
@@ -407,6 +416,45 @@ class Supervisor:
                     "campaign %d: dataset profile %s: %s",
                     campaign.id, campaign.dataset_profile, exc,
                 )
+
+    def _refresh_datasets(self, session: Session) -> None:
+        """Ask LLMBench for a new sample of each dataset set up here that is due
+        one (app/datasets/refresh.py), unless an unfinished campaign is pinned
+        to the current build: a rebuild would land under it."""
+        if time.monotonic() - self._datasets_checked_at < DATASET_REFRESH_CHECK_SECONDS:
+            return
+        self._datasets_checked_at = time.monotonic()
+        rows = session.scalars(
+            select(ReplayDataset).where(ReplayDataset.refresh_hours > 0)
+        ).all()
+        if not rows:
+            return
+        try:
+            profiles = {p.get("name"): p for p in self.datasets.list_profiles()}
+        except Exception as exc:  # LLMBench away: try again next time round
+            logger.warning("dataset refresh: could not list profiles: %s", exc)
+            return
+        now = _now()
+        for row in rows:
+            profile = profiles.get(row.name)
+            if profile is None or not refresh.is_due(row.refresh_hours, profile, now):
+                continue
+            current = self.datasets.current(profile)
+            if current is not None and pinning.holders(session, row.name, current.build_id):
+                continue
+            try:
+                build_row = self.datasets.trigger_build(int(profile["id"]))
+            except BuildInFlight:
+                continue
+            except DatasetProfileError as exc:
+                logger.warning("dataset refresh: %s: %s", row.name, exc)
+                continue
+            self._event(
+                session, "dataset_refresh_requested",
+                payload={"profile": row.name, "build_row": build_row},
+            )
+            logger.info("asked %s for its %d-hourly sample (build %d)",
+                        row.name, row.refresh_hours, build_row)
 
     def _choose_dataset_build(self, session: Session, campaign: Campaign) -> None:
         profile = self.datasets.find(campaign.dataset_profile)

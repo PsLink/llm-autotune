@@ -526,6 +526,100 @@ export interface Redline {
 /** A replay collection profile on LLMBench — the traffic sample the expensive
  *  stage measures against. `managed` means nothing rebuilds it on a schedule,
  *  which is the only kind a campaign can hold for its whole life. */
+/** The Datasets page's form: a replay dataset set up from this platform. The
+ *  names follow LLMBench's collection profile, which it becomes. */
+export interface ReplayDatasetForm {
+  model: string
+  /** Backends serving it: host, host:port or URL. Empty = all of them. */
+  forwarded_to: string[]
+  sample_size: number
+  window_hours: number
+  /** 0 = only when asked. */
+  refresh_hours: number
+  display_name: string
+  /** The profile's name on LLMBench, fixed once created. */
+  name: string
+  source_url: string
+  statuses: string[]
+  uris: string[]
+  extra_logsql: string
+  max_model_len: number
+  min_records: number
+  keep_builds: number
+  subwindow_minutes: number
+  max_carry_multiple: number
+  window_timezone: string
+}
+
+export interface TokenSpread {
+  count: number
+  min: number
+  p50: number
+  p90: number
+  max: number
+  mean: number
+}
+
+export interface DatasetSample {
+  build_id: string
+  records: number
+  bytes: number
+  built_at: string
+  age_hours: number
+  window_start: string | null
+  window_end: string | null
+  /** Requests per prompt-length band, e.g. "<6K": 61. */
+  buckets: Record<string, number> | null
+  summary: {
+    prompt_tokens?: TokenSpread
+    completion_tokens?: TokenSpread
+    cache_hit_rate?: number
+    forwarded_to?: Record<string, number>
+  } | null
+}
+
+export interface DatasetBuildState {
+  id: number
+  status: 'pending' | 'running' | 'ready' | 'failed'
+  progress: string | null
+  error: string | null
+  records: number | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface CampaignRef {
+  id: number
+  name: string
+  status: string
+}
+
+export interface ReplayDataset extends ReplayDatasetForm {
+  id: number
+  /** Set up on LLMBench, not here: shown, changed there. */
+  external: boolean
+  can_edit: boolean
+  /** LLMBench's own schedule, for one set up there. */
+  schedule_hours: number
+  source_type: string
+  enabled: boolean
+  current: DatasetSample | null
+  last_build: DatasetBuildState | null
+  used_by: CampaignRef[]
+  /** Unfinished campaigns measuring on the current sample: no refresh until they finish. */
+  held_by: CampaignRef[]
+  next_refresh_at: string | null
+}
+
+export interface DatasetList {
+  datasets: ReplayDataset[]
+  /** False when LLMBench has no collector: nothing can be sampled. */
+  collector: boolean
+  victorialogs_url: string
+  llmbench_url: string
+}
+
 export interface DatasetProfile {
   name: string
   display_name: string

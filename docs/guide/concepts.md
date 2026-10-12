@@ -99,8 +99,12 @@ several **concurrency** levels in turn. Fast and repeatable, but it does not
 reflect prompt caching.
 
 **Replay.** A workload of recorded production requests, sent again. It
-reflects real prompt lengths and prefix-cache reuse, and needs a replay
-dataset on LLMBench.
+reflects real prompt lengths and prefix-cache reuse, and needs a dataset.
+
+**Dataset.** A sample of one model's recorded requests, which LLMBench
+collects from the gateway's request logs and replaces with a fresh sample
+on an interval. A campaign keeps one sample for its whole life. See
+[Datasets](datasets.md).
 
 **Concurrency.** The number of requests in flight at the same time. A sweep at
 `1, 4, 16` measures the engine under three loads.

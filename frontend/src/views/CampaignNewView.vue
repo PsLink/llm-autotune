@@ -415,14 +415,8 @@ async function load() {
   searchSpaces.value = (await api.get('/search-spaces')).data
   objectives.value = (await api.get('/objectives')).data
   if (selectedObjectiveId.value === null) await selectDefaultObjective()
-  // Last, and allowed to fail: it is the only one of these that leaves this
-  // platform, and a benchmark platform that is briefly unreachable must not
-  // stop anyone writing a campaign. The field falls back to free text.
-  try {
-    datasetProfiles.value = (await api.get('/campaigns/dataset-profiles')).data
-  } catch {
-    datasetProfiles.value = []
-  }
+  // Last: these two leave this platform.
+  await loadDatasetProfiles()
   try {
     benchmarks.value = (await api.get('/campaigns/benchmarks')).data
   } catch {
@@ -433,6 +427,17 @@ async function load() {
 /** Preselect an objective rather than leaving it blank: a campaign created
  *  without one ranks on a fallback nobody chose. Prefer the platform default
  *  (what the default screen benchmark measures), then the first saved one. */
+// Allowed to fail: it is the only list that leaves this platform, and a
+// benchmark platform that is briefly unreachable must not stop anyone writing a
+// campaign. The field falls back to free text.
+async function loadDatasetProfiles() {
+  try {
+    datasetProfiles.value = (await api.get('/campaigns/dataset-profiles')).data
+  } catch {
+    datasetProfiles.value = []
+  }
+}
+
 async function selectDefaultObjective() {
   let preferred = ''
   try {
@@ -1059,7 +1064,7 @@ onMounted(async () => {
               </template>
               <WorkloadPicker v-model="workload" v-model:rebuild="rebuildAtStart"
                 :profiles="datasetProfiles" :benchmarks="benchmarks"
-                @module="(m) => (screenModule = m)" />
+                @module="(m) => (screenModule = m)" @datasets-changed="loadDatasetProfiles" />
             </el-form-item>
 
             <el-form-item>
@@ -1118,7 +1123,7 @@ onMounted(async () => {
                   <template v-if="form.verify_enabled">
                     <WorkloadPicker v-model="verifyWorkload" v-model:rebuild="rebuildAtStart"
                       :profiles="datasetProfiles" :benchmarks="benchmarks" no-sweep
-                      @module="(m) => (verifyModule = m)" />
+                      @module="(m) => (verifyModule = m)" @datasets-changed="loadDatasetProfiles" />
                     <div class="grid-2 verify-fields">
                       <label class="field">
                         <span class="muted tiny">Top-k</span>

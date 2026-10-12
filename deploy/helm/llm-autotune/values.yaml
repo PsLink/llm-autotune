@@ -147,6 +147,11 @@ llmbench:
   email: ""
   password: ""
   benchmarkSlug: autotune-screen-v1
+  # The VictoriaLogs store of the gateway's request logs that replay datasets
+  # are collected from (Automatic Tuning > Datasets), as LLMBench's pods reach
+  # it, e.g. http://victorialogs.logging:9428. Empty = the dataset form asks.
+  # LLMBench needs its collector on: datasets.enabled and datasetBuilder.enabled.
+  victoriaLogsUrl: ""
 
 # The GPU cluster runs land on.
 gpuCluster:

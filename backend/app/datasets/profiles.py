@@ -13,7 +13,8 @@ for a build, we are told its name, and we read that name back off every
 result. We never learn how a dataset is collected and never fetch one; the
 ids are opaque and LLMBench owns everything behind them.
 
-  create   done once, by hand, on the LLMBench side (schedule_interval_hours 0)
+  create   from the Datasets page (app/api/datasets.py), or by hand on LLMBench,
+           with schedule_interval_hours 0
   build    POST /replay-datasets/profiles/{id}/build   -> {build_row_id}
            409 = one already in flight; one per profile, by design
   poll     GET  /replay-datasets/builds/{row}          -> pending|running|ready|failed
@@ -178,3 +179,86 @@ class DatasetProfileClient:
                 f"({response.status_code}): {response.text[:200]}"
             )
         return response.json()
+
+    # -- managing (the Datasets page) ---------------------------------------
+    #
+    # LLMBench lets this platform's service account create profiles and manage
+    # the ones it created; anyone else's answer 403.
+
+    def list_with_collector(self) -> tuple[list[dict[str, Any]], bool]:
+        """Every profile, and whether LLMBench has a collector to build them."""
+        response = self._request("GET", "/replay-datasets/profiles")
+        if response.status_code >= 400:
+            raise DatasetProfileError(
+                f"could not list dataset profiles ({response.status_code}): {_detail(response)}"
+            )
+        body = response.json()
+        if isinstance(body, dict):
+            profiles = body.get("profiles") or []
+            collector = bool(body.get("collector_configured", True))
+        else:
+            profiles, collector = body or [], True
+        return [p for p in profiles if isinstance(p, dict)], collector
+
+    def account_id(self) -> int | None:
+        """This platform's account on LLMBench, which owns what it created."""
+        try:
+            return int(self.bench.whoami().get("id"))
+        except Exception as exc:  # noqa: BLE001 - only decides what is editable
+            logger.info("could not read the LLMBench account: %s", exc)
+            return None
+
+    def create(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self._json("POST", "/replay-datasets/profiles", "create the dataset", json=body)
+
+    def update(self, profile_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        return self._json(
+            "PUT", f"/replay-datasets/profiles/{profile_id}", "save the dataset", json=body
+        )
+
+    def delete(self, profile_id: int) -> None:
+        response = self._request("DELETE", f"/replay-datasets/profiles/{profile_id}")
+        if response.status_code >= 400 and response.status_code != 404:
+            raise DatasetProfileError(_refusal("delete the dataset", response))
+
+    def probe(self, body: dict[str, Any]) -> dict[str, Any]:
+        """How many records an unsaved source and filters match."""
+        return self._json("POST", "/replay-datasets/probe", "check the filters", json=body)
+
+    def values(self, body: dict[str, Any]) -> dict[str, Any]:
+        """The models or backends the store has seen, with request counts."""
+        return self._json("POST", "/replay-datasets/values", "read the log store", json=body)
+
+    def builds(self, profile_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        body = self._json(
+            "GET", f"/replay-datasets/profiles/{profile_id}/builds", "read the builds",
+            params={"limit": limit},
+        )
+        builds = body.get("builds", body) if isinstance(body, dict) else body
+        return [b for b in builds or [] if isinstance(b, dict)]
+
+    def _json(self, method: str, path: str, what: str, **kwargs) -> Any:
+        response = self._request(method, path, **kwargs)
+        if response.status_code >= 400:
+            raise DatasetProfileError(_refusal(what, response))
+        return response.json()
+
+
+def _detail(response: httpx.Response) -> str:
+    """LLMBench's own reason: FastAPI's `detail`, a list of them, or the body."""
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    if isinstance(detail, list):
+        detail = "; ".join(str(d.get("msg", d)) if isinstance(d, dict) else str(d) for d in detail)
+    return str(detail) if detail else response.text[:300]
+
+
+def _refusal(what: str, response: httpx.Response) -> str:
+    detail = _detail(response)
+    if response.status_code == 403 and "created" not in detail:
+        # An LLMBench from before service accounts could manage profiles.
+        return (f"LLMBench did not let this platform {what}: {detail}. It needs an "
+                "LLMBench whose service accounts may create collection profiles.")
+    return f"LLMBench could not {what} ({response.status_code}): {detail}"

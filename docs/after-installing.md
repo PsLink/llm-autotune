@@ -204,11 +204,32 @@ ingress:
       paths: [{path: /, pathType: Prefix, service: frontend}]
 ```
 
-## Datasets
+## Replay datasets
+
+A Replay workload sends recorded production requests, which LLMBench collects
+from a VictoriaLogs store of the gateway's request logs
+([Datasets](guide/datasets.md)). Run the install again with the store's
+address, as LLMBench's pods reach it:
+
+```bash
+VICTORIALOGS_URL=http://victorialogs.logging:9428 deploy/quickstart.sh
+```
+
+This turns on LLMBench's dataset collector and its datasets volume, and sets
+the address the dataset form starts from (`llmbench.victoriaLogsUrl`). The
+script remembers the address for later runs.
+
+The datasets volume is shared by LLMBench's backend, workers and collector.
+On a cluster with one node the node's disk is enough; with more, set a
+ReadWriteMany storage class as `datasets.storageClass` in
+`.quickstart/llm-bench.custom.yaml`. Credentials for the store, if it needs
+them, go in `datasetBuilder.auth` there.
+
+## Other datasets
 
 The default benchmark needs no dataset: LLMBench's throughput sweep generates
-its prompts. Academic suites and replays of captured or live gateway traffic
-need a datasets volume on LLMBench (`datasets.enabled` in
+its prompts. Academic suites and replays of captured traffic files need a
+datasets volume on LLMBench (`datasets.enabled` in
 `.quickstart/llm-bench.custom.yaml`); see LLMBench's
 [deploying guide](https://github.com/modelsphere/llm-bench/blob/main/docs/deploying.md#storage)
 and [replay datasets](https://github.com/modelsphere/llm-bench/blob/main/docs/replay-datasets.md).

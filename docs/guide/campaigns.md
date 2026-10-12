@@ -101,8 +101,9 @@ compared.
     steadier numbers and longer runs.
   - **Max s / level**: a time limit for each level.
 - **Replay.** Recorded production traffic, sent again. Select a **Dataset**
-  configured on LLMBench (the 20-request example set only exercises the
-  pipeline), the number of **Requests** (0 for all) and the **Concurrency**.
+  ([Datasets](datasets.md); **New dataset…** at the bottom of the list sets
+  one up), the number of **Requests** (0 for all) and the **Concurrency**.
+  The 20-request example set only exercises the pipeline.
   **Resample at start** takes a fresh sample of a rolling dataset when the
   campaign starts; every candidate then receives the same sample.
 - **Existing benchmark.** An LLMBench benchmark, by its slug.
