@@ -46,11 +46,17 @@ cluster, next to the runs. The campaign page shows its progress as a
    launches and measures each and reports back.
 3. **finalizing**: near the end of the window, or when the policy has nothing
    left to try, it names its finalists.
-4. **validating**: the platform measures the finalists again itself. That
+4. **validating**: the platform launches the finalists and measures them
+   again itself, on the campaign's own benchmark (or on its second benchmark,
+   if the campaign has a [verify stage](campaigns.md#4-benchmark)). That
    measurement decides the winner.
 5. **done**.
 
-![A policy campaign while it searches](images/policy-mid-leaderboard.png)
+![A policy campaign that ran to the end](images/policy-finished.png)
+
+On the **Leaderboard**, the top board is **The policy's finalists, measured
+again**: the measurement that decides. **All candidates** below it is every
+config the policy tried.
 
 The time validation needs is held back from the search, based on how long this
 campaign's runs actually take.

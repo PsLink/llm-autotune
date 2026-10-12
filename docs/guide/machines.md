@@ -14,7 +14,8 @@ A machine is only used while it is **leased** to the platform.
 
 ## Adding a GPU cluster
 
-*Admins only.* First, with that cluster's admin kubeconfig, run
+*Admins only:* other users don't see **Add GPU cluster**. First, with that
+cluster's admin kubeconfig, run
 `deploy/gpu-cluster.sh --context <gpu-cluster>`
 ([Installing, step 2](../install.md#2-prepare-a-gpu-cluster)). It creates a
 namespace for the runs (`llm-autotune-runs`) and an account that may manage
@@ -75,9 +76,9 @@ From left to right:
 
 - **The name.** For a cluster node it is the node's name.
 - **Tags:** `k8s` and the cluster's name for a cluster node. The lease state:
-  *not leased*, *leased*, *running* (runs in progress) or *handing back*. And
-  what an outside system asking for the machine back would be told: *idle*,
-  *busy* or *returnable*.
+  *not leased*, *leased*, *running* (runs in progress) or *handing back*. While
+  it is leased, also what an outside system asking for the machine back would
+  be told: *idle*, *busy* or *returnable*.
 - **Cards in use**, out of the machine's total, and the GPU type when the
   platform recognizes it.
 
@@ -139,7 +140,7 @@ The worker logs in over ssh and runs the engine with `docker run`.
    `~/.ssh/authorized_keys`. The machine needs Docker and the NVIDIA container
    toolkit.
 3. Press **Add machine**, keep **Driver** at *SSH + Docker*, and enter a
-   **Name** and the **Host** address. Under **Advanced**: the ssh user and
+   **Name** and the **Host** address (both required). Under **Advanced**: the ssh user and
    port, the GPU count and type if the machine cannot report them, and the
    notes.
 4. **Smoke test** it, then **Lease to platform**.

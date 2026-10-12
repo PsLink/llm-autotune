@@ -13,8 +13,9 @@ The install creates one user, `admin`, with the password it prints. Anyone who
 can open the UI can also **Create account** on the sign-in page; new accounts
 are ordinary *users*.
 
-- **Admins** can also add and edit GPU clusters, register their nodes, and
-  manage users.
+- **Admins** can also add and edit GPU clusters, register their nodes, see
+  and revoke every user's API keys, and manage users. The buttons for these
+  are not shown to other users.
 - **Users** can do everything else: lease machines, build search spaces and
   objectives, create and run campaigns, and mint their own API keys.
 
@@ -44,8 +45,8 @@ that says who uses it, such as `fleet-manager`.
 ![A freshly minted key](images/api-key-minted.png)
 
 The key is shown **once**. Copy it then: only a hash is stored, so a lost key
-is replaced, not recovered. The dialog includes an example call; the address
-in it is a placeholder for your platform's.
+is replaced, not recovered. The dialog includes an example call to this
+platform, the address you reached it at.
 
 Send the key in the `X-API-Key` header:
 
@@ -53,8 +54,10 @@ Send the key in the `X-API-Key` header:
 curl http://localhost:8080/api/campaigns -H "X-API-Key: $KEY"
 ```
 
-The list shows each key's name, its first characters, and when it was last
-used. **Revoke** stops a key at once.
+The list shows your keys: each one's name, its first characters, and when it
+was last used. An admin sees every user's, with an **Owner** column. **Revoke**
+stops a key at once. Keys the platform creates for a running policy are not
+listed: they belong to that policy session and expire with it.
 
 ![The API keys list](images/api-keys.png)
 

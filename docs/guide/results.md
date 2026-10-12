@@ -40,32 +40,42 @@ throughput per GPU.
 
 ### Two boards
 
-A campaign with a [verify stage](campaigns.md#4-benchmark) shows two boards.
-**Verified on real traffic** on top is the one that decides: the best few
-configs measured again with the second workload. **All candidates** below is
-the first, quicker measurement of every config. Their numbers come from
-different benchmarks, so they are never mixed in one table. A replay row
-tagged **other dataset** was measured on a different sample of the dataset and
-does not compare with the rest.
+Some campaigns show two boards, and the top one decides:
+
+- **The policy's finalists, measured again**, in a policy campaign: the configs
+  the policy named as its best, launched and measured by the platform itself
+  on the campaign's benchmark. **All candidates** below is every config the
+  policy tried.
+- **Verified on real traffic**, in a campaign with a
+  [verify stage](campaigns.md#4-benchmark): the best few configs measured
+  again with the second workload. **All candidates** below is the first,
+  quicker measurement of every config. Their numbers come from different
+  benchmarks, so they are never mixed in one table. A replay row tagged
+  **other dataset** was measured on a different sample of the dataset and does
+  not compare with the rest.
 
 ## Runs
 
 The **Runs** tab lists every run: its status, why it failed if it did, which
-GPUs it had, the endpoint it served on, when it started and how long it took.
+of the machine's cards it had (`#0 #1`), the endpoint it served on, when it
+started and how long it took. In a policy campaign, **Role** says whether a
+row is an engine the policy asked for, the benchmark of one, or a finalist.
 Click a row for the details:
 
 ![A run's details](images/campaign-run-drawer.png)
 
+- **For a failed run, first:** what went wrong, and the kind of failure.
 - **The verdict box:** which benchmark measured it, which metric ranked it,
   its score, and whether it held the redlines.
 - **What the objective looked at:** the values of the target metric and every
   redline metric.
 - **Config:** the full set of engine settings, fixed ones included.
-- **Launch command:** exactly what was started. On Kubernetes it is the
-  manifest that was applied; over ssh, the `docker run` line.
+- **Launch command** (folded; click to open it): exactly what was started. On
+  Kubernetes it is the manifest that was applied; over ssh, the `docker run`
+  line.
 - **Results:** everything LLMBench reported, under **Metrics**.
-- **Error** and **Captured log:** for a failed run, why, and the engine's log.
-  **Download** saves the log.
+- **Captured log:** the engine's own output, live while the run is going and
+  its end once it has finished. **Download** saves it.
 
 [Runs and failures](runs.md) explains the statuses and failure kinds.
 
@@ -112,9 +122,9 @@ the clipboard for a ticket or a chat.
 
 It does not call a win it cannot back. A lead smaller than the measurement
 noise is reported as *no meaningful difference*. When repeated measurements of
-the same config disagree by more than the lead, it is *unstable*. When no
-baseline was measured, the report says so: the "canary" it mentions is the
-baseline run, production's config measured within the same campaign.
+the same config disagree by more than the lead, it is *unstable*. When
+production's config was not measured in the campaign (there is no
+[baseline](baselines.md) for the model), the report says so.
 
 ## Comparing campaigns
 

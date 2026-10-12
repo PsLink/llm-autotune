@@ -58,7 +58,8 @@ asked. **More ▸ End lease now** stops them at once.
 
 A warning (yellow) doesn't stop the campaign. "Still being pulled" means the
 probe gave up waiting for a large image; the first run will wait for it
-instead.
+instead. An image marked "not checked yet" was skipped because the model path
+failed first: fix the path and run the checks again.
 
 ## A campaign
 

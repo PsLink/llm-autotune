@@ -64,7 +64,7 @@ New nodes are ticked already. Press **Register**.
 Each registered node becomes a **machine**: one place a run can land, pinned to
 that node, with the card count the node reports.
 
-![A registered machine, not leased yet](images/machine-registered.png)
+![A registered machine, not leased](images/machine-registered.png)
 
 > **Connect fails?** The message says whether the cluster's address did not
 > resolve or did not answer from the platform's pods. Run `gpu-cluster.sh`
@@ -164,16 +164,17 @@ AutoTune will create for it. Then pick the **Objective** from step 5.
 > client too. On real GPUs the defaults (2048 in, 512 out, concurrency up to
 > 64) are a sensible start.
 
-**Schedule.** When the campaign may use the machines. The default is every
-night from 23:00 to 08:00. To run it only when you press **Start**, clear both
-times ("No window: start it by hand").
+**Schedule.** When the campaign may use the machines. The default is
+**Every night**, from 23:00 to 08:00. To run it only when you press **Start**,
+choose **No window (start it by hand)**.
 
 ![Step 5, Schedule](images/wizard-5-schedule.png)
 
 **Check.** Press **Run checks**. On a Kubernetes cluster a probe pod on each
 machine pulls the engine image and mounts the model path, so a wrong image tag
 or path shows up now, not at the first run. "Nothing is in the way" means
-you're ready.
+you're ready. If the checks find a problem, the step turns red, and **Create
+campaign** asks before creating the campaign anyway.
 
 ![Step 6, Check: nothing is in the way](images/wizard-6-check.png)
 
@@ -209,8 +210,9 @@ each:
 - **Redlines** says whether the config **held** every limit or **crossed** one.
 
 Click a row on the **Runs** tab for everything about one run: the score, the
-full config, the exact **Launch command**, every metric LLMBench reported, and
-the engine's log.
+full config, the exact **Launch command** (folded; click to open it), every
+metric LLMBench reported, and the engine's log. For a failed run, what went
+wrong comes first.
 
 ![One run's details](images/campaign-run-drawer.png)
 

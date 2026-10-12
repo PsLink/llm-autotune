@@ -119,8 +119,10 @@ images that need credentials take the cluster's **Image pull secrets**, and
 nodes with extra taints its **Extra tolerations** (both under **Advanced**
 when adding it, or **Clusters ▸ Edit**).
 
-Engine logs are off by default, because they need a ReadWriteMany volume. With
-such a storage class:
+The UI shows each run's engine log: live from the cluster while it runs, and
+the end of it, kept in the database, once it has finished. To keep whole logs
+as files the API serves, give the platform a ReadWriteMany volume, which the
+quickstart leaves off. With such a storage class:
 
 ```yaml
 # .quickstart/llm-autotune.custom.yaml

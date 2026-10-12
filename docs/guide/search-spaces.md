@@ -31,7 +31,8 @@ Press **New search space**.
    without the leading dashes and with underscores:
    `--max-total-tokens` is `max_total_tokens`.
 3. For each parameter, choose its **Mode** and fill in the values (below).
-4. Check the **Preview**, then **Save**.
+4. Check the **Preview**, then **Save**. A parameter left without a value is
+   named, so you can fill it in or remove it.
 
 ![Picking a parameter](images/space-add-parameter.png)
 
@@ -44,8 +45,10 @@ The **?** next to each parameter in the table repeats its description.
 **Fixed.** One value, the same on every candidate. Use it for a setting you
 want set but not searched, like `schedule_policy: lpm`.
 
-**Sweep.** A list of values to try. Type one and press Enter, then the next.
-Swept parameters multiply: 2 values of one and 3 of another make 6 candidates.
+**Sweep.** A list of values to try. Type one and press Enter, then the next,
+or paste several separated by commas. A parameter with a fixed set of choices
+(`schedule_policy`, `kv_cache_dtype`…) offers them in a list instead. Swept
+parameters multiply: 2 values of one and 3 of another make 6 candidates.
 
 **Range.** Every value from **min** to **max** in steps of **step**: min 4096,
 max 16384, step 4096 tries 4096, 8192, 12288 and 16384. Handy when the values

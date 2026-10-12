@@ -44,11 +44,13 @@ Press **New objective**, or **Duplicate** on one that is close.
   The **?** explains the chosen metric and its unit.
 - **Direction.** **Auto** follows the metric: latency metrics are minimized,
   throughput metrics maximized. Set it yourself only to override that.
-- **Redlines.** **Add redline**, then pick a metric, an operator (`<=`, `<`,
-  `>=`, `>`, `==`, `!=`) and a value in the metric's own unit: milliseconds for
-  latencies, tokens per second or minute for throughput, a fraction from 0 to
-  1 for rates. "TTFT p99 `<=` 2000" means the first token arrives within 2
-  seconds for 99% of requests.
+- **Redlines.** A new objective has none. **Add redline** suggests p99 time to
+  first token from the same benchmark as the target metric; change the metric
+  if you want another, pick an operator (`<=`, `<`, `>=`, `>`, `==`, `!=`) and
+  type the limit. Its unit is shown next to it: milliseconds for latencies,
+  tokens per second or minute for throughput, a fraction from 0 to 1 for
+  rates. "TTFT p99 `<=` 2000 ms" means the first token arrives within 2 seconds
+  for 99% of requests.
 - **As YAML** shows exactly what a campaign will carry.
 
 A config that crosses a redline is rejected however fast it was. A metric the

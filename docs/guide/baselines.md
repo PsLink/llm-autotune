@@ -20,7 +20,8 @@ names none):
 - **The campaign measures production too.** It starts the baseline's config on
   one of its own machines, as one more run, and benchmarks it exactly like the
   candidates. On the leaderboard it is the row tagged **baseline**.
-- **Every result is shown against it**, in the **vs baseline** column.
+- **Every result is shown against it**, in the **vs baseline** column and in
+  the report.
 - **The Check step compares the campaign with it** (**Matches production**),
   and the **Configuration** tab lists flags production sets that the campaign
   never does (**Difference from production**).

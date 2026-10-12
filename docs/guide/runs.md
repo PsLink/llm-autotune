@@ -19,7 +19,9 @@ every campaign, newest first. Click a row to open its campaign; the campaign's
 | **Started**, **Took** | when it started, and how long it took |
 
 **Stop** on a live run ends that one run: on the worker's next pass its engine
-is torn down and its GPUs released.
+is torn down and its GPUs released. That config is not tried again unless you
+press **Re-run failed configs** on the campaign. (**Stop** on the campaign is
+different: the configs it cuts off are queued again.)
 
 ## A run's life
 
@@ -33,7 +35,7 @@ is torn down and its GPUs released.
 | **serving** | (policy campaigns) the engine is up and held for the policy to use |
 | **succeeded** | measured; its score is on the leaderboard |
 | **failed** | something went wrong; **Failure** says what kind |
-| **killed** | stopped by a person, a lease ending or the window closing |
+| **stopped** | stopped by a person, a lease ending or the window closing |
 
 Waiting for the model to load usually takes longest. A run that never becomes
 ready within the campaign's limit fails as `ready_timeout`.
@@ -65,9 +67,11 @@ differently:
 | `port_conflict`, `gpu_busy` | infrastructure | something else held the port or a GPU at launch |
 | `ssh_timeout` | infrastructure | an ssh machine did not answer |
 | `killed_externally`, `gone`, `orphaned` | infrastructure | the container disappeared from under the platform |
+| `crash_loop` | neither | the engine keeps crashing at start and the log says nothing the platform recognizes; read the log |
 | `health_check` | neither | it came up but answered wrongly |
 | `bench_preflight` | neither | LLMBench could not reach the engine's endpoint |
-| `terminated`, `released` | neither | stopped on purpose: a stop, a pause, the window closing |
+| `terminated` | neither | stopped on purpose: a stop, the window closing |
+| queued again | neither | the campaign was stopped or paused while this run was going; its config runs again on the next start |
 | `unknown` | neither | the log matched nothing known; read it |
 
 ## Finding out why
@@ -76,7 +80,8 @@ Open the run on its campaign's **Runs** tab:
 
 - **Error** has the platform's own explanation.
 - **Captured log** has the engine's output, ending where it failed. For a run
-  still going it is the log so far. **Download** saves it.
+  still going it is the log so far. **Download** saves it. When the engine
+  crashed and was restarted, the log from before the restart comes first.
 
 ![A run's details](images/campaign-run-drawer.png)
 
