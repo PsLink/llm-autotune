@@ -61,9 +61,11 @@ config the policy tried.
 The time validation needs is reserved from the search, based on how long the
 campaign's runs take.
 
-The panel's **Logs** shows the policy container's log, and **Abort** ends the
-session. **Waiting on:** shows what a stalled policy is waiting for, such as
-free GPUs.
+The strip's **Logs** shows the policy container's log, and **Abort** ends the
+session. A warning line under it shows what a stalled policy is waiting for,
+such as free GPUs. The policies built on the SDK log each step (the plan,
+every launch and its result, the platform's commands), and the campaign's
+**Activity** log has the platform's side of it.
 
 ## Registering a policy
 
