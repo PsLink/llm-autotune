@@ -6,13 +6,18 @@ A **campaign** is one search: the model and engine image, the machines, the
 search space, the workload, the objective, and the schedule. Press **New
 campaign** on **Automatic Tuning ▸ Campaigns**.
 
-There are three ways to create one:
+Fill in the wizard step by step (below), or start from something that
+exists with **Start from**:
 
-- **Fill in the wizard** step by step (below).
-- **Start from a baseline**: the platform drafts the whole campaign from a
-  recorded production config ([below](#starting-from-a-baseline)).
-- **Import YAML**: paste a campaign exported from another one
+- **A previous campaign**: its definition fills the wizard in, under the
+  next version of its name, to change before creating
   ([below](#exporting-and-importing)).
+- **A baseline**: the platform drafts the whole campaign from a recorded
+  production config ([below](#starting-from-a-baseline)).
+- **A YAML file**: paste a campaign exported from another one
+  ([below](#exporting-and-importing)).
+
+![Start from](images/wizard-start-from.png)
 
 The **So far** panel on the right summarizes the campaign, with an estimate
 of the benchmarking hours it needs and how many windows that takes. Click a
@@ -162,7 +167,7 @@ confirmation first.
 ## Starting from a baseline
 
 If production's config is recorded on [Baselines](baselines.md), **Tune from
-this** there (or **Start from a baseline** here) drafts the whole campaign:
+this** there (or **Start from ▸ A baseline** here) drafts the whole campaign:
 
 - the image, model path and engine settings come from the baseline; its
   settings become the fixed part of the search space;
@@ -180,9 +185,14 @@ Adjust anything, then create it as usual.
 
 On a campaign's page, **⋯ ▸ Export YAML** exports everything needed to
 recreate it (model, machines, search space, workload, objective and schedule),
-without status or results. **Import YAML** on New campaign fills the wizard
-from such a file and runs the checks. **⋯ ▸ Clone** does both in one step,
-under a new name.
+without status or results. **Start from ▸ A YAML file** on New campaign
+fills the wizard from such a file and runs the checks.
+
+**Start from ▸ A previous campaign** (or **⋯ ▸ Copy to a new campaign** on its
+page) fills the wizard in from a campaign on this platform and stays on the
+first step, to change what the next search needs. The search space and
+objective are the ones that campaign ran with, even if the saved ones have
+been edited since.
 
 ---
 

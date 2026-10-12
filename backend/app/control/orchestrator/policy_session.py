@@ -430,6 +430,11 @@ class PolicySessionEngine:
             machine=self.sup._machine_info(target),
             image=policy.image,
             env={
+                # Most policies are Python, whose stdout is block-buffered when
+                # it is not a terminal: what a policy prints would sit in the
+                # buffer and be lost with the container, which is torn down
+                # before it exits. The policy's own env can still set it.
+                "PYTHONUNBUFFERED": "1",
                 **(policy.env or {}),
                 "AUTOTUNE_API_URL": settings.public_api_url,
                 "AUTOTUNE_API_KEY": token,
@@ -895,9 +900,13 @@ class PolicySessionEngine:
         # API reads only when the two share a volume.
         session.log_tail = text[-64_000:]
         log_dir = self.sup.settings.run_log_dir
-        os.makedirs(log_dir, exist_ok=True)
-        with open(policy_log_path(log_dir, session.id), "w", encoding="utf-8") as f:
-            f.write(text)
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            with open(policy_log_path(log_dir, session.id), "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError:
+            # The row has it; an unwritable disk must not stop the teardown.
+            logger.exception("could not write the log file of policy session %d", session.id)
 
     def _capture_death_logs(self, db: Session, session: PolicySession) -> str:
         """Best-effort tail of a dead policy container's stdout, read BEFORE

@@ -360,6 +360,8 @@ class CampaignOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     owner_id: int
+    # The owner's username, filled at read time: lists filter by it.
+    owner_name: str = ""
     name: str
     engine: str
     image: str
@@ -466,6 +468,10 @@ class RunOut(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+    # The campaign's name and its owner's username. Filled by the runs list,
+    # which shows runs from every campaign; empty elsewhere.
+    campaign_name: str = ""
+    owner_name: str = ""
 
 
 class RunDetailOut(RunOut):

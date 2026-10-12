@@ -87,7 +87,7 @@ value:
 ![A campaign drafted from a baseline](images/draft-check.png)
 
 Review the steps (especially the benchmark and the search space), then
-**Create campaign**. **Start from a baseline** on New campaign does the same,
+**Create campaign**. **Start from ▸ A baseline** on New campaign does the same,
 and can also draft from a model name alone.
 
 After deploying a better config, **Edit** the baseline to match, so the next

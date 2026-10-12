@@ -55,6 +55,7 @@ from app.evaluation.ranking import leaderboard_entries
 from app.metrics_catalog import DEFAULT_VERIFY_TARGET_METRIC
 from app.objective import target_metric
 from app.reporting import render_campaign_report
+from app.reporting.activity import render_activity
 from app.schemas.core import (
     CampaignCreate,
     CampaignOut,
@@ -279,10 +280,12 @@ async def list_campaigns(
         (await session.execute(select(Campaign).order_by(Campaign.id.desc()))).scalars().all()
     )
     extensions = await _extensions_of(session, campaigns)
+    owners = await _usernames(session)
     out = []
     for campaign in campaigns:
         row = CampaignOut.model_validate(campaign)
         row.extensions = extensions[campaign.id]
+        row.owner_name = owners.get(campaign.owner_id, "")
         out.append(row)
     return out
 
@@ -509,11 +512,17 @@ async def _extensions_of(
     )
 
 
+async def _usernames(session: AsyncSession) -> dict[int, str]:
+    return dict((await session.execute(select(User.id, User.username))).all())
+
+
 async def _campaign_out(session: AsyncSession, campaign: Campaign) -> CampaignOut:
     """CampaignOut plus the row-only lease findings about its pinned machines
     (only while the campaign can still run — a finished one's pool is
     history), and what plugins keep about it."""
     out = CampaignOut.model_validate(campaign)
+    owner = await session.get(User, campaign.owner_id)
+    out.owner_name = owner.username if owner is not None else ""
     out.learned_timing = timing.summary(campaign)
     out.extensions = (await _extensions_of(session, [campaign]))[campaign.id]
     if campaign.status in _LIVE_CAMPAIGN_STATES:
@@ -1284,6 +1293,34 @@ async def list_campaign_runs(
         .scalars()
         .all()
     )
+
+
+@router.get(
+    "/{campaign_id}/activity",
+    response_class=PlainTextResponse,
+    summary="What the platform did for this campaign",
+    description="One line per recorded step, oldest first, times in UTC: runs placed and "
+    "ended, stops asked for, a policy's requests. There even when a container printed "
+    "nothing or never started.",
+)
+async def campaign_activity(
+    campaign_id: int,
+    _: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+    limit: int = 5000,
+):
+    if await session.get(Campaign, campaign_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
+    run_ids = select(Run.id).where(Run.campaign_id == campaign_id)
+    events = (
+        await session.execute(
+            select(Event)
+            .where((Event.campaign_id == campaign_id) | Event.run_id.in_(run_ids))
+            .order_by(Event.id.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return render_activity(reversed(events)) or "(nothing recorded yet)"
 
 
 @router.get("/{campaign_id}/report", response_class=PlainTextResponse)

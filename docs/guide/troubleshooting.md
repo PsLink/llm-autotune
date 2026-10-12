@@ -84,12 +84,17 @@ each machine. Common reasons:
 - a pinned machine was removed.
 
 **A policy campaign stays in *starting*.** The policy pod has not started on
-the GPU cluster. **Waiting on:** in the policy panel gives the reason, usually
-an image the nodes cannot pull or no node with room for it.
+the GPU cluster. The warning line under the policy strip gives the reason,
+usually an image the nodes cannot pull or no node with room for it.
 
 **A policy stays in *searching* with nothing running.** Its latest message
 says what it is waiting for, such as "no free cards yet, will retry" while a
-previous engine shuts down. **Logs** on the panel shows the policy's log.
+previous engine shuts down. **Logs** on the strip shows the policy's log.
+
+**A log is empty.** A container that printed nothing, or was stopped before it
+started, leaves no log, and the log says which. **Logs ▸ Activity** on the
+campaign shows what the platform did either way: where each run was placed,
+who stopped it, and what the policy asked for.
 
 **The leaderboard stays empty.** No run has succeeded yet. Check the **Runs**
 tab: if every run fails, the cause is shared (below).

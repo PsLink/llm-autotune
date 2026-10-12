@@ -4,8 +4,9 @@
 
 A **run** is one attempt at one candidate: the engine started with that
 config, health-checked, benchmarked and stopped. **Runs** in the top menu
-lists every run of every campaign, newest first. Click a row to open the run's
-details on its campaign's page.
+lists every run of every campaign, newest first. Filter it by status
+(*running* is every live state), campaign or owner. Click a row to open the
+run's details on its campaign's page.
 
 ![The Runs page](images/runs-page.png)
 
@@ -14,8 +15,8 @@ details on its campaign's page.
 | **Campaign** | the campaign it belongs to |
 | **Status** | where it is in its life (below) |
 | **Failure** | for a failed run, what kind of failure (below) |
+| **Owner** | who owns its campaign |
 | **Container** | the name of its container or Kubernetes workload |
-| **LLMBench sub** | the id of its benchmark submission on LLMBench |
 | **Started**, **Took** | when it started, and how long it took |
 
 **Stop** on a live run ends that run: on the worker's next tick its engine is
@@ -78,10 +79,18 @@ them differently:
 
 Open the run's details:
 
-- **Error** gives the platform's explanation.
+- **The top line**: its status, the kind of failure, how long it took, its
+  GPUs, its endpoint and its LLMBench submission.
+- **The error** gives the platform's explanation.
+- **The score** it was ranked on, whether it held the redlines, and the
+  metrics the objective names. Its swept parameters are below; the full
+  config, the engine command, the launch command and every metric are folded
+  away underneath.
 - **Captured log** has the engine's output, ending where it failed (for an
   active run, the log so far). **Download** saves it. If the engine crashed
-  and restarted, the log from before the restart comes first.
+  and restarted, the log from before the restart comes first. A run with no
+  log says why, such as a run stopped before its engine was launched; the
+  campaign's **Logs ▸ Activity** shows what happened to it.
 
 ![A run's details](images/campaign-run-drawer.png)
 

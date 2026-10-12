@@ -34,9 +34,6 @@ const props = defineProps<{
   rows: ScoreRow[]
   /** Which config keys actually vary — the rest is identical on every row. */
   sweptKeys: string[]
-  /** What the number is, for the axis caption. */
-  label: string
-  unit?: string
   /** "minimize" flips which end is best. */
   direction?: string
 }>()
@@ -105,16 +102,11 @@ function fmt(value: number): string {
 <template>
   <div v-if="scored.length" class="bars">
     <div class="caption muted tiny">
-      {{ label }}<span v-if="unit"> ({{ unit }})</span>
-      <span class="sep">·</span>
-      {{ scored.length }} measured, bars from zero
-      <template v-if="sweptKeys.length">
-        <!-- Each bar is labelled with values only; say once whose they are. -->
-        <span class="sep">·</span>
-        labelled <span class="mono">{{ sweptKeys.join(' · ') }}</span>
-      </template>
+      <!-- Each bar is labelled with values only; say once whose they are. The
+           metric is named once, by the board above; the bars start at zero. -->
+      <span v-if="sweptKeys.length" class="mono">{{ sweptKeys.join(' · ') }}</span>
       <template v-if="hasBaseline">
-        <span class="sep">·</span>
+        <span v-if="sweptKeys.length" class="sep">·</span>
         <span class="legend">
           <span class="chip k-better"><i class="dot" />better</span>
           <span class="chip k-baseline"><i class="dot" />baseline</span>

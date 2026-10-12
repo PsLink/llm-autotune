@@ -36,6 +36,8 @@ export const LIVE_RUN_STATES = [
   'waiting_ready',
   'health_check',
   'benching',
+  // An engine held up for a policy to use: live until it is released.
+  'serving',
 ]
 
 export function isLive(status: string): boolean {
