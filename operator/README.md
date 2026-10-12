@@ -1,20 +1,19 @@
 # autotune-operator
 
-A small Kubernetes operator that runs **one serving workload per autotune
-experiment** on the GPU cluster, so the autotune platform can benchmark a
-candidate config without holding `kubectl` against the cluster itself.
+A small Kubernetes operator that runs **one serving workload per tuning run**
+on a GPU cluster, so LLM AutoTune can benchmark a candidate config without
+managing Kubernetes workloads directly.
 
-**Installing it on a cluster — yours or someone else's — is
-[`INSTALL.md`](INSTALL.md)**: what lands, what it is allowed to do, and how to
-take it off again. No image is published: you build one and render
+**Installation is in [`INSTALL.md`](INSTALL.md)**: what is installed, its
+permissions, and how to remove it. No image is published: you build one and render
 `dist/install.yaml` against it with `make build-installer IMG=<image>`.
 
 It introduces a single CRD, **`TuningRun`** (`tuning.modelsphere.dev/v1alpha1`). The
 platform creates a `TuningRun`; the operator launches the workload, waits for it
-to serve, publishes a reachable endpoint, and tears it down — and writes all of
-that back into the object's `status`. That's the whole job.
+to serve, publishes a reachable endpoint, tears it down, and records all of
+this in the object's `status`.
 
-## Why an operator (and why *thin*)
+## Design
 
 The platform's search loop — pick a config, benchmark it through LLMBench, score
 it, decide the next config — is Python and stays where it is. What it should not

@@ -1,6 +1,6 @@
 # Machine Lease API
 
-How an external system hands GPU machines to LLM Autotune and takes them back.
+How an external system leases GPU machines to LLM AutoTune and ends the lease.
 
 Interactive reference (always matches the running build): **`/api/docs`** —
 e.g. <http://192.0.2.10:28100/api/docs>. This document is the narrative
@@ -8,12 +8,13 @@ version: what the calls mean, and what the platform guarantees.
 
 ---
 
-## The contract in one paragraph
+## Summary
 
-You lend the platform a free machine for a period. While it holds the machine
-it runs campaigns on it; it never touches anything it did not launch. You take
-the machine back by asking — or by letting `due_at` pass — and it is yours
-again once its `readiness` reads `returnable`.
+You lease a machine to the platform for a period, with nothing else running
+on its GPUs. While the lease is active the platform runs campaigns on it and
+never touches anything it did not launch. You end the lease with a request, or
+by letting `due_at` pass; the machine is free again once its `readiness` is
+`returnable`.
 
 ---
 
@@ -36,7 +37,7 @@ you can try any of them from `/api/docs` while logged in.
 
 ---
 
-## Lending a machine
+## Leasing a machine
 
 ```http
 POST /api/machines/lease
@@ -63,16 +64,16 @@ ask "did that one land?".
 | --- | --- |
 | `name` | Required. Your fleet's name for the box. |
 | `host` | Required the first time. Must be reachable **both** from the platform (ssh) and from the benchmark platform (HTTP) — the endpoint we hand to LLMBench is built from it. |
-| `gpu_count` | Cards the platform may schedule onto. |
+| `gpu_count` | Cards the platform may schedule onto. Defaults to 8 for a new machine; a Kubernetes node's own count replaces it. |
 | `due_at` | When you want it back. Reaching it starts a polite hand-back **on its own** — a lease nobody ends still returns. Defaults to 24 h. |
 
-Lend it free: nothing else should be serving on the cards it may use. From
-here no further calls are needed — campaigns pinned to the machine start their
-runs on the next worker tick.
+Nothing else should be running on the cards the platform may use. No further
+calls are needed: campaigns pinned to the machine start their runs on the next
+worker tick.
 
 ---
 
-## Asking how it is going
+## Lease status
 
 ```http
 GET /api/machines/node-24/lease
@@ -115,7 +116,7 @@ cap. Before a campaign has finished any run, it is the cap.
 
 ---
 
-## Taking it back
+## Ending a lease
 
 ```http
 POST /api/machines/node-24/lease/end
@@ -124,13 +125,13 @@ POST /api/machines/node-24/lease/end
 
 This returns immediately. It records the request; the worker carries it out.
 
-### `polite` — don't waste the work
+### `polite`
 
 No new runs start. Runs already in flight finish normally and their
 measurements are kept. Use `returnable_at` from the status call to see the
 expected wait — how long that campaign's runs usually take, typically ~20 minutes.
 
-### `eager` — the machine matters more than the data
+### `eager`
 
 Live runs are killed on the next worker tick (~10 s) and their benchmarks are
 lost.
@@ -149,7 +150,7 @@ mind: send `polite` first, `eager` when it turns out you needed it sooner.
 
 ---
 
-## Knowing when it is done
+## Detecting completion
 
 Ending a lease is **asynchronous**. Poll until `readiness` is `returnable`:
 
@@ -199,7 +200,7 @@ onto it until you lease it again.
    itself, so a caller that crashes does not strand a machine.
 3. **A draining machine takes no new work**, from the moment the request lands.
 
-## What is *not* guaranteed
+## Not guaranteed
 
 - **Instant hand-back.** Even `eager` needs a tick to kill runs and a minute
   for their containers to release the GPUs. If you need a machine in seconds, this API is the wrong
@@ -227,7 +228,7 @@ onto it until you lease it again.
 BASE=http://192.0.2.10:28100
 KEY=atk_…
 
-# lend it for the night
+# lease it for the night
 curl -sf -X POST "$BASE/api/machines/lease" \
   -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
   -d '{"name":"node-24","host":"198.51.100.24","gpu_count":8,

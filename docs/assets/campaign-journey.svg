@@ -9,7 +9,7 @@
   <path d="M200 84 L234 84" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
   <rect x="236" y="20" width="180" height="128" rx="8" fill="#fdf5e1" stroke="#d1a646" stroke-width="1.4"/>
   <text x="326.0" y="60.0" font-size="11" fill="#7a8794" font-weight="700" letter-spacing="0.6" text-anchor="middle">FLEET</text>
-  <text x="326.0" y="79.0" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">2 · Lend machines</text>
+  <text x="326.0" y="79.0" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">2 · Lease machines</text>
   <text x="326.0" y="100.0" font-size="12.5" fill="#7a5a1a" text-anchor="middle">production machines,</text>
   <text x="326.0" y="118.0" font-size="12.5" fill="#7a5a1a" text-anchor="middle">for a nightly window</text>
   <path d="M416 84 L450 84" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>

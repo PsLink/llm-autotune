@@ -2,51 +2,57 @@
 
 # Account, users and API keys
 
-Your user menu, top right, has **Account** and **API keys**, and the language
-switch next to it changes the interface between English and 中文.
+The user menu (top right) has **Account** and **API keys**; the language
+switch next to it changes the interface between English and Chinese.
 
 ![The user menu](images/user-menu.png)
 
 ## Users and roles
 
-The install creates one user, `admin`, with the password it prints. Anyone who
-can open the UI can also **Create account** on the sign-in page; new accounts
-are ordinary *users*.
+The install creates one user, `admin`, with the printed password. Other
+accounts are created in one of two ways:
+
+- **Create account** on the sign-in page, for anyone who can reach the UI. New
+  accounts are ordinary users. An install can turn this off
+  (`allowSignup: false`, [After installing](../after-installing.md#users)).
+- **Add user** on the **Account** page, by an admin: a username, an initial
+  password and a role.
+
+Roles:
 
 - **Admins** can also add and edit GPU clusters, register their nodes, see
-  and revoke every user's API keys, and manage users. The buttons for these
-  are not shown to other users.
-- **Users** can do everything else: lease machines, build search spaces and
-  objectives, create and run campaigns, and mint their own API keys.
+  and revoke every user's API keys, and manage users. These controls are
+  hidden from other users.
+- **Users** can do everything else: lease machines, create search spaces and
+  objectives, create and run campaigns, and create their own API keys.
 
-The **Users** list at the bottom of the **Account** page (admins only) makes
-another user an admin, or an admin a user again. The last admin can't be
-demoted.
+The **Users** list at the bottom of the **Account** page (admins only) adds
+users and changes roles. The last admin cannot be demoted.
 
 ## Your account
 
 ![The Account page](images/account.png)
 
-- **Profile**: your username, role, and when the account was made.
-- **Change password**: at least 6 characters. You stay signed in, and your API
-  keys keep working.
-- **Published name**: the name your benchmark submissions appear under on
-  LLMBench. It defaults to your username.
+- **Profile**: username, role, and when the account was created.
+- **Change password**: at least 6 characters. The current session stays signed
+  in, and API keys keep working.
+- **Published name**: the name benchmark submissions appear under on
+  LLMBench. Defaults to the username.
 
 ## API keys
 
-Scripts and other systems use the platform's API with an **API key** instead of
-a password. A key acts with the authority of the user who minted it, and
-appears in the platform's records as `key:<name>`.
+Scripts and other systems call the platform's API with an **API key** instead
+of a password. A key acts with the permissions of the user who created it and
+appears in the audit records as `key:<name>`.
 
-Open **API keys** from the user menu and press **Mint a key**. Give it a name
-that says who uses it, such as `fleet-manager`.
+Open **API keys** from the user menu and press **Mint a key**. Name it after
+the system that will use it, such as `fleet-manager`.
 
-![A freshly minted key](images/api-key-minted.png)
+![A newly created key](images/api-key-minted.png)
 
-The key is shown **once**. Copy it then: only a hash is stored, so a lost key
+The key is shown **once**; copy it then. Only a hash is stored, so a lost key
 is replaced, not recovered. The dialog includes an example call to this
-platform, the address you reached it at.
+platform's address.
 
 Send the key in the `X-API-Key` header:
 
@@ -54,21 +60,21 @@ Send the key in the `X-API-Key` header:
 curl http://localhost:8080/api/campaigns -H "X-API-Key: $KEY"
 ```
 
-The list shows your keys: each one's name, its first characters, and when it
-was last used. An admin sees every user's, with an **Owner** column. **Revoke**
-stops a key at once. Keys the platform creates for a running policy are not
-listed: they belong to that policy session and expire with it.
+The list shows your keys: name, prefix, and when each was last used. Admins
+see every user's keys, with an **Owner** column. **Revoke** disables a key
+immediately. Keys the platform creates for a running policy are not listed;
+they belong to that policy session and expire with it.
 
 ![The API keys list](images/api-keys.png)
 
-**API docs** opens the interactive reference of every endpoint. The ones made
-for other systems are described in:
+**API docs** opens the interactive reference of every endpoint. The APIs for
+other systems are described in:
 
-- [Machine lease API](../api/machine-lease.md): lending machines to the
-  platform from a scheduler, and taking them back;
+- [Machine lease API](../api/machine-lease.md): leasing machines to the
+  platform from a scheduler, and ending the lease;
 - [Policy API](../api/policy-api.md): what a search policy calls;
-- [Agent API](../api/agent-api.md): the read-only data LLM-written performance
-  reports are built from (off by default).
+- [Agent API](../api/agent-api.md): the read-only data used for LLM-written
+  performance reports (off by default).
 
 ---
 

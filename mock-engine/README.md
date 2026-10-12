@@ -53,7 +53,7 @@ format guidellm and LLMBench's throughput sweeps time — so a real LLMBench can
 benchmark the mock and report numbers. They describe the mock's timers, not a
 model.
 
-On a laptop or a small CPU-only cluster, the default screen benchmark
+On a workstation or a small CPU-only cluster, the default screen benchmark
 (`autotune-screen-v1`: 2048-token prompts, up to 64 concurrent streams)
 measures how fast the benchmark client can prepare requests rather than the
 mock, and two settings rank by noise. Screen mock campaigns with

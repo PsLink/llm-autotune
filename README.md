@@ -1,144 +1,133 @@
 # LLM AutoTune
 
-LLM AutoTune finds the best serving configuration for your model on your
-GPUs. A **campaign** sets a model, a **search space** of engine settings
-(sglang, vLLM) and an **objective**: one metric to improve, plus redlines a
-config must hold. A **policy**, your search algorithm in a container, picks
-configs to try; the platform launches each one, benchmarks it with
+LLM AutoTune finds the best serving configuration for a model on your GPUs. A
+**campaign** sets a model, a **search space** of engine settings (sglang,
+vLLM) and an **objective**: one metric to improve, plus redlines a config must
+hold. A **policy**, a search algorithm packaged as a container, picks the
+configs to try. The platform launches each config, benchmarks it with
 [LLMBench](https://github.com/modelsphere/llm-bench), and ranks it against the
-**baseline**, what production runs today.
+**baseline**, the configuration production runs today.
 
 ![LLM AutoTune overview](docs/api/diagrams/platform-overview.png)
 
 ## Features
 
-- **Bring any search algorithm.** A policy is any container that speaks a small
-  HTTP API ([policy contract](docs/api/policy-contract.md)). Random search is
-  included; without a policy the platform enumerates the space.
-- **Results you can trust.** The platform measures every config itself, the
-  same way, and re-measures the best before it reports. A policy never grades
+- **Pluggable search.** A policy is any container that implements a small HTTP
+  API ([policy contract](docs/api/policy-contract.md)). Random search is
+  included; without a policy, the platform tries every config in the space.
+- **Platform-owned measurement.** The platform benchmarks every config the
+  same way and re-measures the best before reporting. A policy never grades
   its own results.
-- **Real GPUs, real traffic.** Benchmarks run on the cards you serve on and
-  can replay captured production traffic; a config that breaks a latency or
-  quality redline is out.
-- **Uses the GPUs you have.** Kubernetes nodes, other clusters, or ssh
-  machines, lent to the platform for a nightly window.
-- **Reproducible.** Every run records its launch command, engine version, card
-  type and dataset.
-- **From result to rollout.** A winner comes with its exact launch command
-  and image.
-- **Restart-safe.** All state is in Postgres; a restart mid-run loses nothing.
+- **Real hardware and traffic.** Benchmarks run on the GPUs you serve on and
+  can replay captured production traffic. A config that crosses a latency or
+  quality redline is rejected.
+- **Existing GPUs.** Kubernetes GPU nodes or ssh machines, leased to the
+  platform for a nightly window.
+- **Reproducible results.** Every run records its engine command, image,
+  engine version, card type and dataset.
+- **Restart-safe.** All state is in Postgres; restarting the worker mid-run
+  loses nothing.
 - **Extensible.** Plugins add pages, API routes, scheduled steps and search
   strategies ([plugins](docs/plugins.md)).
 
-## How it works
+## Architecture
 
 ![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the platform validates the best](docs/api/diagrams/platform-architecture.svg)
 
-The policy only decides what to try. The supervisor starts it, launches the
-configs it asks for, and has LLMBench benchmark them; at the deadline the
-platform re-measures the policy's best itself, and that measurement is the
-verdict. More in [platform architecture](docs/api/platform-architecture.md).
+The policy decides what to try. The supervisor starts the policy, launches the
+configs it requests, and submits each to LLMBench. At the deadline the
+platform re-measures the policy's best configs itself, and that measurement is
+the result. Details: [platform architecture](docs/api/platform-architecture.md).
 
 ## Install
 
-The platforms run on a Kubernetes cluster with no GPUs; runs go to GPU
-clusters (or ssh boxes) you add from the UI afterwards. You need `kubectl`,
-`helm`, `git` and `openssl`, and `docker` for search policies.
+The platform runs on a Kubernetes cluster without GPUs; runs go to GPU
+clusters (or ssh machines) added from the UI. Requirements: `kubectl`,
+`helm`, `git`, `openssl`, and `docker` for building search policies.
 
 ```bash
 git clone https://github.com/modelsphere/llm-autotune
 cd llm-autotune
 deploy/quickstart.sh                          # 1. LLM AutoTune + LLMBench on the current context
-deploy/gpu-cluster.sh --context <gpu-cluster> # 2. an account on a GPU cluster; writes llm-autotune-runs.kubeconfig
+deploy/gpu-cluster.sh --context <gpu-cluster> # 2. a scoped account on a GPU cluster; writes llm-autotune-runs.kubeconfig
 ```
 
 3. Sign in with the address and password the install prints. On
-   **Resources ▸ Add GPU cluster**, upload the kubeconfig, register the GPU
-   nodes, and **Lease to platform**.
-4. Create a search space and a campaign, with no policy or the `random-search`
-   one the install registers; the **Check** step tries the images and model
-   path on the nodes before anything starts.
-   [Your first campaign](docs/guide/first-campaign.md) walks through it with a
-   screenshot of every step.
+   **Resources ▸ Add GPU cluster**, upload the kubeconfig and register the GPU
+   nodes.
+4. Create a search space and a campaign. The campaign's **Check** step pulls
+   the images and mounts the model path on the nodes before anything starts.
+   [First campaign](docs/guide/first-campaign.md) walks through it with
+   screenshots.
 
-The full walkthrough, with a cluster that can't reach Docker Hub, the whole
-thing on a laptop with two kind clusters, and what to do when a step fails:
-[Installing](docs/install.md). Settings, more GPUs and
-ingress: [After installing](docs/after-installing.md). The Helm chart and every
-setting: [Deploying](docs/deploying.md).
+[Installing](docs/install.md) covers air-gapped clusters, a local setup with
+two kind clusters, and troubleshooting. [After installing](docs/after-installing.md)
+covers settings, more GPUs and ingress; [Deploying](docs/deploying.md) covers
+the Helm chart and every setting.
 
-## Try it without GPUs
+## Demo without GPUs
 
 ```bash
 deploy/demo.sh --kind
 ```
 
-Creates a local [kind](https://kind.sigs.k8s.io/) cluster (give Docker about
-8 GB), installs both platforms there, and starts a demo campaign on a mock
-engine that needs no GPU. The whole loop runs for real, but the numbers mean
-nothing about performance. `deploy/demo.sh down --kind` removes it.
+Creates a local [kind](https://kind.sigs.k8s.io/) cluster (allow Docker about
+8 GB), installs both platforms, and starts a demo campaign on a mock engine
+that needs no GPU. The full loop runs; the numbers are not performance data.
+`deploy/demo.sh down --kind` removes it.
 
-## The pieces
+## Concepts
 
 | | |
 |---|---|
-| **Campaign** | One search: a model, a search space, an objective, a machine pool and a window. |
-| **Search space** | The configurations allowed. The platform enumerates it, or a policy explores it. |
-| **Objective** | What "better" means: one target metric plus redlines a config must hold. |
-| **Run** | One configuration, launched and measured. |
+| **Campaign** | One search: a model, a search space, an objective, machines and a schedule. |
+| **Search space** | The engine settings a campaign may change, and their values. |
+| **Objective** | The target metric to rank by, plus redlines a config must hold. |
+| **Run** | One config, launched on a machine and benchmarked. |
 | **Baseline** | The configuration production runs today, measured the same way. |
-| **Machine / cluster** | Where runs land: a node pool in a Kubernetes cluster, or a bare-metal box reached over ssh. |
-| **Policy** | A container that decides what to try next. |
-| **Report** | A written comparison of a baseline against attempts (agent API, off by default). |
+| **Machine** | Where runs land: a node of a GPU cluster, or an ssh machine. |
+| **Policy** | A container that decides which config to try next. |
+
+The [user guide](docs/guide/concepts.md) defines the rest.
 
 ## Repository layout
 
 ```text
-backend/     FastAPI API + the orchestrator worker (Python 3.12, uv)
+backend/     FastAPI API and the orchestrator worker (Python 3.12, uv)
   app/
-    control/    the control stack: search space, orchestrator, launch drivers
+    control/    search space, orchestrator, launch drivers
     evaluation/ health checks and the benchmark-platform adapter
-    agent/      read models an LLM writes performance reports from
-frontend/    Vue 3 + TypeScript SPA
+    agent/      read models for LLM-written performance reports
+frontend/    Vue 3 + TypeScript UI
 deploy/
-  quickstart.sh  install both platforms on your cluster; demo.sh: the no-GPU try-out
-  gpu-cluster.sh prepare a GPU cluster and write the kubeconfig to add it with
+  quickstart.sh  installs both platforms; demo.sh installs the no-GPU demo
+  gpu-cluster.sh prepares a GPU cluster and writes its kubeconfig
   helm/      the chart
   docker/    images, and a compose file for local development
-policies/    submodule: llm-autotune-policies — the SDK and two policies
+policies/    submodule: llm-autotune-policies (the SDK and two policies)
 operator/    the optional Kubernetes operator (Go)
-mock-engine/ a fake engine, for running the loop without GPUs
-docs/        architecture, the API contracts, deployment
+mock-engine/ a fake engine for running the loop without GPUs
+docs/        guides, architecture and API contracts
 ```
 
 ## Documentation
 
-- [User guide](docs/guide/README.md) — using the platform, page by page:
-  [concepts and words](docs/guide/concepts.md),
-  [your first campaign](docs/guide/first-campaign.md), machines, search
-  spaces, objectives, policies, campaigns, results and troubleshooting
-- [Architecture](docs/architecture.md) — what the system is and the few choices
-  that decide the rest. 中文：[架构概览](docs/architecture.zh.md)
-- [How it works](docs/workflow.md) — the product walkthrough, no code.
-  中文：[产品视角](docs/workflow.zh.md)
-- [Installing](docs/install.md) — the platform cluster, GPU clusters and a
-  first campaign, step by step
-- [After installing](docs/after-installing.md) — your own values, policies,
-  more GPUs, ingress and datasets
-- [Deploying](docs/deploying.md) — the chart, GPU access, the benchmark
-  platform, and every other setting
-- [Plugins](docs/plugins.md) — extending the platform without forking it
-- [Policy contract](docs/api/policy-contract.md) — writing a search that plugs in
-- [Machine lease API](docs/api/machine-lease.md) — handing machines to the platform
-  from another system
-- [Agent API](docs/api/agent-api.md) — the read models reports are written from
-  (off by default)
+- [User guide](docs/guide/README.md): every page of the platform, starting
+  with [concepts](docs/guide/concepts.md) and
+  [a first campaign](docs/guide/first-campaign.md)
+- [How it works](docs/workflow.md): the product view, without code
+- [Architecture](docs/architecture.md): how the system is built
+- [Installing](docs/install.md), [After installing](docs/after-installing.md),
+  [Deploying](docs/deploying.md), [Upgrading](docs/upgrading.md)
+- [Plugins](docs/plugins.md): extending the platform without forking it
+- APIs: [policy contract](docs/api/policy-contract.md),
+  [machine lease](docs/api/machine-lease.md),
+  [agent API](docs/api/agent-api.md) (off by default)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: `uv run pytest` in
-`backend/`, `npm run typecheck` in `frontend/`, and `helm lint` on the chart.
+See [CONTRIBUTING.md](CONTRIBUTING.md): `uv run pytest` in `backend/`,
+`npm run typecheck` in `frontend/`, and `helm lint` on the chart.
 
 ## License
 

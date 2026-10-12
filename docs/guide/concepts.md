@@ -1,11 +1,11 @@
-[User guide](README.md) › **Concepts and words**
+[User guide](README.md) › **Concepts**
 
-# Concepts and words
+# Concepts
 
-LLM AutoTune uses a few everyday words in a specific sense. This page explains
-each one once; the other pages link here when a word first comes up.
+The terms used throughout the UI and this guide. Other pages link here when a
+term first appears.
 
-## The idea in one picture
+## Overview
 
 ```text
  search space ──► candidates ──► runs on leased GPUs ──► LLMBench measures ──► leaderboard
@@ -13,190 +13,194 @@ each one once; the other pages link here when a word first comes up.
   values to try)    each)          with that config)        for every run)         objective)
 ```
 
-You say which model to serve and which engine settings may change. The platform
-starts the engine with one combination of settings at a time, on GPUs you lent
-it, has LLMBench send each one the same load, and ranks them by the number you
-care about. The best one, with its exact launch command, is the result.
+You specify the model and which engine settings may change. The platform
+starts the engine with one combination of settings at a time on leased GPUs,
+has LLMBench send each the same load, and ranks the results by the objective.
+The result is the best config with its exact engine command.
 
 ## Tuning
 
-**Engine.** The server that runs the model: [sglang](https://github.com/sgl-project/sglang)
-or [vLLM](https://github.com/vllm-project/vllm). Its command-line flags (`--tp`,
-`--mem-fraction-static`…) are what AutoTune tunes. The platform writes them
-without dashes and with underscores: `tp`, `mem_fraction_static`.
+**Engine.** The inference server that runs the model:
+[sglang](https://github.com/sgl-project/sglang) or
+[vLLM](https://github.com/vllm-project/vllm). Its command-line flags (`--tp`,
+`--mem-fraction-static`…) are the parameters AutoTune tunes. The platform
+writes them without leading dashes and with underscores: `tp`,
+`mem_fraction_static`.
 
-**Parameter.** One engine flag that a search space mentions. See
-[engine settings you will meet](#engine-settings-you-will-meet) below.
+**Parameter.** One engine flag in a search space. See
+[common engine parameters](#common-engine-parameters).
 
-**Config** (configuration). One full set of parameter values, such as
+**Config** (configuration). One complete set of parameter values, such as
 `tp=2, mem_fraction_static=0.85`.
 
-**Search space.** The parameters a campaign may change and the values each may
-take. A parameter is *fixed* (one value), *swept* (a list), a *range* (min, max,
-step) or *tied* to others (they change together). Details:
+**Search space.** The parameters a campaign may change and the values each
+may take. A parameter is *fixed* (one value), *swept* (a list), a *range*
+(min, max, step) or *tied* to others (they change together). See
 [Search spaces](search-spaces.md).
 
-**Candidate.** One config from the search space, waiting to be tried. A space
-of `tp: [1, 2]` and `mem_fraction_static: [0.8, 0.85, 0.88]` has 2 × 3 = 6
+**Candidate.** One config from the search space. A space with
+`tp: [1, 2]` and `mem_fraction_static: [0.8, 0.85, 0.88]` has 2 × 3 = 6
 candidates.
 
-**Run.** One attempt at one candidate: the engine started with that config on
-a machine, checked for health, benchmarked, then stopped. A candidate can have
-several runs (a retry after a broken machine, or a repeat to confirm a result).
-See [Runs and failures](runs.md).
+**Run.** One attempt at one candidate: the engine is started with that config
+on a machine, health-checked, benchmarked, then stopped. A candidate can have
+several runs (a retry after an infrastructure failure, or a repeat to confirm a
+result). See [Runs and failures](runs.md).
 
-**Objective.** What "better" means: one **target metric**, a **direction**
-(maximize throughput, minimize latency), and any number of **redlines**. See
+**Objective.** The definition of "better": one **target metric**, a
+**direction** (maximize or minimize), and any number of **redlines**. See
 [Objectives](objectives.md).
 
-**Redline.** A limit a config must stay within to count at all, such as
-"p99 time to first token ≤ 2000 ms". A config that crosses a redline is out,
-however fast it was. A metric the benchmark did not report counts as crossed.
+**Redline.** A limit a config must stay within to be ranked, such as
+"p99 time to first token ≤ 2000 ms". A config that crosses a redline is
+rejected regardless of its score. A metric the benchmark did not report counts
+as crossed.
 
-**Campaign.** One search, start to finish: the model, the image, the machines,
-the search space, the benchmark, the objective, and when it may run. It copies
-the search space and objective when it is created, so editing those later
-never changes a campaign that already exists. See
+**Campaign.** One search: model, image, machines, search space, benchmark,
+objective and schedule. A campaign copies the search space and objective when
+it is created, so later edits to those do not affect existing campaigns. See
 [Creating a campaign](campaigns.md).
 
 **Leaderboard.** A campaign's results, best first, by the objective's target
 metric.
 
 **Baseline.** The config production runs today, recorded on the **Baselines**
-page. When a campaign has a baseline for its model, the leaderboard shows each
-result against it (**vs baseline**, such as `+12%`). See [Baselines](baselines.md).
+page. When a campaign's model has a baseline, the leaderboard compares each
+result with it (**vs baseline**, such as `+12%`). See [Baselines](baselines.md).
 
-**Policy.** A search algorithm in a container. Without one, a campaign tries
-every candidate in order (**grid**, or exhaustive search). With one, the
-policy decides what to try next; the platform still starts, measures and
-judges every config. The install comes with `random-search`. See
+**Policy.** A search algorithm packaged as a container. Without a policy, a
+campaign tries every candidate in order (**grid**, or exhaustive search). With
+one, the policy chooses what to try next; the platform still launches,
+measures and ranks every config. The install includes `random-search`. See
 [Search policies](policies.md).
 
-**Policy session.** One policy container's working life on a campaign:
-*starting*, *searching*, *finalizing* (it names its best configs, the
-**finalists**), *validating* (the platform measures the finalists itself),
-*done*.
+**Policy session.** One policy container's lifetime on a campaign: *starting*,
+*searching*, *finalizing* (it names its best configs, the **finalists**),
+*validating* (the platform measures the finalists itself), *done*.
 
-**Winner.** The best config that held every redline. Its run page has the
-exact launch command and image, which is what you take to production.
+**Trial.** One config a policy tries: an engine the platform launches for the
+policy, and the benchmark of it.
 
-## Measuring
+**Winner.** The best config that held every redline. Its run details show the
+engine command, image and weights path to deploy.
 
-**LLMBench.** The benchmark platform installed next to AutoTune. AutoTune
-asks it to send load to each run's engine and reads the numbers back.
+## Measurement
 
-**Workload** and **benchmark.** The load each run gets. You describe it on a
-campaign's **Benchmark** step, and AutoTune creates the matching *benchmark*
-on LLMBench (named `autotune-sweep-…` or similar) and locks it, so every
-candidate gets exactly the same test.
+**LLMBench.** The benchmark platform installed alongside AutoTune. AutoTune
+asks it to send load to each run's engine and reads back the metrics.
 
-**Synthetic sweep.** A workload of random prompts of a fixed size, sent at a
-few **concurrency** levels one after another. Fast and repeatable, but it
-cannot show the effect of prompt caching.
+**Workload** and **benchmark.** The load each run receives. A campaign's
+**Benchmark** step describes the workload, and AutoTune creates and locks the
+matching *benchmark* on LLMBench (named `autotune-sweep-…` or similar), so
+every candidate receives the same test.
 
-**Replay.** A workload of recorded production requests, sent again. The only
-measurement that sees real prompt lengths and real prefix-cache reuse. It
-needs a replay dataset on LLMBench.
+**Synthetic sweep.** A workload of random prompts of a fixed size, sent at
+several **concurrency** levels in turn. Fast and repeatable, but it does not
+reflect prompt caching.
 
-**Concurrency.** How many requests are in flight at the same time. A sweep at
+**Replay.** A workload of recorded production requests, sent again. It
+reflects real prompt lengths and prefix-cache reuse, and needs a replay
+dataset on LLMBench.
+
+**Concurrency.** The number of requests in flight at the same time. A sweep at
 `1, 4, 16` measures the engine under three loads.
 
 **Requests per slot.** How many requests each concurrent slot sends at one
-level: level *c* sends *c* × this many. More requests give steadier numbers and
-longer runs.
+level: level *c* sends *c* × this many. More requests give more stable numbers
+and longer runs.
 
-**Metric names.** Metrics are written `<benchmark module>.<metric>`, such as
-`perf_guidellm_sweep.output_tpm_card_norm`. The part before the dot says which
-kind of benchmark produced it (`perf_guidellm_sweep` for the synthetic sweep,
+**Metric names.** Metrics are named `<benchmark module>.<metric>`, such as
+`perf_guidellm_sweep.output_tpm_card_norm`. The prefix identifies the
+benchmark that produced it (`perf_guidellm_sweep` for the synthetic sweep,
 `replay` for a replay).
 
-The metrics you will meet first:
+Common metric terms:
 
-| short name | means | unit |
+| term | meaning | unit |
 |---|---|---|
-| TTFT | *time to first token*: how long until the answer starts | ms |
-| ITL, TPOT | *inter-token latency*, *time per output token*: the gap between streamed tokens | ms |
+| TTFT | time to first token | ms |
+| ITL, TPOT | inter-token latency, time per output token | ms |
 | TPS, TPM | tokens per second, tokens per minute | tok/s, tok/min |
 | output / input | generated tokens / prompt tokens | |
-| per card (`card_norm`) | divided by the GPUs the config uses, so `tp=1` and `tp=2` compare fairly | tok/min/GPU |
-| p50, p90, p99 | the median, and the value 90% or 99% of requests stay under | |
+| per card (`card_norm`) | divided by the number of GPUs the config uses | tok/min/GPU |
+| p50, p90, p99 | median, and the value 90% or 99% of requests stay under | |
 
-**Per-card throughput.** The default objective ranks by output tokens per
-minute *per GPU*. Without dividing by the GPUs used, a config that takes more
-cards nearly always wins, and the search turns into "use more hardware".
+**Per-GPU throughput.** The default objective ranks by output tokens per
+minute *per GPU*. Without normalizing by GPU count, a config that uses more
+GPUs nearly always ranks first.
 
 **Screen and verify.** An optional second stage: every candidate is first
 measured with a quick workload (the *screen*), then the best few are measured
 again with a slower, more realistic one (the *verify*, usually a replay), and
-that second measurement decides. Set under **Benchmark ▸ Advanced**.
+the second measurement decides. Set under **Benchmark ▸ Advanced**.
 
-**Pre-flight checks.** Checks the platform runs before a campaign starts: on a
-Kubernetes cluster, a probe pod on each machine pulls the engine and policy
-images and mounts the model path, so a wrong image tag or path shows up
-before the first run, not halfway through the night.
+**Pre-flight checks.** Checks run before a campaign starts. On a Kubernetes
+cluster, probe pods on each machine pull the engine and policy images and
+mount the model path, so a wrong image tag or path is reported before the
+first run.
 
 ## Machines
 
-**Platform cluster.** The Kubernetes cluster that runs AutoTune and LLMBench
-themselves. It needs no GPUs.
+**Platform cluster.** The Kubernetes cluster that runs AutoTune and LLMBench.
+It needs no GPUs.
 
-**GPU cluster.** A Kubernetes cluster whose GPU nodes run the engines. You add
-it on **Resources** with a kubeconfig that `deploy/gpu-cluster.sh` writes. It
-can be the platform cluster itself.
+**GPU cluster.** A Kubernetes cluster whose GPU nodes run the engines. It is
+added on **Resources** with a kubeconfig written by `deploy/gpu-cluster.sh`,
+and can be the platform cluster itself.
 
-**Machine.** One place a run can land. On a GPU cluster, each GPU node you
-register becomes a machine. A bare-metal box reached over ssh is a machine
-too. See [Machines and GPU clusters](machines.md).
+**Machine.** One place a run can land: a registered GPU node of a GPU
+cluster, or a bare-metal machine reached over ssh. See
+[Machines and GPU clusters](machines.md).
 
-**Lease.** Permission for the platform to use a machine. Campaigns only run on
+**Lease.** Permission for the platform to use a machine; campaigns run only on
 leased machines. **End lease** lets current runs finish and starts nothing new
-(the machine is *draining*), then hands it back; **End lease now** stops the
-platform's runs at once. The platform only ever stops what it started itself.
+(the machine is *handing back*), then releases it. **End lease now** stops the
+platform's runs immediately. The platform only stops workloads it started.
 
 **Smoke test.** A quick check that the platform can reach a machine and is
 allowed to start pods there.
 
 **Parallel candidates.** Several candidates sharing one machine, each on its
-own GPUs. An 8-GPU node running `tp=2` configs can test four at once.
+own GPUs. An 8-GPU node can run four `tp=2` configs at once.
 
 **Node group.** Several machines joined to serve one model across nodes
-(multi-node). Most setups never need one.
+(multi-node). Most setups do not need one.
 
-## Time
+## Scheduling
 
-**Window.** The hours a campaign may use the machines, such as 23:00 to 08:00
-every night, in a timezone you choose. A run that could not finish before the
-window closes is not started. A long search continues the next night where it
-stopped.
+**Window.** The hours a campaign may use machines, such as 23:00 to 08:00
+every night, in a chosen timezone. A run that cannot finish before the window
+closes is not started. A search that does not finish in one window continues
+in the next.
 
-**No window.** A campaign without a window runs only when you start it and
-stops when its search is done or you stop it.
+**No window.** A campaign without a window runs only when started, until its
+search is done or it is stopped.
 
-**Run now.** Starts a scheduled campaign at once, outside its window. It keeps
-going until its search is done or you stop it.
+**Run now.** Starts a scheduled campaign immediately, outside its window. It
+runs until its search is done or it is stopped.
 
-## Engine settings you will meet
+## Common engine parameters
 
-These are sglang names; vLLM has close equivalents. Hover the **?** next to a
-parameter in the search-space editor for its description.
+sglang names; vLLM has close equivalents. The **?** next to a parameter in the
+search-space editor shows its description.
 
-| parameter | what it changes |
+| parameter | effect |
 |---|---|
-| `tp` | *tensor parallel* size: how many GPUs one copy of the model is split across |
-| `dp` | *data parallel* size: independent copies of the model |
+| `tp` | *tensor parallel* size: how many GPUs one model replica is split across |
+| `dp` | *data parallel* size: independent model replicas |
 | `ep` | *expert parallel* size, for mixture-of-experts (MoE) models |
 | `mem_fraction_static` | share of GPU memory reserved for weights and the KV cache; higher means more cache and less headroom |
-| `chunked_prefill_size` | how many prompt tokens are processed per step; trades time to first token against decode smoothness |
-| `max_running_requests` | cap on requests being decoded at once |
-| `schedule_policy` | which waiting request goes next (`fcfs`, `lpm`…) |
-| `kv_cache_dtype` | precision of the KV cache; `fp8` roughly doubles how much fits |
+| `chunked_prefill_size` | prompt tokens processed per step; trades time to first token against decode smoothness |
+| `max_running_requests` | maximum requests decoded at once |
+| `schedule_policy` | which waiting request is scheduled next (`fcfs`, `lpm`…) |
+| `kv_cache_dtype` | precision of the KV cache; `fp8` roughly doubles its capacity |
 | `attention_backend` | which attention kernels run |
-| `cuda_graph_max_bs` | largest batch captured as a CUDA graph |
+| `cuda_graph_max_bs` | largest batch size captured as a CUDA graph |
 
-The **KV cache** is the memory that holds every in-flight request's context.
-More of it lets more requests run at once; too little and the engine queues or
-runs out of memory.
+The **KV cache** holds the context of every in-flight request. A larger cache
+allows more concurrent requests; too small a cache causes queueing or
+out-of-memory errors.
 
 ---
 
-[User guide](README.md) · Next: [Your first campaign](first-campaign.md) →
+[User guide](README.md) · Next: [First campaign](first-campaign.md) →

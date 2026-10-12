@@ -33,7 +33,7 @@ binary. It runs as non-root (uid 65532) with a read-only root filesystem, all ca
 dropped, `seccompProfile: RuntimeDefault`, and requests 10m CPU / 64Mi memory
 (limits 500m / 128Mi) — it satisfies the **restricted** Pod Security Standard.
 
-## What it is allowed to do — the part worth reviewing
+## Permissions
 
 `autotune-operator-manager-role` is a **ClusterRole**, and today the manager
 watches all namespaces:
@@ -46,14 +46,14 @@ watches all namespaces:
 | `""` | `pods` | get, list, watch | read phase and failure reason (`OOMKilled`, `ImagePullBackOff`, `Unschedulable`) back into status |
 | `""` | `nodes` | get, list, watch | resolve a NodePort endpoint to the InternalIP of the node the pod actually landed on |
 
-Two honest caveats:
+Two caveats:
 
 - **It is cluster-wide, not namespace-scoped.** The manager has no
   `--namespace` flag yet, so it could create a Deployment in any namespace. In
   practice it only ever acts on namespaces where a `TuningRun` exists, and only
-  the platform's own credential can create those. If you need it confined,
-  say so — scoping the cache and swapping the ClusterRole for a Role in one
-  namespace is a change we are willing to make, not a redesign.
+  the platform's own credential can create those. Confining it to one
+  namespace (a scoped cache and a Role instead of the ClusterRole) is a small
+  change; open an issue if you need it.
 - **It never touches nodes, quotas, or anything it did not create.** The node
   grant is read-only, and every object it creates is owner-referenced to its
   `TuningRun`, so deleting the run deletes the workload.

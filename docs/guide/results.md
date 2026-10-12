@@ -3,7 +3,7 @@
 # Reading results
 
 A campaign's page has four tabs: **Leaderboard**, **Runs**, **Configuration**
-and **Candidates**. **Report** above them writes it all up as Markdown.
+and **Candidates**. **Report** above them produces a Markdown summary.
 
 ## Leaderboard
 
@@ -17,7 +17,8 @@ the swept parameters in order (`1 · 0.85` is `tp=1`, `mem_fraction_static=0.85`
 The percentages on the right compare each config with the baseline, or with
 the best config when there is no baseline.
 
-The table has one row per measured config:
+The table has one row per measured config; click a row to open the run that
+produced its score:
 
 | column | means |
 |---|---|
@@ -28,19 +29,19 @@ The table has one row per measured config:
 | **vs baseline** | how it compares with production's config measured in the same campaign, such as `+12.0%`. Empty when there is no baseline ([Baselines](baselines.md)). |
 | **Redlines** | **held** if the config kept within every redline; **crossed** with which one if not. A crossed config never wins. |
 
-A row tagged **baseline** is production's own config, measured the same way
-in the same campaign. With one, the bars turn green (better than the
+A row tagged **baseline** is production's config, measured the same way in
+the same campaign. With a baseline, the bars are green (better than the
 baseline), grey (the baseline) or orange (worse):
 
 ![A leaderboard with a baseline row](images/baseline-leaderboard.png)
 
-Here `tp=1` is production's own config, with only a flag that changes nothing
-on this mock engine, so its +0.9% is measurement noise; `tp=2` halves the
-throughput per GPU.
+Here `tp=1` matches production's config apart from a flag the mock engine
+ignores, so its +0.9% is measurement noise; `tp=2` halves the throughput per
+GPU.
 
 ### Two boards
 
-Some campaigns show two boards, and the top one decides:
+Some campaigns show two boards; the top one decides:
 
 - **The policy's finalists, measured again**, in a policy campaign: the configs
   the policy named as its best, launched and measured by the platform itself
@@ -56,99 +57,101 @@ Some campaigns show two boards, and the top one decides:
 
 ## Runs
 
-The **Runs** tab lists every run: its status, why it failed if it did, which
-of the machine's cards it had (`#0 #1`), the endpoint it served on, when it
-started and how long it took. In a policy campaign, **Role** says whether a
-row is an engine the policy asked for, the benchmark of one, or a finalist.
-Click a row for the details:
+The **Runs** tab lists every run: its status, the failure kind if it failed,
+the machine's GPUs it held (`#0 #1`), its endpoint, when it started and how
+long it took. In a policy campaign, each trial is one row (**Role** *trial*)
+with its benchmark run nested under it, and *finalist* rows are the platform's
+final measurements. Click a row for the details:
 
 ![A run's details](images/campaign-run-drawer.png)
 
-- **For a failed run, first:** what went wrong, and the kind of failure.
-- **The verdict box:** which benchmark measured it, which metric ranked it,
-  its score, and whether it held the redlines.
-- **What the objective looked at:** the values of the target metric and every
-  redline metric.
-- **Config:** the full set of engine settings, fixed ones included.
-- **Launch command** (folded; click to open it): exactly what was started. On
-  Kubernetes it is the manifest that was applied; over ssh, the `docker run`
-  line.
+- **Error** (failed runs, shown first): what went wrong, and the failure kind.
+- **Verdict:** the benchmark that measured it, the ranking metric, its score,
+  and whether it held the redlines.
+- **What the objective looked at:** the target metric and every redline
+  metric.
+- **Engine command:** the engine's command line for this config, with a
+  **Copy** button, followed by the image and weights path.
+- **Config:** the full set of engine settings, including fixed ones.
+- **Launch command, as applied** (collapsed): exactly what was started. On
+  Kubernetes, the applied manifest; over ssh, the `docker run` line.
 - **Results:** everything LLMBench reported, under **Metrics**.
-- **Captured log:** the engine's own output, live while the run is going and
-  its end once it has finished. **Download** saves it.
+- **Captured log:** the engine's output, live while the run is active and its
+  end after it finishes. **Download** saves it.
 
 [Runs and failures](runs.md) explains the statuses and failure kinds.
 
 ## Configuration
 
-**Configuration** shows the campaign as it was created: every setting, the
-launch extras, the search space and the objective, each with a copy button.
-Editing the search space or objective it was made from afterwards changes
-nothing here.
+**Configuration** shows the campaign as created: every setting, the launch
+extras, the search space and the objective, each with a copy button. Later
+edits to the original search space or objective do not change it.
 
 ![The Configuration tab](images/campaign-configuration.png)
 
 **Difference from production** lists flags that production's recorded
-baseline sets and this campaign never does. Each one is a difference the
-results don't account for.
+baseline sets and this campaign does not. The results do not account for
+these differences.
 
 ## Candidates
 
-**Candidates** lists every config in the search space and what became of it:
+**Candidates** lists every config in the search space and its outcome:
 
 | status | means |
 |---|---|
-| **queued** | waiting for a free machine |
+| **queued** | waiting for a machine |
 | a run state, such as **benching** | being measured now |
 | **benchmarked** | measured; its score is on the leaderboard |
 | **failed** | every attempt failed; the reason is next to it |
 | **stopped** | its run was stopped |
 | **rejected** | the static check refused it before launch (for example, more GPUs than any machine has) |
 
-The map on top shows the space and how its candidates pack onto the machines
-("3 rounds of 4 cards, widest first"). Click a row to open its run.
-**Fixed in every candidate** lists the settings that never change.
+The map at the top shows the space and how its candidates fit on the machines
+("3 rounds of 4 cards, widest first"). Click a row to open its run. **Fixed in
+every candidate** lists the settings that never change.
 
 ![The Candidates tab](images/campaign-candidates.png)
 
 ## The report
 
-**Report** writes the campaign up as Markdown: the objective and model, a
-verdict, a table of results against production, the configs that crossed a
-redline, the failures, and suggested next steps. **Copy markdown** puts it on
-the clipboard for a ticket or a chat.
+**Report** summarizes the campaign as Markdown: the objective and model, a
+verdict, results against production, configs that crossed a redline,
+failures, and suggested next steps. **Copy markdown** copies it to the
+clipboard.
 
 ![The campaign report](images/campaign-report.png)
 
-It does not call a win it cannot back. A lead smaller than the measurement
-noise is reported as *no meaningful difference*. When repeated measurements of
-the same config disagree by more than the lead, it is *unstable*. When
-production's config was not measured in the campaign (there is no
+The report does not claim a win the data does not support. A lead smaller
+than the measurement noise is reported as *no meaningful difference*; when
+repeated measurements of the same config disagree by more than the lead, the
+result is *unstable*. When production's config was not measured (no
 [baseline](baselines.md) for the model), the report says so.
 
 ## Comparing campaigns
 
-Two results compare only when they were measured the same way:
+Two results are comparable only when measured the same way:
 
 - **the same benchmark**: the same workload always maps to the same LLMBench
   benchmark, named on the **Benchmark** step and in each run's details;
 - **the same card type**;
 - for a replay, **the same dataset sample**.
 
-Numbers from different workloads are different measurements, even when the
+Results from different workloads are different measurements, even when the
 metric has the same name.
 
-## Taking the winner to production
+## Deploying the winner
 
-The winner is a run like any other. Its details have:
+Click the top row of the leaderboard. The run details show:
 
-- the full **Config** and the exact **Launch command**;
-- the **image**, on the **Configuration** tab;
-- the engine version and image digest it ran with, in its results.
+- the **Engine command**, with a **Copy** button: the engine's command line
+  for the winning config, as it runs inside the image with the weights at
+  `/model`;
+- the **Image** and **Weights** path;
+- the engine version and image digest, in the results.
 
-Apply those to your serving deployment, by hand or from your own pipeline.
-Then record the new config on [Baselines](baselines.md), so the next campaign
-measures against it.
+Apply these to the serving deployment, by hand or from a pipeline. Then update
+the baseline on [Baselines](baselines.md), so the next campaign measures
+against the new production config.
 
 ---
 

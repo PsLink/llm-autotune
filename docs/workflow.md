@@ -1,60 +1,63 @@
 # How it works
 
-For anyone deciding whether LLM AutoTune solves their problem; no code. The
-engineering view: [Architecture](architecture.md). 中文：[产品视角](workflow.zh.md)
+The product view, without code. For the engineering view, see
+[Architecture](architecture.md).
 
-## The problem
+## Problem
 
-How well an LLM serves depends on a pile of engine settings: how many GPUs one
-copy spans, how much memory it reserves, which scheduler and decoding options
-are on. The right values differ per model and per GPU, they interact, and the
-only way to know is to try them. LLM AutoTune does the trying: on real GPUs,
-measured the same way every time, ranked against what production runs today.
+LLM serving performance depends on many engine settings: how many GPUs one
+model replica spans, how much memory it reserves, which scheduler and decoding
+options are enabled. The best values differ per model and GPU type, the
+settings interact, and the only reliable way to compare them is to measure
+them. LLM AutoTune runs those measurements on real GPUs, the same way for
+every config, and ranks the results against the configuration production
+runs today.
 
-## A campaign, end to end
+## Campaign lifecycle
 
-![Define, lend machines, tune night after night, read the report, roll out the winner](assets/campaign-journey.svg)
+![Define, lease machines, tune in nightly windows, read the report, deploy the winner](assets/campaign-journey.svg)
 
 1. **Define** the model and engine, the **search space** (the settings and
    values to try), the **objective** (one metric to improve, plus **redlines**
    such as a latency limit that a config must hold), and a schedule.
-2. **Lend machines.** Production machines join for a nightly window, or a
-   Kubernetes cluster lends idle GPUs.
+2. **Lease machines.** Production machines are leased to the platform for a
+   nightly window, or a Kubernetes cluster provides idle GPUs.
 3. **Tune.** A **policy**, the search algorithm, picks configs; the platform
    runs and measures them. A large search spans several nights and resumes
    where it stopped.
-4. **Read the report** each morning.
-5. **Roll out** the winner with its exact launch command and image.
+4. **Read the report** after each window.
+5. **Deploy** the winner using its engine command and image.
 
-## One night
+## A tuning window
 
 ![Lease, baseline, search until the deadline, validate the best, hand back](assets/tuning-night.svg)
 
-The machine is leased to the platform free. The platform first measures
-production's own config as the **baseline** to beat. The policy searches until
-the deadline; the platform then re-measures the policy's best configs itself,
-stops its own runs, and hands the machine back. Nothing starts that cannot finish inside the window, and a measurement
-that decides anything gets its machine to itself.
+The machine is leased with nothing else running on its GPUs. The platform
+first measures production's config as the **baseline**. The policy searches
+until the deadline; the platform then re-measures the policy's best configs
+itself, stops its own runs, and returns the machine. No run starts unless it
+can finish inside the window, and a measurement that decides the result runs
+alone on its machine.
 
-## How a config earns its place
+## Evaluation stages
 
 ![Paper check, launch and health, benchmark, optional confirm, optional verify, winner](assets/eval-funnel.svg)
 
-Cheap checks run first, so the expensive ones are spent on configs that might
-win. A config that fails is recorded with why (crashed, out of memory, wrong
-answers, crossed a redline), and the policy sees that too.
+Cheap checks run first, so expensive benchmarks are spent only on configs that
+can win. A failed config is recorded with its cause (crash, out of memory,
+wrong answers, crossed redline), and the policy receives it as a result.
 
-## Testing against today's traffic
+## Replay datasets
 
-The most telling benchmark replays real production traffic, and that traffic
-changes month to month. So the replay dataset is **fresh across campaigns**
-(a new campaign can rebuild it from the latest traffic) and **frozen within
-one** (every config in a campaign faces the same requests). Each result records
-the dataset it ran on, so numbers from different datasets are never compared.
+The most representative benchmark replays production traffic, which changes
+over time. The replay dataset is therefore **fresh across campaigns** (a new
+campaign can rebuild it from recent traffic) and **frozen within one** (every
+config in a campaign receives the same requests). Each result records its
+dataset, so results from different datasets are never compared.
 
 ## The report
 
-Markdown that pastes into chat or a ticket:
+Each campaign produces a Markdown report:
 
 ```markdown
 # qwen3-8b-tp-sweep
@@ -80,17 +83,17 @@ Markdown that pastes into chat or a ticket:
 ## Suggested next steps
 ```
 
-It will not call a win it cannot back: a lead inside the noise band is
-reported as **no meaningful difference**, and repeats that disagree by more
-than the lead as **unstable**.
+The report does not claim a win the data does not support: a lead within the
+noise threshold is reported as **no meaningful difference**, and repeated
+measurements that disagree by more than the lead are reported as **unstable**.
 
-## What you can rely on
+## Guarantees
 
-- **Production is never touched.** The platform runs only on machines leased
-  to it, and stops only what it launched.
+- **Production workloads are not affected.** The platform runs only on
+  machines leased to it, and stops only what it launched.
 - **The platform measures.** Every config is benchmarked the same way, and a
   policy's own numbers never decide the result.
 - **Results are comparable.** One frozen dataset per campaign, production
   measured the same way, and the dataset recorded on every result.
 - **Everything is recorded.** Settings, versions, the exact launch command,
-  results and failure causes: enough to reproduce any run.
+  results and failure causes, enough to reproduce any run.

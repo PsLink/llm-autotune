@@ -1,26 +1,26 @@
 # Platform architecture
 
 How a campaign runs: what the platform does, and what the policy does. The
-contract a policy implements is the [policy API](policy-api.md). 中文：[平台架构](platform-architecture.zh.md)
+contract a policy implements is the [policy API](policy-api.md).
 
 ![LLM AutoTune overview: a campaign, a search loop between the policy and the platform, validation of the best against production, and the winner](diagrams/platform-overview.png)
 
-## The pieces
+## Components
 
 ![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the platform validates the best](diagrams/platform-architecture.svg)
 
-- **Browser** — operators create campaigns and watch them run.
-- **API** — one HTTP service: the REST API behind the UI, and the policy API
-  at `/api/policy/v1`.
-- **Supervisor** — the control loop. It wakes about every 10 seconds,
-  advances every piece of work one step, and commits. All state is in
-  **Postgres**, so a restart loses nothing ([architecture](../architecture.md)).
-- **GPU machines** — Kubernetes nodes, or machines reached over ssh, taken for
+- **Browser**: operators create campaigns and monitor them.
+- **API**: one HTTP service serving the REST API behind the UI, and the policy
+  API at `/api/policy/v1`.
+- **Supervisor**: the control loop. It runs about every 10 seconds, advances
+  each piece of work one step, and commits. All state is in **Postgres**, so a
+  restart loses nothing ([architecture](../architecture.md)).
+- **GPU machines**: Kubernetes nodes, or machines reached over ssh, used during
   a campaign's window. The platform starts the **policy container** and the
   **engines** (sglang or vLLM) on them.
-- **LLMBench** — the benchmark platform. It drives load against an engine and
-  returns the numbers.
-- **Plugins** — optional packages that add pages, API routes, scheduled steps
+- **LLMBench**: the benchmark platform. It sends load to an engine and returns
+  the metrics.
+- **Plugins**: optional packages that add pages, API routes, scheduled steps
   and search strategies ([plugins](../plugins.md)).
 
 ## The policy
@@ -57,11 +57,11 @@ own measurement, so results from different policies are comparable.
 Without a policy, the platform enumerates the search space itself; steps 3 to
 5 are the same.
 
-## Rules that keep results honest
+## Measurement rules
 
 - **The verdict is the platform's measurement**, on the campaign's pinned
   dataset. Nothing a policy reports about itself decides a ranking.
-- **A machine is leased free, and the platform stops only what it launched.**
+- **The platform stops only what it launched** on a leased machine.
 - **A container is confirmed gone before its GPUs are reused**, so a
   half-stopped engine cannot disturb the next run.
 - **Every result records the dataset it ran on**, so only comparable numbers

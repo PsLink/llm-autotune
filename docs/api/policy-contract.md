@@ -5,15 +5,14 @@ runs a night of tuning on a machine LLM AutoTune manages, and how the platform
 delivers its verdict.
 
 This document is the narrative version: what the calls mean, and what each side
-guarantees. For the one-page cheat sheet see [policy-api.md](policy-api.md)
-(中文：[policy-api.zh.md](policy-api.zh.md)); the interactive reference that
+guarantees. For the one-page summary see [policy-api.md](policy-api.md); the interactive reference that
 always matches the running build is **`/api/docs`**, section *policy sessions*.
 For real responses from a finished session see the
 Contract version: **1.1** (`/api/policy/v1`; see [Evolution](#evolution)).
 
 ---
 
-## The contract in one paragraph
+## Summary
 
 The platform starts your container on a GPU machine with a time budget and an
 API token. You dial out: fetch the manifest, heartbeat every 30 seconds, and
@@ -34,7 +33,7 @@ other night.
 
 ---
 
-## Who dials whom
+## Connection direction
 
 **You dial out. The platform never dials into your container.**
 
@@ -146,7 +145,7 @@ Field notes:
   (the container runs on the host network). If `gpus_visible_in_container` is
   true the cards are already visible to your process.
 - **`search_space`** — the campaign author's declared space, in the platform's
-  vocabulary (see [Configs](#configs)). `space_policy` says how strictly it
+  vocabulary (see [Config format](#config-format)). `space_policy` says how strictly it
   binds you: `allowed_if_declared` means you may step outside it — an unknown
   flag, a value off the grid — provided your `plan` says so.
 - **`objective`** — per suite: the metric the platform will reduce results to,
@@ -169,7 +168,7 @@ Field notes:
 
 ---
 
-## Heartbeat: liveness out, commands in
+## Heartbeat
 
 ```http
 POST /api/policy/v1/session/heartbeat
@@ -252,7 +251,7 @@ the UI simply moves `search_deadline` to *now* — your next heartbeat returns
 
 ---
 
-## The plan: honesty about what is tuned
+## The plan
 
 ```http
 PUT /api/policy/v1/session/plan
@@ -280,7 +279,7 @@ fit the machine's cards, a malformed value — the same `validate_config` every
 platform's own expansion faces).
 
 <a name="configs"></a>
-## Configs: one vocabulary, both directions
+## Config format
 
 Every config anywhere in this API is a **flat JSON dict of engine args** in
 the platform's canonical spelling: snake_case keys (`tp_size`, not
@@ -301,7 +300,7 @@ launch.
 All optional. What is on tonight's menu is what the manifest's `services`
 object lists.
 
-### Delegated launch — "run this engine for me"
+### Delegated launch
 
 ```http
 POST /api/policy/v1/launches
@@ -332,7 +331,7 @@ DELETE /api/policy/v1/launches/31
 Concurrent launches on disjoint card sets are allowed. Expect launch → serving
 to take minutes (model load), never seconds.
 
-### Benchmarks — "measure this endpoint"
+### Benchmarks
 
 Two forms, one for each way an engine can exist:
 
@@ -363,7 +362,7 @@ the full replay `verify` suite is reserved for the platform's own validation.)
 A benchmark whose `approx_minutes` no longer fits before `search_deadline` is
 refused with `409` — do not start what cannot finish.
 
-### Trials — tell the platform what you measured
+### Trials
 
 ```http
 POST /api/policy/v1/trials
@@ -379,7 +378,7 @@ everything: trials are the observability stream the UI shows live, and the
 cross-night history your future self warm-starts from. Self-reported numbers
 are displayed with a *self* provenance badge and never rank anything.
 
-### Contenders — your best-so-far, kept current
+### Contenders
 
 ```http
 PUT /api/policy/v1/contenders
@@ -407,7 +406,7 @@ alive), and only asks you to serve one it *cannot* launch (a different engine
 image). `environment` is what makes a verdict *promotable* — fill it. The list
 freezes at finalize (`409` after).
 
-### State — warm-start across nights
+### State
 
 ```http
 PUT /api/policy/v1/state          # opaque blob, ≤16 MB, any content-type
@@ -417,7 +416,7 @@ GET /api/policy/v1/state
 Per campaign, not per session: night 2 reads what night 1 wrote. The platform
 never looks inside.
 
-### Events — narrate for the humans
+### Events
 
 ```http
 POST /api/policy/v1/events
@@ -429,7 +428,7 @@ into the session log; events are the curated channel.
 
 ---
 
-## The night, end to end
+## End-to-end sequence
 
 ```
 platform: container up ──► you: manifest, handshake, plan
@@ -500,7 +499,7 @@ from their specs, time permitting. Either way the machine's own guarantees
 
 1. **The verdict is the platform's measurement**, on the platform-pinned
    verify dataset, of what you served. Nothing you report ranks a leaderboard.
-2. **Deadlines are honest**: `search_deadline` always leaves the reserved
+2. **Deadlines include the reserve**: `search_deadline` always leaves the reserved
    validation time before `hard_deadline`; both arrive on every heartbeat.
 3. **Your configs are never silently rewritten** — canonicalized and echoed,
    deviations badged, safety rejections explained.
@@ -523,7 +522,7 @@ from their specs, time permitting. Either way the machine's own guarantees
 ## Related
 
 - `/api/docs` on your install — every endpoint with schemas.
-- [Machine Lease API](machine-lease.md) — how the machine itself is lent to
+- [Machine Lease API](machine-lease.md) — how the machine itself is leased to
   the platform; a policy session always lives inside a lease and a campaign
   window.
 - The SDK in [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies) (`autotune_policy/`)
