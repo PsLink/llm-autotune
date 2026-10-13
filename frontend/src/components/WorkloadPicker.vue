@@ -8,13 +8,15 @@
  *  created. Naming an existing benchmark stays possible, as the third choice.
  */
 import { computed, ref, watch } from 'vue'
-import { api, type DatasetProfile } from '../api/client'
+import { api, type DatasetProfile, type FrozenDataset } from '../api/client'
 import { specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
 import DatasetDialog from './DatasetDialog.vue'
 import InfoHint from './InfoHint.vue'
 
 const props = defineProps<{
   profiles: DatasetProfile[]
+  /** Frozen datasets on LLMBench: files that never change. */
+  frozen?: FrozenDataset[]
   benchmarks: BenchmarkChoice[]
   /** The second stage is a replay or an existing benchmark, never a sweep. */
   noSweep?: boolean
@@ -31,7 +33,26 @@ const newDatasetOpen = ref(false)
 
 function onDatasetSaved(name: string) {
   w.value.dataset_profile = name
+  w.value.dataset_frozen = ''
   emit('datasets-changed')
+}
+
+/** One dropdown for both kinds: a rolling profile by its name, a frozen
+ *  dataset as `frozen:<name>`. */
+const FROZEN = 'frozen:'
+const datasetChoice = computed({
+  get: () => (w.value.dataset_frozen ? FROZEN + w.value.dataset_frozen : w.value.dataset_profile),
+  set: (value: string) => {
+    const frozen = value.startsWith(FROZEN)
+    w.value.dataset_frozen = frozen ? value.slice(FROZEN.length) : ''
+    w.value.dataset_profile = frozen ? '' : value
+  },
+})
+
+function frozenNote(d: FrozenDataset): string {
+  const size = d.records != null ? `${d.records.toLocaleString()} requests` : ''
+  const from = d.origin === 'upload' ? 'imported' : 'frozen'
+  return [size, from].filter(Boolean).join(' · ')
 }
 
 /** What the workload becomes on LLMBench, from the API — so the page can
@@ -127,16 +148,32 @@ function profileNote(p: DatasetProfile): string {
             traffic from the gateway's logs (<b>Automatic Tuning ▸ Datasets</b>); without
             one, the 20-request example set is used, which proves the pipeline but
             measures nothing. A campaign keeps the sample it started with, so every
-            candidate sees the same requests.
+            candidate sees the same requests. A <b>frozen</b> dataset never changes at all,
+            so campaigns that replay it compare across nights; import one on LLMBench.
           </InfoHint></span>
-        <el-select v-model="w.dataset_profile" size="small" filterable
+        <el-select v-model="datasetChoice" size="small" filterable
           :empty-values="[null, undefined]">
           <el-option value="" label="Example set (20 requests)" />
-          <el-option v-for="p in profiles" :key="p.name" :value="p.name"
-            :label="p.display_name || p.name">
-            <span>{{ p.display_name || p.name }}</span>
-            <span class="muted opt-help">{{ profileNote(p) }}</span>
-          </el-option>
+          <el-option-group v-if="frozen?.length" label="Rolling samples">
+            <el-option v-for="p in profiles" :key="p.name" :value="p.name"
+              :label="p.display_name || p.name">
+              <span>{{ p.display_name || p.name }}</span>
+              <span class="muted opt-help">{{ profileNote(p) }}</span>
+            </el-option>
+          </el-option-group>
+          <template v-else>
+            <el-option v-for="p in profiles" :key="p.name" :value="p.name"
+              :label="p.display_name || p.name">
+              <span>{{ p.display_name || p.name }}</span>
+              <span class="muted opt-help">{{ profileNote(p) }}</span>
+            </el-option>
+          </template>
+          <el-option-group v-if="frozen?.length" label="Frozen (never changes)">
+            <el-option v-for="d in frozen" :key="d.name" :value="FROZEN + d.name" :label="d.name">
+              <span>{{ d.name }}</span>
+              <span class="muted opt-help">{{ frozenNote(d) }}</span>
+            </el-option>
+          </el-option-group>
           <template #footer>
             <el-button link type="primary" size="small" @click="newDatasetOpen = true">
               New dataset…</el-button>

@@ -254,6 +254,21 @@ def list_builds(profile_id: int, limit: int = 20):
     return {"builds": rows}
 
 
+# One frozen dataset, as an import from another installation would leave it.
+FROZEN = {
+    "name": "mock-frozen", "path": "/app/dataset/replay/frozen/mock-frozen.jsonl.gz",
+    "bytes": 2048, "records": 20, "sha256": "f" * 64,
+    "frozen_at": "2026-01-01T00:00:00Z", "source_profile": "mock-traffic",
+    "source_build_id": "20260101T000000Z", "window_start": None, "window_end": None,
+    "frozen_by": "admin", "origin": "upload", "used_by": [],
+}
+
+
+@app.get("/replay-datasets/frozen")
+def list_frozen():
+    return {"frozen": [FROZEN], "collector_configured": True}
+
+
 @app.get("/replay-datasets/builds/{build_row_id}")
 def get_build(build_row_id: int):
     row = _builds.get(build_row_id)

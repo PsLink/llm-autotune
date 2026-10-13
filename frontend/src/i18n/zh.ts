@@ -282,6 +282,8 @@ const zh: typeof en = {
       failed: '{n} 个失败',
       notPinned: '尚未固定',
       datasetTip: '回放 run 使用的流量样本，在整个 campaign 中保持不变，分数才可比。',
+      frozen: '冻结',
+      frozenTip: 'LLMBench 上的冻结数据集：一个永不改变的文件，因此本 campaign 以及其他回放它的 campaign 中的每个 run 看到的请求都相同。',
     },
     tabs: {
       leaderboard: '排行榜',

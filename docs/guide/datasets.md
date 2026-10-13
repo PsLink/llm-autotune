@@ -107,6 +107,29 @@ leaving the wizard.
 all), and **Concurrency** sets how many are in flight at once
 ([Creating a campaign](campaigns.md#4-benchmark)).
 
+## Frozen datasets
+
+A frozen dataset is a file on LLMBench that never changes: a sample frozen
+there, or a dataset imported from another installation (an import is always
+frozen). Every campaign that replays one sees exactly the same requests, on
+every night, so their results compare with each other; there is nothing to
+pin and nothing to resample.
+
+- **Frozen datasets**, below the list, shows them: how many requests, the size,
+  where each came from (the profile and sample it was taken from), when it was
+  frozen, and the campaigns here that replay it. *imported* marks an import.
+- To use one, choose it under **Frozen** in the **Replay** dataset list of a
+  campaign's workload. The campaign page shows it as the replay dataset.
+- **Import or download on LLMBench** opens LLMBench's datasets page, where an
+  admin freezes a sample, downloads a frozen dataset or a sample's file, and
+  **Import…** brings a downloaded file into another installation.
+
+To replay another installation's traffic here: on that installation's
+LLMBench, download the sample (or the frozen dataset) from its datasets page;
+on this one's, **Import…** the file. It then appears under **Frozen
+datasets** and in the workload's list. This needs an LLMBench whose service
+accounts may read frozen datasets.
+
 ---
 
 ← [Objectives](objectives.md) · [User guide](README.md) · Next: [Search policies](policies.md) →

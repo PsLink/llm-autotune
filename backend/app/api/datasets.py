@@ -170,6 +170,41 @@ async def list_datasets(
     }
 
 
+_FROZEN_FIELDS = ("name", "records", "bytes", "sha256", "frozen_at", "source_profile",
+                  "source_build_id", "window_start", "window_end", "origin", "used_by")
+
+
+@router.get("/frozen", summary="Frozen datasets on LLMBench")
+async def frozen_datasets(
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """LLMBench's frozen datasets: files that never change, frozen from a build
+    there or imported from another installation (an import is always frozen).
+    A replay workload can name one, and every run of every campaign that does
+    replays exactly the same requests, with nothing to pin. Imported and
+    managed on LLMBench (`llmbench_url`); `campaigns` are the ones here that
+    replay each, `used_by` the LLMBench benchmarks that do."""
+    datasets = await _call(lambda: DatasetProfileClient().frozen())
+    campaigns = list(
+        (await db.execute(select(Campaign).where(Campaign.dataset_frozen != ""))).scalars()
+    )
+    web = (get_settings().llmbench_web_url or "").rstrip("/")
+    return {
+        "frozen": [
+            {
+                **{k: d.get(k) for k in _FROZEN_FIELDS},
+                "campaigns": [
+                    {"id": c.id, "name": c.name, "status": c.status}
+                    for c in campaigns if c.dataset_frozen == d.get("name")
+                ],
+            }
+            for d in datasets
+        ],
+        "llmbench_url": web,
+    }
+
+
 @router.post("/check", summary="Count what an unsaved dataset's filters match")
 async def check(form: DatasetForm, _user: User = Depends(get_current_user)):
     """How many requests in the last day match the form's model, nodes and

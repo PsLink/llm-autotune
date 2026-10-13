@@ -11,6 +11,7 @@ import {
   api,
   type DatasetBuildState,
   type DatasetList,
+  type FrozenDataset,
   type ReplayDataset,
 } from '../api/client'
 import DatasetDialog from '../components/DatasetDialog.vue'
@@ -31,6 +32,12 @@ const builds = ref<Record<string, DatasetBuildState[] | null>>({})
 const datasets = computed(() => list.value?.datasets ?? [])
 const collecting = computed(() => datasets.value.some(inFlight))
 
+/** Frozen datasets: files on LLMBench that never change, frozen there from
+ *  a sample or imported from another installation. Read separately, so an
+ *  LLMBench that does not share them still shows the rolling ones. */
+const frozen = ref<FrozenDataset[]>([])
+const frozenError = ref('')
+
 async function load() {
   try {
     list.value = (await api.get('/datasets')).data
@@ -38,6 +45,25 @@ async function load() {
   } catch (error) {
     loadError.value = apiErrorText(error, 'Could not reach LLMBench')
   }
+  try {
+    frozen.value = (await api.get('/datasets/frozen')).data.frozen
+    frozenError.value = ''
+  } catch (error) {
+    frozen.value = []
+    frozenError.value = apiErrorText(error, 'Could not read the frozen datasets')
+  }
+}
+
+function openOnLlmbench() {
+  if (list.value?.llmbench_url) {
+    window.open(`${list.value.llmbench_url}/admin/replay-datasets`, '_blank', 'noopener')
+  }
+}
+
+function size(bytes: number | null): string {
+  if (bytes == null) return '—'
+  const mb = bytes / (1 << 20)
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(mb < 10 ? 1 : 0)} MB`
 }
 
 // Every few seconds while a sample is being collected, otherwise every minute.
@@ -336,6 +362,65 @@ function bandRows(d: ReplayDataset): { band: string; count: number; share: numbe
       </template>
     </el-table>
 
+    <div class="header-row frozen-head">
+      <h2 class="section-title">Frozen datasets
+        <InfoHint :width="400">
+          Files on LLMBench that never change: a sample frozen there, or a dataset imported
+          from another installation (an import is always frozen). Every campaign that replays
+          one sees exactly the same requests, so their results compare across nights. Choose
+          one under <b>Replay</b> in a campaign's workload. Import and download them on
+          LLMBench's datasets page.
+        </InfoHint>
+      </h2>
+      <el-button v-if="list?.llmbench_url" link type="primary"
+        @click="openOnLlmbench">Import or download on LLMBench</el-button>
+    </div>
+    <el-alert v-if="frozenError" type="warning" :closable="false" show-icon class="banner"
+      :title="frozenError" />
+    <el-table v-else :data="frozen" row-key="name">
+      <el-table-column label="Name" min-width="200">
+        <template #default="{ row }">
+          <span class="mono">{{ row.name }}</span>
+          <el-tag v-if="row.origin === 'upload'" size="small" effect="plain" class="more">
+            imported</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="Requests" width="110">
+        <template #default="{ row }">{{ fmt(row.records) }}</template>
+      </el-table-column>
+      <el-table-column label="Size" width="90">
+        <template #default="{ row }">{{ size(row.bytes) }}</template>
+      </el-table-column>
+      <el-table-column label="From" min-width="220">
+        <template #default="{ row }">
+          <span v-if="row.source_profile || row.source_build_id" class="mono tiny">
+            {{ row.source_profile }}<template v-if="row.source_build_id"> / {{ row.source_build_id }}</template>
+          </span>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="Frozen" width="130">
+        <template #default="{ row }">
+          <span :title="exactTime(row.frozen_at)">{{ relativeTime(row.frozen_at) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="Campaigns" min-width="180">
+        <template #default="{ row }">
+          <template v-if="row.campaigns.length">
+            <router-link v-for="(c, i) in row.campaigns" :key="c.id" :to="`/campaigns/${c.id}`"
+              class="campaign-link">{{ c.name }}{{ i < row.campaigns.length - 1 ? ', ' : '' }}</router-link>
+          </template>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
+      <template #empty>
+        <div class="empty muted">
+          No frozen datasets. Freeze a sample, or import a dataset downloaded from another
+          installation, on LLMBench's datasets page.
+        </div>
+      </template>
+    </el-table>
+
     <DatasetDialog v-model="dialogOpen" :dataset="editing" @saved="load" />
   </div>
 </template>
@@ -349,6 +434,8 @@ function bandRows(d: ReplayDataset): { band: string; count: number; share: numbe
   margin-bottom: 12px;
 }
 .banner { margin-bottom: 12px; }
+.frozen-head { margin-top: 32px; align-items: center; }
+.section-title { font-size: 16px; font-weight: 600; margin: 0; }
 .empty { padding: 24px; line-height: 1.6; }
 .collecting { display: flex; align-items: center; gap: 6px; }
 .clip { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

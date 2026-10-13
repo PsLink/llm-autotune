@@ -184,3 +184,62 @@ def test_older_benchmarks_of_ours_are_filed_and_others_left_alone(mock_llmbench)
     for slug in filed:
         assert mock_llmbench.get_benchmark(slug)["group_tags"] == [GROUP_TAG]
     assert file_untagged(mock_llmbench) == [], "already filed: nothing to do twice"
+
+
+# -- frozen datasets -----------------------------------------------------------------
+
+
+def test_a_replay_of_a_frozen_dataset_replays_its_file(mock_llmbench):
+    spec = bs.BenchmarkSpec(kind="replay", dataset_frozen="mock-frozen", requests=0)
+    params = bs.document(spec, mock_llmbench)["modules"][0]["params"]
+    assert (params["dataset_source"], params["dataset_path"]) == (
+        "fixed", llmbench_mock.FROZEN["path"])
+    assert "dataset_profile" not in params
+    assert "mock-frozen" in spec.title
+    # A different dataset is a different benchmark.
+    assert spec.slug != bs.BenchmarkSpec(kind="replay", requests=0).slug
+
+    with pytest.raises(bs.BenchmarkRefused, match="no frozen dataset named gone"):
+        bs.document(bs.BenchmarkSpec(kind="replay", dataset_frozen="gone"), mock_llmbench)
+
+
+def test_replays_written_before_frozen_datasets_keep_their_slug():
+    import hashlib
+    import json
+
+    before = {"kind": "replay", "dataset_profile": "prod-sample", "requests": 500,
+              "concurrency": 16}
+    digest = hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest()[:8]
+    assert bs.BenchmarkSpec(kind="replay", dataset_profile="prod-sample").slug == (
+        f"autotune-replay-{digest}")
+
+
+def test_a_replay_names_one_dataset():
+    with pytest.raises(ValueError, match="not both"):
+        bs.BenchmarkSpec(kind="replay", dataset_profile="a", dataset_frozen="b")
+
+
+async def test_a_campaign_replaying_a_frozen_dataset_records_it_and_pins_nothing(
+    client, monkeypatch
+):
+    replay = {"kind": "replay", "dataset_frozen": "prod-q36"}
+    response = await client.post("/api/campaigns", json=_body(benchmark_spec=replay))
+    assert response.status_code == 200, response.text
+    out = response.json()
+    assert out["benchmark_slug"] == bs.BenchmarkSpec(**replay).slug
+    assert (out["dataset_frozen"], out["dataset_profile"]) == ("prod-q36", "")
+
+    from app.api import datasets as datasets_api
+
+    class _Frozen:
+        def frozen(self):
+            return [{"name": "prod-q36", "records": 1000, "origin": "upload",
+                     "path": "/x/prod-q36.jsonl.gz", "used_by": ["AutoTune replay"]},
+                    {"name": "other", "records": 5}]
+
+    monkeypatch.setattr(datasets_api, "DatasetProfileClient", _Frozen)
+    listed = {d["name"]: d for d in (await client.get("/api/datasets/frozen")).json()["frozen"]}
+    assert [c["name"] for c in listed["prod-q36"]["campaigns"]] == ["c"]
+    assert listed["prod-q36"]["origin"] == "upload"
+    assert listed["other"]["campaigns"] == []
+    assert "path" not in listed["prod-q36"]  # LLMBench's own business
