@@ -197,8 +197,14 @@ selects which object the platform creates.
 `runLogs` (on by default) keeps complete engine logs as files: the worker
 writes them and the API serves them, so the claim needs a `ReadWriteMany`
 storage class. On a cluster without one, set `runLogs.enabled=false`. The UI
-still shows logs: the end of every engine log is stored in the database, and
-a running engine's log is read from the cluster.
+still shows logs: the end of every engine and policy log is stored in the
+database, and a running container's log is read from the cluster.
+
+While a container runs, the worker saves the end of its log every two minutes,
+each save replacing the last, so a pod that is evicted or lost before its run
+ends still leaves its last lines. A saved log is the last 2,000 lines, at most
+1 MB (`AUTOTUNE_LOG_SNAPSHOT_SECONDS`, `AUTOTUNE_LOG_LINES`,
+`AUTOTUNE_LOG_FILE_MAX_BYTES`).
 
 Postgres is a StatefulSet by default. To use a database you already run:
 

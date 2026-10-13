@@ -283,11 +283,22 @@ async def policy_session_log(
             return f.read()
     if session.log_tail:
         return session.log_tail
+    # Read when the container died, by a worker that kept nothing else.
+    death_logs = (session.env_snapshot or {}).get("death_logs")
+    if death_logs:
+        return str(death_logs)
     if not session.terminal:
         return "(no log yet — the policy container is still starting)"
+    if session.first_heartbeat_at is None:
+        return (
+            f"(No log: the policy container of session {session_id} never reached the "
+            "platform, so it may never have started. Its error and the campaign's "
+            "Activity log say why.)"
+        )
     return (
-        f"(The policy container of session {session_id} printed nothing, or never started. "
-        "The campaign's Activity log shows what the policy asked for and what the platform did.)"
+        f"(No log was kept for session {session_id}: its container was gone before the "
+        "platform could read it. The campaign's Activity log shows what the policy asked "
+        "for and what the platform did.)"
     )
 
 

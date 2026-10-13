@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.control.launch.base import DeploymentHandle, WorkloadSpec, WorkloadState
 from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
+from app.control.orchestrator.container_logs import clip
 from app.control.orchestrator.lifecycle import as_utc, now
 from app.control.orchestrator.policy_lifecycle import (
     contender_minutes,
@@ -890,12 +891,18 @@ class PolicySessionEngine:
         """Persist the policy container's stdout+stderr (docker logs merges both)
         to a servable file. Best-effort: diagnostics never fail a teardown."""
         try:
-            text = driver.logs(handle, tail=2000)
+            text = driver.logs(handle, tail=self.sup.settings.log_lines) or ""
         except Exception:
             logger.exception("policy log capture for session %d failed", session.id)
             return
-        if not text:
+        self._store_policy_log(session, text)
+
+    def _store_policy_log(self, session: PolicySession, text: str) -> None:
+        """Keep a read of the policy's log, replacing the one before. An empty
+        read keeps what was saved before: the container may already be gone."""
+        if not text.strip():
             return
+        text = clip(text, self.sup.settings.log_file_max_bytes)
         # Kept in the row as well: the file is on the worker's disk, which the
         # API reads only when the two share a volume.
         session.log_tail = text[-64_000:]
@@ -908,17 +915,12 @@ class PolicySessionEngine:
             # The row has it; an unwritable disk must not stop the teardown.
             logger.exception("could not write the log file of policy session %d", session.id)
 
-    def _capture_death_logs(self, db: Session, session: PolicySession) -> str:
-        """Best-effort tail of a dead policy container's stdout, read BEFORE
-        teardown's `docker rm -f` destroys it.
-
-        For a policy that exits before its first heartbeat, this log is the only
-        evidence of why (a non-retryable call, a bad env, a crash on boot); the
-        platform otherwise records `container_died` with no cause. Never raises
-        — diagnostics are never worth failing the fail path for."""
+    def _workload_handle(self, db: Session, session: PolicySession):
+        """The driver and handle of the session's policy container, or None
+        when it has no machine or container (yet)."""
         machine = db.get(Machine, session.machine_id) if session.machine_id else None
         if machine is None or not session.container_name:
-            return ""
+            return None
         info = self.sup._machine_info(machine)
         driver = self.sup._driver_for(info)
         handle = DeploymentHandle(
@@ -928,11 +930,52 @@ class PolicySessionEngine:
             endpoint_url="",
             workload=True,  # a policy container, not an engine service
         )
-        try:
-            return (driver.logs(handle, tail=200) or "").strip()
-        except Exception:
-            logger.exception("reading death logs for policy session %d failed", session.id)
-            return ""
+        return driver, handle
+
+    def with_container(self, db: Session) -> list[PolicySession]:
+        """Live sessions whose policy container should be running now."""
+        return list(
+            db.scalars(
+                select(PolicySession).where(
+                    PolicySession.status.in_([
+                        PolicySessionStatus.STARTING.value,
+                        PolicySessionStatus.SEARCHING.value,
+                        PolicySessionStatus.FINALIZING.value,
+                    ]),
+                    PolicySession.container_name.is_not(None),
+                    PolicySession.container_name != "",
+                )
+            ).all()
+        )
+
+    def snapshot_log(self, db: Session, session: PolicySession) -> None:
+        """Save the end of a running policy's log (see container_logs.py)."""
+        found = self._workload_handle(db, session)
+        if found is not None:
+            driver, handle = found
+            self._store_policy_log(
+                session, driver.logs(handle, tail=self.sup.settings.log_lines) or ""
+            )
+
+    def _capture_death_logs(self, db: Session, session: PolicySession) -> str:
+        """Best-effort tail of a dead policy container's stdout, read BEFORE
+        teardown's `docker rm -f` destroys it.
+
+        For a policy that exits before its first heartbeat, this log is the only
+        evidence of why (a non-retryable call, a bad env, a crash on boot); the
+        platform otherwise records `container_died` with no cause. When the
+        container is already gone, the last snapshot of its log stands in.
+        Never raises — diagnostics are never worth failing the fail path for."""
+        text = ""
+        found = self._workload_handle(db, session)
+        if found is not None:
+            driver, handle = found
+            try:
+                text = driver.logs(handle, tail=self.sup.settings.log_lines) or ""
+            except Exception:
+                logger.exception("reading death logs for policy session %d failed", session.id)
+        self._store_policy_log(session, text)
+        return (session.log_tail or "").strip()
 
     def _fail_toward_validation(
         self, db: Session, session: PolicySession, failure_class: str, error: str

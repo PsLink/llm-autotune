@@ -99,6 +99,14 @@ class Settings(BaseSettings):
 
     worker_tick_seconds: int = 10
     run_log_dir: str = "./runs"
+    # Engine and policy logs. While a container runs, the worker saves the end
+    # of its log again every log_snapshot_seconds (0 = only when it ends), so a
+    # pod that vanishes (evicted, its node lost, the worker restarted) still
+    # leaves its last lines. Each save replaces the one before: the last
+    # log_lines lines, at most log_file_max_bytes on disk.
+    log_snapshot_seconds: int = 120
+    log_lines: int = 2000
+    log_file_max_bytes: int = 1_000_000
     # Window a run reserves when its length can be neither measured (no run of
     # this campaign has finished yet) nor estimated from the benchmark's own
     # parameters (a replay with no time cap, an unknown module). Generous: a

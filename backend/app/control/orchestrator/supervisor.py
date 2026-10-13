@@ -39,6 +39,7 @@ from app.control.launch.failures import (
 )
 from app.control.orchestrator import schedule as sched
 from app.control.orchestrator import timing
+from app.control.orchestrator.container_logs import Snapshots, clip
 from app.control.orchestrator.groups import members_by_rank
 from app.control.orchestrator.lifecycle import (
     USER_STOP_ERROR,
@@ -250,6 +251,11 @@ class Supervisor:
         self._datasets_checked_at = float("-inf")
         self.settings = get_settings()
         self._policy_engine = None
+        # Live containers' logs, saved again every few minutes (container_logs.py).
+        self._log_snapshots = Snapshots()
+        # Runs whose final log was read on the way to _finish (a crash, a failed
+        # benchmark), so _finish does not read it a second time.
+        self._final_logs: set[int] = set()
 
     @property
     def datasets(self) -> DatasetProfileClient:
@@ -287,6 +293,7 @@ class Supervisor:
             self._schedule(session)
             self._advance_runs(session)
             self._enforce_windows(session)
+            self._snapshot_logs(session)
             # Last: confirm the containers finished this tick are actually gone
             # (freeing their machines) and escalate any that will not die. Runs
             # after teardown so a run killed this tick is reaped the same tick
@@ -2161,6 +2168,7 @@ class Supervisor:
             # best-effort (never fails the run).
             self._capture_engine_log(session, run)
             cleaned = self._begin_teardown(session, run)
+        self._final_logs.discard(run.id)
         if error:
             run.error = error
         run.finished_at = _now()
@@ -2259,10 +2267,11 @@ class Supervisor:
         driver = self._driver_for(handle.machine) if handle is not None else self.driver
         log_text = ""
         try:
-            log_text = driver.logs(handle, tail=400)
+            log_text = driver.logs(handle, tail=self.settings.log_lines)
         except Exception:
             logger.exception("log capture for run %d failed", run.id)
         self._save_run_log(run, log_text)
+        self._final_logs.add(run.id)
         resolved_class = failure_class or classify_failure(log_text)
         # A container that never started leaves no log to classify (a bad model
         # mount, an unpullable image, an unschedulable pod). The substrate still
@@ -2305,35 +2314,71 @@ class Supervisor:
         difference between a diagnosable failure and an inferred one.
 
         Best-effort throughout: the container is the run's own (never a
-        baseline's production service), it is not re-captured if a crash during
-        launch already saved it, and a log we cannot read must never turn a real
-        verdict into a supervisor crash.
+        baseline's production service), it is not read again when a crash
+        already read it on the way here, and a log we cannot read must never
+        turn a real verdict into a supervisor crash.
         """
-        if run.kind in (RunKind.BASELINE.value, RunKind.EXTERNAL.value) or run.log_path:
+        if run.kind in (RunKind.BASELINE.value, RunKind.EXTERNAL.value):
             return  # no container of this run's own to read
-        log_text = ""
+        if run.id in self._final_logs:
+            return
+        self._final_logs.add(run.id)
         try:
-            spec = self._spec_for(session, run)
-            driver = self._driver_for(spec.machine)
-            handle = driver.attach(spec)
-            if handle is not None:
-                log_text = driver.logs(handle, tail=400)
+            self._save_run_log(run, self._read_engine_log(session, run))
         except Exception:
             logger.exception("engine log capture for run %d failed", run.id)
-        self._save_run_log(run, log_text)
+
+    def _read_engine_log(self, session: Session, run: Run) -> str:
+        spec = self._spec_for(session, run)
+        driver = self._driver_for(spec.machine)
+        handle = driver.attach(spec)
+        if handle is None:
+            return ""
+        return driver.logs(handle, tail=self.settings.log_lines) or ""
+
+    def _snapshot_logs(self, session: Session) -> None:
+        """Save the end of each live engine's and policy's log, every
+        `log_snapshot_seconds` and a few per tick, so a container that vanishes
+        before its final read still leaves its last lines."""
+        interval = self.settings.log_snapshot_seconds
+        if interval <= 0:
+            return
+        runs = session.scalars(
+            select(Run).where(
+                Run.status.in_([
+                    RunStatus.WAITING_READY.value, RunStatus.HEALTH_CHECK.value,
+                    RunStatus.BENCHING.value, RunStatus.SERVING.value,
+                ]),
+                Run.kind.not_in([RunKind.BASELINE.value, RunKind.EXTERNAL.value]),
+            )
+        ).all()
+        live: dict[tuple[str, int], object] = {("run", r.id): r for r in runs}
+        for policy_session in self._sessions().with_container(session):
+            live[("policy", policy_session.id)] = policy_session
+        for key in self._log_snapshots.due(list(live), interval):
+            self._log_snapshots.mark(key)
+            try:
+                if key[0] == "run":
+                    self._save_run_log(live[key], self._read_engine_log(session, live[key]))
+                else:
+                    self._sessions().snapshot_log(session, live[key])
+            except Exception:
+                logger.exception("saving the log of %s %d failed", *key)
 
     def _save_run_log(self, run: Run, log_text: str) -> None:
-        """Persist a captured container log and point the run at it. No-op on an
-        empty log, so a run whose log we could not read keeps log_path unset
-        rather than pointing at an empty file."""
-        if not log_text:
+        """Persist a captured container log and point the run at it, replacing
+        any earlier save. No-op on an empty log: a run whose log we could not
+        read keeps what was saved before, or log_path unset rather than
+        pointing at an empty file."""
+        if not log_text.strip():
             return
+        log_text = clip(log_text, self.settings.log_file_max_bytes)
         # In the row first: the file below is on this worker's disk, which the
         # API can read only when the two share a volume.
         run.log_tail = log_text[-LOG_TAIL_CHARS:]
-        os.makedirs(self.settings.run_log_dir, exist_ok=True)
         log_path = os.path.join(self.settings.run_log_dir, f"run-{run.id}.log")
         try:
+            os.makedirs(self.settings.run_log_dir, exist_ok=True)
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write(log_text)
         except OSError:

@@ -465,6 +465,84 @@ def test_a_benchmark_failure_without_a_readable_log_leaves_log_path_unset(monkey
         assert not run.log_path
 
 
+class _Clock:
+    """Stands in for time.monotonic in container_logs, moved by hand."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_a_running_engines_log_is_kept_and_outlives_its_pod(tmp_path, monkeypatch):
+    """A container's log was read only when its run ended, so a pod already
+    gone by then (evicted, its node lost) left nothing. The worker now saves the
+    end of each live engine's log every few minutes, and an empty final read
+    keeps that copy."""
+    from app.control.orchestrator import container_logs
+
+    clock = _Clock()
+    monkeypatch.setattr(container_logs.time, "monotonic", clock)
+    supervisor, factory = make_supervisor(
+        instant_ready=True, bench=PassEvaluator(polls_until_done=100)
+    )
+    monkeypatch.setattr(supervisor.settings, "run_log_dir", str(tmp_path))
+    printed = {"text": "loading weights\nserving on :28200\n"}
+    supervisor.driver.logs = lambda handle, tail=200: printed["text"]
+
+    for _ in range(3):
+        supervisor.tick()
+    assert _run_status(factory) == RunStatus.BENCHING.value
+    with factory() as session:
+        assert not session.scalars(select(Run)).first().log_tail  # not due yet
+
+    clock.now += supervisor.settings.log_snapshot_seconds
+    supervisor.tick()
+    with factory() as session:
+        run = session.scalars(select(Run)).first()
+        assert "serving on :28200" in run.log_tail
+        with open(run.log_path, encoding="utf-8") as f:
+            assert "serving on :28200" in f.read()
+
+    # The next save replaces the last: the end of the log as it is now.
+    printed["text"] = "serving on :28200\nrequest 4000 done\n"
+    clock.now += supervisor.settings.log_snapshot_seconds
+    supervisor.tick()
+    with factory() as session:
+        assert "request 4000 done" in session.scalars(select(Run)).first().log_tail
+
+    # The pod vanished; stopping the run reads nothing, and the copy stays.
+    printed["text"] = ""
+    _request_stop(factory)
+    supervisor.tick()
+    with factory() as session:
+        run = session.scalars(select(Run)).first()
+        assert run.status == RunStatus.KILLED.value
+        assert "request 4000 done" in run.log_tail
+
+
+def test_a_saved_log_is_bounded(tmp_path, monkeypatch):
+    """An engine can print gigabytes; what is kept is its end, cut at a line."""
+    supervisor, factory = make_supervisor(instant_ready=True, bench=BenchFailedEvaluator())
+    monkeypatch.setattr(supervisor.settings, "run_log_dir", str(tmp_path))
+    monkeypatch.setattr(supervisor.settings, "log_file_max_bytes", 1000)
+    lines = "".join(f"line {i:05d} " + "x" * 40 + "\n" for i in range(500))
+    supervisor.driver.logs = lambda handle, tail=200: lines + "the crash\n"
+
+    for _ in range(6):
+        supervisor.tick()
+        if _run_status(factory) == RunStatus.FAILED.value:
+            break
+    with factory() as session:
+        run = session.scalars(select(Run)).first()
+        with open(run.log_path, encoding="utf-8") as f:
+            kept = f.read()
+    assert kept.startswith("(earlier lines dropped)\nline ")
+    assert kept.endswith("the crash\n")
+    assert len(kept.encode()) <= 1000 + len("(earlier lines dropped)\n")
+
+
 def test_external_kill_classified_from_exit_code():
     supervisor, factory = make_supervisor(crash=True)
     supervisor.driver.exit_code = 137  # docker kill / SIGKILL
