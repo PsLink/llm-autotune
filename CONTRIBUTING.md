@@ -90,6 +90,11 @@ The deployment path is create-or-migrate (`app/db/bootstrap.py`): a fresh
 database is created from the models and stamped, an existing one is upgraded. A
 migration that only works on one of those paths is a bug.
 
+A migration only adds. An upgrade migrates before it replaces the pods, so for
+a while the previous release's code runs against the new schema: a new column
+must be nullable or have a server default, and a table or column is dropped
+(or renamed) only a release after the code stopped using it.
+
 ## Adding a search algorithm
 
 Don't add it to the platform. A search is a container that speaks the

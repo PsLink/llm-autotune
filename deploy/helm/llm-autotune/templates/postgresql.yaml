@@ -27,7 +27,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "llm-autotune.labels" . | nindent 8 }}
+        {{- include "llm-autotune.stableLabels" . | nindent 8 }}
         app.kubernetes.io/component: postgresql
     spec:
       containers:

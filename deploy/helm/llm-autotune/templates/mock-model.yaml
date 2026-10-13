@@ -19,7 +19,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "llm-autotune.labels" . | nindent 8 }}
+        {{- include "llm-autotune.stableLabels" . | nindent 8 }}
         app.kubernetes.io/component: mock-model
     spec:
       {{- with .Values.image.pullSecrets }}

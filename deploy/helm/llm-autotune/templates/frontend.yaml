@@ -49,6 +49,12 @@ spec:
             # short service name never resolves.
             - name: API_UPSTREAM
               value: {{ $fullName }}-api.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain | default "cluster.local" }}:8000
+          # It also proxies the API, which is the address policy containers
+          # call: same grace as the API's pods during a rolling upgrade.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "8"]
           readinessProbe:
             httpGet:
               path: /

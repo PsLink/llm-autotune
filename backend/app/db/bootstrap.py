@@ -20,6 +20,7 @@ reconciliation is owed and pretending otherwise would hide it.
 """
 
 import logging
+import sys
 import time
 
 from alembic.config import Config
@@ -93,7 +94,12 @@ BUILTIN_OBJECTIVES = [
 ]
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    """`--schema-only`: migrate and stop. The chart runs that before an
+    upgrade replaces any pod, so the new code never meets the old schema (it
+    answered 500 until the migration caught up). The full run, seeding
+    included, follows once the new release's settings are in place."""
+    args = sys.argv[1:] if argv is None else argv
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     settings = get_settings()
     engine = create_engine(settings.sync_database_url)
@@ -107,6 +113,8 @@ def main() -> None:
     enabled = plugins.enabled()
     for plugin in enabled:
         plugins.upgrade(plugin, settings.sync_database_url)
+    if "--schema-only" in args:
+        return
     _seed(engine)
     for plugin in enabled:
         if plugin.on_bootstrap is None:

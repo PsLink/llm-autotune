@@ -75,6 +75,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A run held up for a policy (*serving*) counts as live in the UI: it has a
   **Stop** button and is not counted as finished.
 
+- `helm upgrade` migrates the schema before it replaces any pod: a
+  `pre-upgrade` Job runs `app.db.bootstrap --schema-only`. The migration ran
+  after the new pods started, and for that half a minute the new API answered
+  500 against the old schema, which ended a policy session running through the
+  upgrade. Migrations must stay additive for this; CONTRIBUTING says so.
+- The bundled Postgres no longer restarts on every chart version: its pod
+  carried the chart's version label. With `postgresql.storage.enabled=false`
+  that restart emptied the database on every upgrade. The mock LLMBench and
+  the mock model's pods dropped the version label too.
+- The API and frontend pods keep serving for 8 seconds after they are told to
+  stop (`preStop`), so a rolling upgrade drops no request.
+- The API and worker restart when the Secret changes (a new LLMBench key or
+  admin password), as they already did for the ConfigMap.
+
 ## [0.2.2] - 2026-10-12
 
 ### Added
