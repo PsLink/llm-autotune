@@ -74,6 +74,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy container's teardown.
 - A run held up for a policy (*serving*) counts as live in the UI: it has a
   **Stop** button and is not counted as finished.
+- Engine and policy logs were read only once, when the container ended; a pod
+  already gone by then (evicted, its node lost, the worker restarting) left
+  no log. The worker now saves the end of every running container's log every
+  two minutes, and an empty final read keeps that copy. A policy that dies
+  after its pod is gone shows the last saved lines as its death log.
+- Saved logs are bounded: the last 2,000 lines (up from 400 for engines and
+  200 for a dead policy), at most 1 MB per file (`AUTOTUNE_LOG_SNAPSHOT_SECONDS`,
+  `AUTOTUNE_LOG_LINES`, `AUTOTUNE_LOG_FILE_MAX_BYTES`).
+- A running engine's log is read from its container first, not from the copy
+  saved minutes ago.
+- An empty log says why: a run whose pod the cluster never placed shows the
+  scheduler's reason (for example, not enough GPUs), and a policy log tells a
+  container that never reached the platform from one that was gone before it
+  could be read.
 
 - `helm upgrade` migrates the schema before it replaces any pod: a
   `pre-upgrade` Job runs `app.db.bootstrap --schema-only`. The migration ran

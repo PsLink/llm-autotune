@@ -3,6 +3,7 @@ campaign keeps a readable record of what the platform did, even one whose
 containers printed nothing."""
 
 import itertools
+from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -120,12 +121,31 @@ async def test_an_empty_log_says_why(client):
     printed_nothing = (await http.get("/runs/5/log")).text
     assert "printed nothing" in printed_nothing and "Activity" in printed_nothing
 
+    # A pod the cluster never placed: the log says what the scheduler said.
+    async with factory() as session:
+        session.add(Run(id=6, campaign_id=2, candidate_id=2, status="killed",
+                        launch_command="kubectl apply", waiting_since=datetime.now(UTC)))
+        session.add(Event(actor="worker", kind="run_waiting_for_cluster", campaign_id=2,
+                          run_id=6, payload={"reason": "0/9 nodes are available: "
+                                                       "1 Insufficient nvidia.com/gpu"}))
+        await session.commit()
+    never_placed = (await http.get("/runs/6/log")).text
+    assert "before the cluster started its engine" in never_placed
+    assert "Insufficient nvidia.com/gpu" in never_placed
+
     async with factory() as session:
         session.add(Policy(id=1, owner_id=1, name="p", image="p:1"))
         session.add(PolicySession(id=7, campaign_id=2, policy_id=1, status="aborted"))
+        session.add(PolicySession(id=8, campaign_id=2, policy_id=1, status="failed",
+                                  first_heartbeat_at=datetime.now(UTC)))
+        session.add(PolicySession(id=9, campaign_id=2, policy_id=1, status="failed",
+                                  env_snapshot={"death_logs": "Traceback: boom"}))
         await session.commit()
-    text = (await http.get("/policy-sessions/7/log")).text
-    assert "printed nothing, or never started" in text
+    assert "never reached the platform" in (await http.get("/policy-sessions/7/log")).text
+    assert "gone before the platform could read it" in (
+        await http.get("/policy-sessions/8/log")).text
+    # What was read as the container died is the log, when nothing else was kept.
+    assert (await http.get("/policy-sessions/9/log")).text == "Traceback: boom"
 
 
 def test_describe_survives_an_odd_payload():

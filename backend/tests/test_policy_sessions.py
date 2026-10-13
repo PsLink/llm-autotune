@@ -508,6 +508,37 @@ async def test_the_policy_container_log_is_captured_and_served(night, monkeypatc
     assert "search tick 1" in resp.text
 
 
+async def test_a_running_policys_log_is_kept_when_its_pod_vanishes(night, monkeypatch, tmp_path):
+    # A policy died and no log was kept: its pod was gone by the time the
+    # worker read it. The worker now saves the end of a running policy's log
+    # every few minutes, so a pod already gone when the death is noticed still
+    # leaves its story.
+    from app.control.orchestrator import container_logs
+    from app.core.config import get_settings
+
+    now = {"t": 1000.0}
+    monkeypatch.setattr(container_logs.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(get_settings(), "run_log_dir", str(tmp_path))
+    supervisor, driver, http = night
+    await _boot(supervisor, driver, http)
+    row = await _session_row(http)
+    driver.workload_logs[row.container_name] = "t1: launching\nGET /launches -> 500\n"
+
+    supervisor.tick()  # the clock starts
+    now["t"] += get_settings().log_snapshot_seconds
+    supervisor.tick()  # saved
+    assert "GET /launches -> 500" in (await _session_row(http)).log_tail
+
+    # Gone before the worker looks: nothing to read, and the snapshot stands in.
+    driver.workload_logs[row.container_name] = ""
+    driver.workload_states[row.container_name] = WorkloadState.EXITED
+    supervisor.tick()
+    row = await _session_row(http)
+    assert row.failure_class == "container_died"
+    assert "GET /launches -> 500" in row.env_snapshot["death_logs"]
+    assert "GET /launches -> 500" in row.log_tail
+
+
 async def test_a_graceful_exhaust_is_labelled_exhausted_not_deadline(night):
     """Regression: the winding-down heartbeats a policy sends after signalling
     `exhausted` (phase "validating", empty status) must NOT clear the standing

@@ -128,8 +128,10 @@ Engine images that need credentials use the cluster's **Image pull secrets**;
 nodes with additional taints need **Extra tolerations** (both under
 **Advanced** when adding the cluster, or **Clusters ▸ Edit**).
 
-The UI shows each run's engine log: live from the cluster while the run is
-active, and the end of the log, stored in the database, after it finishes. To
+The UI shows each run's engine log and each policy's log: live from the
+cluster while the container runs, and the end of the log, stored in the
+database, after it ends. The worker also saves it every two minutes while it
+runs, so a pod that disappears early still leaves its last lines. To
 keep complete logs as files, give the platform a ReadWriteMany volume, which
 the install script leaves off:
 
