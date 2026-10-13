@@ -41,6 +41,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Logs ▸ Activity** on a campaign (`GET /campaigns/{id}/activity`): what the
   platform did for it, one line per recorded step. It is there even when a
   container printed nothing or never started.
+- **Node pools**: a Kubernetes machine whose node selector names a GPU type
+  (`nvidia.com/gpu.product=…`) instead of one hostname. Each run goes to
+  whichever of its nodes has room, and waits when none has. **Add GPU
+  cluster** registers one pool per GPU type by default (or, as before, one
+  machine per node; `POST /clusters/{id}/pools`). Campaigns share a pool, and
+  a policy session takes as many cards at a time as its widest config needs
+  (or `policy_settings.cards`) rather than the whole machine. A pool holds
+  one GPU type: leasing a selector that matches two is refused. A policy that
+  runs engines in its own container does not use pools
+  ([Node pools](docs/guide/machines.md#node-pools)).
+- A Kubernetes machine shows its nodes, the most cards one node takes and,
+  with `gpuCluster.countFreeCards` (`gpu-cluster.sh --count-free-cards`), the
+  cards other workloads leave free. They are read when it is leased or probed
+  and every 5 minutes while leased (migration `009_node_pools`). The free count
+  needs the platform to list pods in every namespace, which includes other
+  teams' pod specs, so it is off by default.
+- A run waiting for cards shows **waiting for cards**, and its node once it
+  has one.
+- Policy contract 1.2: the manifest's `hardware` has `pool`, `node_count` and
+  `node_gpu_max`, and a launch the cluster has no room for reads `queued`
+  again, with `waiting_reason` and `waiting_since`. A 1.1 policy keeps working
+  ([Evolution](docs/api/policy-contract.md#evolution)).
 
 ### Changed
 
@@ -62,6 +84,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An empty run or policy log says why it is empty (stopped before its engine
   launched, no container of its own, or printed nothing) instead of
   "(no captured log)".
+- The cluster is asked why a pod is not running from 30 seconds after launch,
+  not only after the 45-minute image pull budget: a run waiting for cards
+  says so at once, and one no node could ever hold (more cards than the
+  largest node has) fails at once instead of 45 minutes later. A policy launch
+  wider than the pool's largest node is refused when requested.
+- A run that waited for cards starts its clocks when it gets them: the image
+  pull and model load budgets, and the startup time it teaches the
+  campaign's window planning, no longer count the time it was queued. Before,
+  a run placed after 45 minutes in the queue failed its pull budget at once.
+- A finalist whose validation run never got cards before the night ended is
+  *skipped* ("the cluster had no free cards for it"), not *failed*.
 
 ### Fixed
 

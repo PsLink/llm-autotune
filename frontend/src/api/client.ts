@@ -45,6 +45,14 @@ export interface Machine {
   state: 'away' | 'available' | 'reserved'
   notes: string
   gpus_busy: number
+  /** k8s: a pool of nodes (a GPU type, not one hostname); runs go to any of
+   *  them with room. The rest is read from the cluster for display: nodes,
+   *  the most cards one node takes, cards free now (null = unknown). */
+  pool: boolean
+  node_count: number
+  node_gpu_max: number
+  gpu_free: number | null
+  capacity_checked_at: string | null
   /** Who lent us this machine and until when. `none` = never leased. */
   lease_state: LeaseState
   lease_holder: string
@@ -441,6 +449,10 @@ export interface Run {
   started_at: string | null
   finished_at: string | null
   created_at: string
+  /** Set while the cluster has no room for the run's pod. */
+  waiting_since?: string | null
+  /** The k8s node its pod landed on, once it did. */
+  node?: string
   /** Filled by the runs list (GET /runs), which spans every campaign. */
   campaign_name?: string
   owner_name?: string

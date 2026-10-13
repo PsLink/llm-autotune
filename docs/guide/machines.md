@@ -5,8 +5,9 @@
 The **Resources** page manages where runs happen. A **machine** is one place a
 run can land:
 
-- **A GPU node of a Kubernetes cluster.** Add the cluster once; each GPU node
-  you register becomes a machine. This is the usual setup.
+- **The GPUs of a Kubernetes cluster.** Add the cluster once, then register
+  each GPU type as a **pool** (the default: runs go to whichever node of that
+  type has room) or each node as its own machine. This is the usual setup.
 - **A bare-metal machine reached over ssh.** The platform connects and starts
   the engine with `docker run`.
 
@@ -38,8 +39,15 @@ settings most clusters do not need:
 | **Extra tolerations** | For GPU nodes with taints other than the standard GPU taint, which is tolerated automatically. Comma-separated `key[=value][:effect]`. |
 | **Image pull secrets** | For engine images in a registry that requires credentials: names of secrets in the runs' namespace. |
 
-After **Connect**, the platform lists the cluster's GPU nodes and their GPUs.
-Select the nodes to use (new nodes are selected by default) and press
+After **Connect**, the platform lists the cluster's GPU nodes and their GPUs,
+and offers two ways to register them:
+
+- **One pool per GPU type** (the default): one machine per GPU type, spanning
+  every node of that type ([Node pools](#node-pools)).
+- **One machine per node:** each machine is pinned to its node, and its runs
+  wait for that node's cards even when another node is free.
+
+Select what to register (everything new is selected by default) and press
 **Register**. With **Lease them to the platform now** selected (the default),
 the new machines are leased immediately.
 
@@ -79,6 +87,11 @@ the new machines are leased immediately.
   back*. While leased, also the readiness reported to the lease API: *idle*,
   *busy* or *returnable*.
 - **Cards in use**, out of the machine's total, and the GPU type when known.
+  On a cluster, also the cards **free on the cluster**: those no pod holds, on
+  nodes that take new pods. It needs the platform to read pods in every
+  namespace, which is off by default (`gpuCluster.countFreeCards` in the chart,
+  `gpu-cluster.sh --count-free-cards`); without it the count is not shown.
+- **pool · N nodes** for a node pool.
 
 The track below shows the lease stage: **Leased**, **Running campaigns**,
 **Handed back**. The sentence under it describes the current state; its **?**
@@ -151,7 +164,32 @@ The worker connects over ssh and runs the engine with `docker run`.
 **Add machine** with the *Kubernetes* driver is for a special case: a slice of
 an added cluster, limited by a **Node selector** (`label=value`), for example
 for a model whose weights are only on some nodes. **Add GPU cluster** already
-registers each GPU node, so this is rarely needed.
+registers pools or nodes, so this is rarely needed.
+
+## Node pools
+
+A pool is a machine whose node selector names a GPU type
+(`nvidia.com/gpu.product=…`) instead of one node. The cluster decides where
+each run goes:
+
+- **Each run lands on whichever node of the pool has room.** All of one run's
+  cards are on one node. The run's page shows the node it landed on.
+- **When no node has room, the run waits.** It shows **waiting for cards**,
+  with the cluster's reason in its log, and starts on its own when cards free
+  up. Waiting never fails the run; the campaign's window or the machine's lease
+  ends it. Its startup time counts from when it got its cards.
+- **A run no node could ever hold fails at once**, for example one needing 16
+  cards on 8-card nodes.
+- **Campaigns share a pool** whether or not they allow sharing a machine.
+- **A policy campaign** takes as many cards at a time as its widest
+  configuration needs, or `policy_settings.cards` from the campaign YAML. A
+  finalist the cluster never found cards for is marked *skipped*, not
+  *failed*.
+- **A policy that runs engines in its own container** (*Give the container the
+  GPUs*) needs all its cards on one node and does not use pools; register single
+  nodes for it.
+- **A pool holds one GPU type.** Leasing a selector that matches two types is
+  refused, because their results are not comparable.
 
 ## Node groups (multi-node)
 

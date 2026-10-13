@@ -51,7 +51,7 @@ from app.db.models import (
     Run,
     RunNode,
 )
-from app.hardware import coerce_gpu_type
+from app.hardware import coerce_gpu_type, is_node_pool, record_capacity
 
 router = APIRouter(prefix="/machines", tags=["machine leases"])
 
@@ -318,10 +318,16 @@ async def lease_machine(
             probe = await anyio.to_thread.run_sync(get_driver("k8s").probe_capacity, info)
         except Exception:
             probe = {}
-        if probe.get("supported") and probe.get("node_count"):
-            machine.gpu_count = probe.get("gpu_count", machine.gpu_count)
-            if probe.get("gpu_type"):
-                machine.gpu_type = probe["gpu_type"]
+        record_capacity(machine, probe)
+        # A pool spanning two card types would rank trials measured on
+        # different cards against each other.
+        if is_node_pool(machine) and len(probe.get("gpu_types") or []) > 1:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"'{name}' matches nodes with different GPU types "
+                f"({', '.join(probe['gpu_types'])}); narrow its node selector to one "
+                "type, e.g. nvidia.com/gpu.product=<product>",
+            )
 
     now = datetime.now(UTC)
     machine.state = MachineState.AVAILABLE.value

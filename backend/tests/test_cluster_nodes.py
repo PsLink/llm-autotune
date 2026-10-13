@@ -110,3 +110,36 @@ async def test_a_node_not_in_the_cluster_is_refused(client, cluster_nodes):  # n
     cluster = await _add(client)
     response = await client.post(f"/api/clusters/{cluster['id']}/nodes", json={"nodes": ["cpu-1"]})
     assert response.status_code == 422
+
+
+async def test_a_gpu_type_registers_as_one_pool_of_its_nodes(client, cluster_nodes):  # noqa: F811
+    cluster = await _add(client)
+    view = (await client.get(f"/api/clusters/{cluster['id']}/nodes")).json()
+    pools = {p["product"]: p for p in view["pools"]}
+    assert set(pools) == {"NVIDIA-H800", "NVIDIA-A100-SXM4-80GB"}
+    h800 = pools["NVIDIA-H800"]
+    assert sorted(h800["nodes"]) == ["gpu-node-1", "gpu-node-2"]
+    assert h800["gpu_count"] == 16
+    assert h800["node_gpu_max"] == 8  # the cordoned node takes no pods
+
+    response = await client.post(f"/api/clusters/{cluster['id']}/pools",
+                                 json={"products": ["NVIDIA-H800"]})
+    assert response.status_code == 200, response.text
+    assert response.json()["registered"] == ["test-h800"]
+    async with client.factory() as session:
+        machine = (await session.execute(
+            Machine.__table__.select().where(Machine.name == "test-h800"))).one()
+    assert machine.node_selector == "nvidia.com/gpu.product=NVIDIA-H800"
+    assert (machine.gpu_count, machine.node_count, machine.node_gpu_max) == (16, 2, 8)
+    assert machine.state == "away"  # registered, not leased
+
+    # Registered once: listed against its pool, and skipped when asked again.
+    view = (await client.get(f"/api/clusters/{cluster['id']}/nodes")).json()
+    assert {p["product"]: p["machine"] for p in view["pools"]}["NVIDIA-H800"]["name"] == "test-h800"
+    again = await client.post(f"/api/clusters/{cluster['id']}/pools",
+                              json={"products": ["NVIDIA-H800"]})
+    assert again.json()["registered"] == []
+
+    unknown = await client.post(f"/api/clusters/{cluster['id']}/pools",
+                                json={"products": ["NVIDIA-GB200"]})
+    assert unknown.status_code == 422

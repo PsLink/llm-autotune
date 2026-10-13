@@ -25,6 +25,11 @@
 #                      only through /etc/hosts is replaced by its address on
 #                      its own, since the platform's pods cannot resolve it, and
 #                      so is the loopback port of a kind or k3d cluster.
+#   --count-free-cards also let the account list pods in every namespace, so the
+#                      platform can show how many cards other workloads leave
+#                      free on each node. A pod listing includes other teams'
+#                      pod specs, so it is off unless asked for; without it the
+#                      free count reads "unknown".
 #   --yes              do not ask before acting on the cluster
 set -euo pipefail
 
@@ -32,7 +37,7 @@ say() { printf '\n==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 command -v kubectl >/dev/null 2>&1 || die "kubectl is required"
 
-action=up context="" ns=llm-autotune-runs out="" yes=0 api_server=""
+action=up context="" ns=llm-autotune-runs out="" yes=0 api_server="" free_cards=0
 while [ $# -gt 0 ]; do
   case "$1" in
     remove) action=remove ;;
@@ -40,6 +45,7 @@ while [ $# -gt 0 ]; do
     --namespace|-n) [ $# -ge 2 ] || die "--namespace needs a value"; ns=$2; shift ;;
     --out|-o) [ $# -ge 2 ] || die "--out needs a value"; out=$2; shift ;;
     --api-server) [ $# -ge 2 ] || die "--api-server needs a value"; api_server=${2%/}; shift ;;
+    --count-free-cards) free_cards=1 ;;
     --yes|-y) yes=1 ;;
     -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" ;;
@@ -156,6 +162,8 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list"]
+$(if [ "$free_cards" = 1 ]; then printf '%s\n' \
+  '  - apiGroups: [""]' '    resources: ["pods"]' '    verbs: ["list"]'; fi)
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

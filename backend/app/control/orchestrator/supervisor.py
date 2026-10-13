@@ -121,6 +121,7 @@ from app.evaluation import (
     summarize,
 )
 from app.evaluation.aggregate import summary_of
+from app.hardware import is_node_pool, record_capacity
 from app.objective import sort_key
 from app.staging import (
     SCREEN,
@@ -144,6 +145,12 @@ logger = logging.getLogger(__name__)
 # How often the supervisor looks for replay datasets due a new sample. Samples
 # are hours apart; looking every tick would only load LLMBench.
 DATASET_REFRESH_CHECK_SECONDS = 300
+# How often a leased k8s machine's nodes are read again: card count, the
+# widest node, the cards free right now.
+CAPACITY_REFRESH_SECONDS = 300
+# How long after launch a pod that is not running yet is first asked why: the
+# scheduler needs a moment to place even a pod that fits.
+PLACEMENT_CHECK_AFTER_SECONDS = 30
 
 
 # Which failures are the config's fault and which are the infrastructure's now
@@ -249,6 +256,7 @@ class Supervisor:
         # constructing one reaches for LLMBench credentials.
         self._dataset_profiles = dataset_profiles
         self._datasets_checked_at = float("-inf")
+        self._capacity_checked_at = float("-inf")
         self.settings = get_settings()
         self._policy_engine = None
         # Live containers' logs, saved again every few minutes (container_logs.py).
@@ -283,6 +291,7 @@ class Supervisor:
             # for this same tick to consider them if it is resumed.
             self._release_queued_while_paused(session)
             self._advance_dataset_pins(session)
+            self._refresh_k8s_capacity(session)
             # After the pins: a campaign that pinned this tick holds its build.
             self._refresh_datasets(session)
             self._plan(session)
@@ -423,6 +432,26 @@ class Supervisor:
                     "campaign %d: dataset profile %s: %s",
                     campaign.id, campaign.dataset_profile, exc,
                 )
+
+    def _refresh_k8s_capacity(self, session: Session) -> None:
+        """Read each leased k8s machine's nodes again (hardware.record_capacity),
+        so the cards it shows and the widest launch it accepts follow nodes
+        being added, cordoned and filled by other workloads. For people and for
+        refusing what no node could hold; placement is the cluster's."""
+        if time.monotonic() - self._capacity_checked_at < CAPACITY_REFRESH_SECONDS:
+            return
+        self._capacity_checked_at = time.monotonic()
+        machines = session.scalars(
+            select(Machine).where(
+                Machine.driver == "k8s", Machine.state != MachineState.AWAY.value
+            )
+        ).all()
+        for machine in machines:
+            try:
+                info = self._machine_info(machine)
+                record_capacity(machine, self._driver_for(info).probe_capacity(info))
+            except Exception:
+                logger.exception("reading the nodes of %s failed", machine.name)
 
     def _refresh_datasets(self, session: Session) -> None:
         """Ask LLMBench for a new sample of each dataset set up here that is due
@@ -1211,7 +1240,7 @@ class Supervisor:
                 continue
 
             live = self._live_runs_on(session, machine)
-            if live and not self._may_share(session, campaign, live):
+            if live and not self._may_share(session, campaign, live, machine):
                 busy.add(machine.id)
                 continue
             # A container still tearing down holds its cards and port until the
@@ -1597,9 +1626,15 @@ class Supervisor:
             ).all()
         )
 
-    def _may_share(self, session: Session, campaign: Campaign, live: list[Run]) -> bool:
+    def _may_share(
+        self, session: Session, campaign: Campaign, live: list[Run], machine: Machine
+    ) -> bool:
         """Both sides must opt in: a campaign that wants the machine to itself
-        gets it, and never has someone else's run land on top of it."""
+        gets it, and never has someone else's run land on top of it. A node
+        pool is always shared: nobody has it to themselves, and the scheduler
+        keeps pods off each other's cards."""
+        if is_node_pool(machine):
+            return True
         if not campaign.share_machine:
             return False
         campaign_ids = {run.campaign_id for run in live}
@@ -1760,6 +1795,9 @@ class Supervisor:
                 # k8s deployment mode) — attach returns the same URL.
                 if handle.endpoint_url:
                     run.endpoint_url = handle.endpoint_url
+                # A run that was waiting for cards and came up between two
+                # ticks: it was placed, so say so before it moves on.
+                self._note_placement(session, run, "")
                 # Exactly once, while the container is definitely alive: after
                 # teardown there is nothing left to ask, and asking every tick
                 # would put an ssh round-trip on the readiness poll.
@@ -2146,6 +2184,10 @@ class Supervisor:
         if run.waiting_since is not None:
             waited = _now() - _as_utc(run.waiting_since)
             run.waiting_since = None
+            # The run starts now that it has cards: its startup clocks (image
+            # pull, model load) and its measured startup time count from here,
+            # not from the hours it may have spent queued.
+            run.started_at = _now()
             self._event(
                 session, "run_placed",
                 campaign_id=run.campaign_id, run_id=run.id,
@@ -2451,6 +2493,20 @@ class Supervisor:
                               "min after its container started", "")
             return (False, "", "")
         if status.get("phase") == "pulling":
+            # Ask the cluster why the pod is not running yet, from the first
+            # half minute rather than only once the pull budget is spent: a pod
+            # waiting for cards reads as waiting right away, and one no node
+            # could ever hold fails now instead of 45 minutes later.
+            if now - started > timedelta(seconds=PLACEMENT_CHECK_AFTER_SECONDS):
+                try:
+                    early = driver.failure_reason(handle)
+                except Exception:
+                    early = None
+                if early is not None:
+                    if is_transient_placement(early[0]):
+                        return (False, "", early[1])
+                    if early[0] == "unplaceable":
+                        return (True, early[1], "")
             if now - started > pull_limit:
                 # Prefer the substrate's own reason (e.g. the unschedulable pod's
                 # "0/N nodes available: …") over a generic timeout — a pod stuck
@@ -2620,7 +2676,8 @@ class Supervisor:
         return [
             m
             for m in machines
-            if accepts_new_work(m) and (joins or not machine_has_live_session(session, m))
+            if accepts_new_work(m)
+            and (joins or is_node_pool(m) or not machine_has_live_session(session, m))
         ]
     def _startable_slots(self, session: Session, campaign: Campaign) -> int:
         """Upper bound on runs this campaign could start on the next tick.
@@ -2646,7 +2703,7 @@ class Supervisor:
             if machine_hosts_live_gang(session, machine.id):
                 continue
             live = self._live_runs_on(session, machine)
-            if live and not self._may_share(session, campaign, live):
+            if live and not self._may_share(session, campaign, live, machine):
                 continue
             if machine.gpu_count <= 0:
                 slots += 0 if live else 1  # CPU-only box hosts exactly one run

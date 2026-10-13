@@ -375,6 +375,17 @@ class Machine(Base):
         DateTime(timezone=True), nullable=True
     )
     notes: Mapped[str] = mapped_column(Text, default="")
+    # k8s only, read from the cluster (lease, probe, and every few minutes while
+    # leased): how many nodes the selector matches, the most cards any one node
+    # that takes new pods has, and how many are free now after other pods'
+    # requests (None = unknown). For people, and to refuse a launch no node
+    # could hold; never to decide whether a run is running or waiting.
+    node_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    node_gpu_max: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    gpu_free: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    capacity_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # -- the lease: who handed this machine over, and until when --------------
     #
@@ -782,6 +793,12 @@ class Run(Base):
     run_nodes: Mapped[list["RunNode"]] = relationship(
         back_populates="run", cascade="all, delete-orphan", order_by="RunNode.rank"
     )
+
+    @property
+    def node(self) -> str:
+        """The k8s node the run's pod landed on, as recorded when it came up;
+        "" before that, and on ssh machines (where the machine is the node)."""
+        return str((self.env_snapshot or {}).get("k8s_node") or "")
 
     @property
     def stage(self) -> str:

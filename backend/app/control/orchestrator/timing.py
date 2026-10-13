@@ -73,9 +73,24 @@ def record_ready(session: Session, run: Run, moment: datetime) -> None:
     """The engine answered: how long it took from launch to serveable."""
     if run.kind not in _LAUNCHED or run.campaign is None:
         return
-    launched = _transitions(session, run).get(RunStatus.LAUNCHING.value) or run.started_at
+    launched = _launched_at(session, run)
     if launched is not None:
         _push(run.campaign, STARTUP, _minutes(launched, moment))
+
+
+def _launched_at(session: Session, run: Run) -> datetime | None:
+    """When the run's startup began: its launch, or the moment the cluster gave
+    it cards if it waited for them, so queue time is not counted as startup."""
+    launched = _transitions(session, run).get(RunStatus.LAUNCHING.value) or run.started_at
+    placed = session.scalars(
+        select(Event.ts)
+        .where(Event.run_id == run.id, Event.kind == "run_placed")
+        .order_by(Event.id.desc())
+        .limit(1)
+    ).first()
+    if launched is None or placed is None:
+        return launched or placed
+    return placed if _minutes(launched, placed) > 0 else launched
 
 
 def record_cut(session: Session, run: Run, stage: str, moment: datetime) -> None:
@@ -91,8 +106,10 @@ def record_cut(session: Session, run: Run, stage: str, moment: datetime) -> None
     )
     if began is not None:
         _push(run.campaign, _bench_key(stage), _minutes(began, moment))
-    elif run.kind in _LAUNCHED:
-        launched = seen.get(RunStatus.LAUNCHING.value) or run.started_at
+    elif run.kind in _LAUNCHED and run.waiting_since is None:
+        # A run cut while still queued for cards never started; it says
+        # nothing about how long a startup takes.
+        launched = _launched_at(session, run)
         if launched is not None:
             _push(run.campaign, STARTUP, _minutes(launched, moment))
 

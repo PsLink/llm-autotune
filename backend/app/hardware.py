@@ -70,3 +70,37 @@ def coerce_gpu_type(raw: str) -> str:
             "(or empty for any card)"
         )
     return canonical
+
+
+_HOSTNAME_LABEL = "kubernetes.io/hostname"
+
+
+def is_node_pool(machine) -> bool:
+    """A k8s machine whose selector does not pin one node by hostname: a GPU
+    type label, or no selector at all. Its runs go wherever the scheduler finds
+    room among the matching nodes, so a session takes a share of it rather than
+    the whole of it. Takes a Machine row or a MachineInfo."""
+    if (getattr(machine, "driver", "") or "") != "k8s":
+        return False
+    selector = getattr(machine, "node_selector", "") or ""
+    return not any(
+        pair.split("=", 1)[0].strip() == _HOSTNAME_LABEL for pair in selector.split(",")
+    )
+
+
+def record_capacity(machine, probe: dict) -> bool:
+    """Write a capacity probe onto a machine row; True if it said anything.
+    A probe that matched no nodes leaves the row alone: that is a selector
+    mistake, not a reason to zero what was there."""
+    from datetime import UTC, datetime
+
+    if not (probe.get("supported") and probe.get("node_count")):
+        return False
+    machine.gpu_count = probe.get("gpu_count", machine.gpu_count)
+    if probe.get("gpu_type"):
+        machine.gpu_type = probe["gpu_type"]
+    machine.node_count = int(probe.get("node_count") or 0)
+    machine.node_gpu_max = int(probe.get("node_gpu_max") or 0)
+    machine.gpu_free = probe.get("gpu_free")
+    machine.capacity_checked_at = datetime.now(UTC)
+    return True
