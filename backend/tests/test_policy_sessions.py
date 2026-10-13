@@ -510,8 +510,9 @@ async def test_the_policy_container_log_is_captured_and_served(night, monkeypatc
 
 async def test_a_running_policys_log_is_kept_when_its_pod_vanishes(night, monkeypatch, tmp_path):
     # A policy died and no log was kept: its pod was gone by the time the
-    # worker read it. The worker now saves the end of a running policy's log every few minutes, so a pod
-    # that is already gone when the death is noticed still leaves its story.
+    # worker read it. The worker now saves the end of a running policy's log
+    # every few minutes, so a pod already gone when the death is noticed still
+    # leaves its story.
     from app.control.orchestrator import container_logs
     from app.core.config import get_settings
 
