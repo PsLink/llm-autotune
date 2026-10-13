@@ -246,10 +246,11 @@ The ones installs usually reach for:
 
 ## Upgrading
 
-`helm install` and `helm upgrade` run the schema bootstrap as a Job once the
-release is applied; it also seeds the first admin and the built-in objectives.
-The worker waits for the schema before it starts (its log says so), so
-`helm install --wait` works. See [upgrading.md](upgrading.md).
+`helm install` runs the schema bootstrap as a Job once the release is applied;
+it also seeds the first admin and the built-in objectives. The worker waits for
+the schema before it starts (its log says so), so `helm install --wait` works.
+`helm upgrade` migrates the schema before it replaces any pod, and drops no
+requests while it rolls. See [upgrading.md](upgrading.md).
 
 ## Local development
 

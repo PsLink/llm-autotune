@@ -74,3 +74,18 @@ def test_every_seed_step_runs_when_users_already_exist(monkeypatch):
     with Session(engine) as session:
         assert session.query(User).count() == 1
         assert session.query(Objective).count() == len(bootstrap.BUILTIN_OBJECTIVES)
+
+
+def test_schema_only_migrates_and_seeds_nothing(monkeypatch):
+    # The chart's pre-upgrade Job: the schema before any new pod starts, and
+    # nothing that needs the new release's settings (the seed follows later).
+    steps: list[str] = []
+    monkeypatch.setattr(bootstrap, "create_engine", lambda url: object())
+    monkeypatch.setattr(bootstrap, "_wait_for_database", lambda e: steps.append("wait"))
+    monkeypatch.setattr(bootstrap, "_platform_schema", lambda e, c: steps.append("schema"))
+    monkeypatch.setattr(bootstrap, "_seed", lambda e: steps.append("seed"))
+    bootstrap.main(["--schema-only"])
+    assert steps == ["wait", "schema"]
+    steps.clear()
+    bootstrap.main([])
+    assert steps == ["wait", "schema", "seed"]

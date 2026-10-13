@@ -23,6 +23,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
+{{- /* Labels for the pod template of something that keeps state (the database,
+the mock benchmark's submissions): no version or chart label. A pod template
+that changes restarts the pod, and these must not restart on every upgrade
+just because the chart's version did; with postgresql.storage.enabled=false
+that restart would empty the database. */ -}}
+{{- define "llm-autotune.stableLabels" -}}
+app.kubernetes.io/name: {{ include "llm-autotune.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
 {{- define "llm-autotune.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "llm-autotune.fullname" .) .Values.serviceAccount.name -}}

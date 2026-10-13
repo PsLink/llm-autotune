@@ -22,6 +22,9 @@ spec:
         app.kubernetes.io/component: worker
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # The secret is read through envFrom too: a new API key or password
+        # must restart the pods that read it, as a new setting does.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ include "llm-autotune.serviceAccountName" . }}
       {{- with .Values.image.pullSecrets }}

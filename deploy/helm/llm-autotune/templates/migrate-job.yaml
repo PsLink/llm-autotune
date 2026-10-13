@@ -4,7 +4,8 @@
 # install needs (the first admin, the built-in objectives, the local cluster)
 # and creates the screen benchmark on LLMBench. Runs once the release's
 # objects exist, on every install and upgrade; the worker waits for the schema
-# rather than starting against one it does not understand.
+# rather than starting against one it does not understand. On an upgrade the
+# schema is already migrated by then (schema-job.yaml), and this only seeds.
 apiVersion: batch/v1
 kind: Job
 metadata:

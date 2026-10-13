@@ -30,6 +30,9 @@ spec:
         app.kubernetes.io/component: api
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # The secret is read through envFrom too: a new API key or password
+        # must restart the pods that read it, as a new setting does.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ include "llm-autotune.serviceAccountName" . }}
       {{- with .Values.image.pullSecrets }}
@@ -47,6 +50,13 @@ spec:
             - name: runlogs
               mountPath: /app/runs
           {{- end }}
+          # The Service keeps sending requests to a terminating pod for a few
+          # seconds; serve them instead of refusing them, so a rolling upgrade
+          # drops no request (a policy mid-session sees none).
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "8"]
           readinessProbe:
             httpGet:
               path: /api/health
