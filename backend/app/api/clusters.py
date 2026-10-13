@@ -32,7 +32,7 @@ from app.core.secrets import encrypt_secret
 from app.db.base import get_async_session
 from app.db.models import Cluster, Event, Machine, MachineState, User
 from app.hardware import normalize_gpu_type
-from app.schemas.clusters import ClusterIn, ClusterOut, RegisterNodes
+from app.schemas.clusters import ClusterIn, ClusterOut, RegisterNodes, RegisterPools
 
 router = APIRouter(prefix="/clusters", tags=["clusters"])
 
@@ -353,7 +353,36 @@ async def _nodes_view(row: Cluster, session: AsyncSession) -> dict:
         {"id": m.id, "name": m.name, "hostname": host}
         for host, m in by_host.items() if host not in present
     ]
-    return {"cluster": row.name, "namespace": row.namespace, "nodes": nodes, "gone": gone}
+    return {
+        "cluster": row.name, "namespace": row.namespace, "nodes": nodes, "gone": gone,
+        "pools": _pools_of(nodes, machines),
+    }
+
+
+def _pool_selector(product: str) -> str:
+    return f"{_GPU_PRODUCT_LABEL}={product}"
+
+
+def _pools_of(nodes: list[dict], machines: list[Machine]) -> list[dict]:
+    """The cluster's GPU products, each as the pool it could be registered as:
+    its nodes, their cards, and the machine already spanning them, if any."""
+    by_selector = {(m.node_selector or "").replace(" ", ""): m for m in machines}
+    pools: dict[str, dict] = {}
+    for n in nodes:
+        if not n["gpu_product"]:
+            continue
+        pool = pools.setdefault(n["gpu_product"], {
+            "product": n["gpu_product"], "gpu_type": n["gpu_type"], "nodes": [],
+            "gpu_count": 0, "node_gpu_max": 0,
+        })
+        pool["nodes"].append(n["node"])
+        pool["gpu_count"] += n["gpu_count"]
+        if n["ready"] and n["schedulable"]:
+            pool["node_gpu_max"] = max(pool["node_gpu_max"], n["gpu_count"])
+    for pool in pools.values():
+        m = by_selector.get(_pool_selector(pool["product"]))
+        pool["machine"] = {"id": m.id, "name": m.name} if m else None
+    return sorted(pools.values(), key=lambda p: p["product"])
 
 
 @router.get("/{cluster_id}/nodes")
@@ -415,6 +444,62 @@ async def register_nodes(
         registered.append(name)
     session.add(Event(
         actor=user.username, kind="cluster_nodes_registered",
+        payload={"cluster": row.name, "machines": registered},
+    ))
+    await session.commit()
+    return {"registered": registered, **(await _nodes_view(row, session))}
+
+
+@router.post("/{cluster_id}/pools")
+async def register_pools(
+    cluster_id: int,
+    body: RegisterPools,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Register GPU products as node pools: one machine per product, selecting
+    every node with that `nvidia.com/gpu.product` label, not yet leased. A run
+    on it goes to whichever of those nodes has room. A product already
+    registered as a pool is skipped."""
+    row = await _get(cluster_id, session)
+    view = await _nodes_view(row, session)
+    pools = {p["product"]: p for p in view["pools"]}
+    unknown = sorted(set(body.products) - set(pools))
+    if unknown:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"no GPU nodes of {row.name} have the product: {', '.join(unknown)}",
+        )
+    taken = set((await session.execute(select(Machine.name))).scalars().all())
+    registered = []
+    for product in dict.fromkeys(body.products):
+        pool = pools[product]
+        if pool["machine"]:
+            continue
+        kind = (pool["gpu_type"] or product).lower()
+        name = f"{row.name}-{kind}"[:64]
+        if name in taken:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"no free machine name for the {product} pool: rename the machine "
+                f"called {name}",
+            )
+        taken.add(name)
+        session.add(Machine(
+            name=name,
+            host="",  # placed by its node selector, never by address
+            driver="k8s",
+            cluster_id=row.id,
+            node_selector=_pool_selector(product),
+            gpu_count=pool["gpu_count"],
+            gpu_type=pool["gpu_type"],
+            node_count=len(pool["nodes"]),
+            node_gpu_max=pool["node_gpu_max"],
+            state=MachineState.AWAY.value,
+        ))
+        registered.append(name)
+    session.add(Event(
+        actor=user.username, kind="cluster_pools_registered",
         payload={"cluster": row.name, "machines": registered},
     ))
     await session.commit()

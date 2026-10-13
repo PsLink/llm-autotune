@@ -44,9 +44,12 @@ It creates a namespace for engine and policy pods, a ServiceAccount allowed
 only to manage those (Deployments, Services, Jobs, TuningRuns) and read their
 pods, logs and events, read-only access to nodes, and a kubeconfig carrying
 only that account's token. It never grants write access to nodes: no cordon,
-label or taint. On **Resources ▸ Add GPU cluster**, upload the kubeconfig
-(encrypted at rest with `jwtSecret`) and select the GPU nodes to register; each
-becomes a machine pinned to its node, with the GPUs the node reports.
+label or taint. With `--count-free-cards` it may also list pods in every
+namespace, so the platform can show how many cards other workloads leave free;
+a pod listing includes other teams' pod specs, so it is off by default. On
+**Resources ▸ Add GPU cluster**, upload the kubeconfig (encrypted at rest with
+`jwtSecret`) and register each GPU type as a pool, or each node as its own
+machine ([Node pools](guide/machines.md#node-pools)).
 
 The GPU cluster's API server, and its nodes' NodePorts, must be reachable from
 this cluster, and the GPU cluster must reach `publicApiUrl` for policy
@@ -62,9 +65,13 @@ gpuCluster:
 
 For GPUs in the cluster the platform runs in, without a kubeconfig: the chart
 grants its own ServiceAccount the same access and, on an empty install,
-registers the cluster as one machine called `local-cluster` (no node pin; the
-scheduler places each pod). Set `gpuCluster.autoRegister=false` to skip this
-and register GPU nodes individually. `deploy/quickstart.sh` does not use this
+registers the cluster as one machine called `local-cluster`: a pool of every
+node, the scheduler placing each pod. A pool holds one GPU type, so on a
+cluster with several, give it a selector such as
+`nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3`, or set
+`gpuCluster.autoRegister=false` and register a pool per type.
+`gpuCluster.countFreeCards=true` lets it count the cards other workloads leave
+free (it reads pods in every namespace). `deploy/quickstart.sh` does not use this
 mode; the demo does.
 
 A cluster without GPUs (kind, a CPU-only test cluster) takes

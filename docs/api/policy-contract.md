@@ -8,7 +8,7 @@ This document is the narrative version: what the calls mean, and what each side
 guarantees. For the one-page summary see [policy-api.md](policy-api.md); the interactive reference that
 always matches the running build is **`/api/docs`**, section *policy sessions*.
 For real responses from a finished session see the
-Contract version: **1.1** (`/api/policy/v1`; see [Evolution](#evolution)).
+Contract version: **1.2** (`/api/policy/v1`; see [Evolution](#evolution)).
 
 ---
 
@@ -102,7 +102,10 @@ the response is always current.
     "gpu_type": "H100",
     "gpu_indices": [0, 1, 2, 3],
     "ports": [28200, 28201, 28202, 28203],
-    "gpus_visible_in_container": true
+    "gpus_visible_in_container": true,
+    "pool": false,
+    "node_count": 1,
+    "node_gpu_max": 8
   },
 
   "objective": {
@@ -144,6 +147,12 @@ Field notes:
   others. Engines you serve yourself must bind `0.0.0.0:<one of these ports>`
   (the container runs on the host network). If `gpus_visible_in_container` is
   true the cards are already visible to your process.
+  With `pool: true` (1.2) the machine is a Kubernetes node pool, and
+  `gpu_indices` are **slots**, not devices: how many cards you may use at
+  once. Each launch's pod goes to whichever of the pool's `node_count` nodes
+  has room, with all its cards on one node, so a launch needs no more than
+  `node_gpu_max` cards (0 = not known). Naming slots works exactly as naming
+  cards does.
 - **`search_space`** — the campaign author's declared space, in the platform's
   vocabulary (see [Config format](#config-format)). `space_policy` says how strictly it
   binds you: `allowed_if_declared` means you may step outside it — an unknown
@@ -322,7 +331,17 @@ GET /api/policy/v1/launches/31
 
 `status`: `queued → launching → ready → serving`, or `failed` (with the same
 `failure_class` taxonomy campaigns use: `oom`, `bad_config`, engine crash —
-an OOM is information, learn from it), then `released` after:
+an OOM is information, learn from it), then `released` after the release
+below.
+
+On a shared cluster a launch can go back from `launching` to `queued` (1.2):
+the cluster has no room for its pod yet. `waiting_reason` says what the
+cluster said, and `waiting_since` since when. It starts on its own once cards
+free up, and never fails for waiting; keep polling, or release it to try
+something smaller. A config no node could ever hold is refused when launched
+(`422`), or fails at once with `failure_class: "unplaceable"`.
+
+Release:
 
 ```http
 DELETE /api/policy/v1/launches/31
@@ -480,6 +499,11 @@ from their specs, time permitting. Either way the machine's own guarantees
   `search_idle_strikes`) and a recorded `search_end_reason`. A 1.0 image keeps
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
+- **1.2** (additive, non-breaking): Kubernetes node pools. The manifest's
+  `hardware` gained `pool`, `node_count` and `node_gpu_max`, and a launch can
+  report `queued` again, with `waiting_reason` and `waiting_since`, while the
+  cluster has no room for it. A 1.1 image keeps working: it treats `queued` as
+  "not serving yet" and waits, as it did before.
 - The prefix is versioned (`/api/policy/v1`); the manifest carries
   `contract.version`. Additions — new endpoints, new manifest fields, new
   `services` entries — are minor and non-breaking. Breaking changes ship as

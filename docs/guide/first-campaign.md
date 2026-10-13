@@ -51,14 +51,14 @@ cluster, and press **Connect**.
 
 ![Add GPU cluster: the kubeconfig and a name](images/add-cluster-connect.png)
 
-The platform lists the cluster's GPU nodes and their GPUs, with new nodes
-selected. Keep **Lease them to the platform now** selected and press
+The platform lists the cluster's GPU nodes and their GPUs. Keep **One pool per
+GPU type** and **Lease them to the platform now** selected and press
 **Register**.
 
 ![The cluster's GPU nodes, ready to register](images/add-cluster-nodes.png)
 
-Each registered node becomes a leased **machine**: a place runs can land,
-pinned to that node, with the GPU count the node reports.
+Each GPU type becomes a leased **machine**: a pool of the nodes with that GPU.
+Each run goes to whichever of them has room, and waits when none has.
 
 ![A leased machine](images/machine-leased.png)
 

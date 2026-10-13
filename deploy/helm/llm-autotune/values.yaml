@@ -160,6 +160,11 @@ gpuCluster:
   # to the local API server. false = register clusters from the Resources page
   # by uploading the scoped kubeconfig deploy/gpu-cluster.sh writes.
   inCluster: false
+  # Let the platform list pods in every namespace, to show how many cards other
+  # workloads leave free on each node. Off by default: a pod listing includes
+  # other teams' pod specs (their environment variables among them). Without
+  # it the free count reads "unknown"; nothing else depends on it.
+  countFreeCards: false
   # Where engine pods go. Empty = this release's namespace.
   namespace: ""
   # "deployment" = a Deployment + NodePort Service, which works on any cluster.

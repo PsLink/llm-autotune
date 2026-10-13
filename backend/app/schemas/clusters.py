@@ -70,6 +70,13 @@ class RegisterNodes(BaseModel):
     nodes: list[str] = Field(..., min_length=1)
 
 
+class RegisterPools(BaseModel):
+    """GPU products of a cluster (the nvidia.com/gpu.product label) to register
+    as node pools: one machine per product, spanning every node that has it."""
+
+    products: list[str] = Field(..., min_length=1)
+
+
 class ClusterOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

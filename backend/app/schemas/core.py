@@ -149,6 +149,14 @@ class MachineOut(BaseModel):
     # Cards currently held by live runs — how much of the machine is actually
     # in use, which `state` alone cannot say once runs share a machine.
     gpus_busy: int = 0
+    # k8s: a pool of nodes (a GPU type, not one hostname), its node count, the
+    # most cards one node takes, and the cards free cluster-wide right now
+    # (None = unknown), as last read from the cluster.
+    pool: bool = False
+    node_count: int = 0
+    node_gpu_max: int = 0
+    gpu_free: int | None = None
+    capacity_checked_at: datetime | None = None
     # Which node group this machine belongs to, and its rank in it (0 = master).
     # Empty / None = not grouped, which is the ordinary single-node machine.
     # Membership is a topology, not a reservation: a grouped machine is still
@@ -468,6 +476,11 @@ class RunOut(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+    # Set while the cluster has no room for the run's pod; the run starts on
+    # its own once cards free up.
+    waiting_since: datetime | None = None
+    # The k8s node the run's pod landed on, once it did.
+    node: str = ""
     # The campaign's name and its owner's username. Filled by the runs list,
     # which shows runs from every campaign; empty elsewhere.
     campaign_name: str = ""

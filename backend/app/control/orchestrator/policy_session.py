@@ -38,7 +38,7 @@ from app.control.orchestrator.policy_lifecycle import (
     settings_of,
 )
 from app.control.orchestrator.schedule import from_campaign as schedule_of
-from app.control.search.validation import cards_used
+from app.control.search.validation import cards_used, widest_cards
 from app.core import apikeys
 from app.db.models import (
     TERMINAL_RUN_STATES,
@@ -60,6 +60,7 @@ from app.db.models import (
     RunKind,
     RunStatus,
 )
+from app.hardware import is_node_pool
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,10 @@ class PolicySessionEngine:
             return False
         needed = settings_of(campaign).cards if campaign.share_machine else 0
         for m in self.sup._usable_machines(db, campaign):
+            if is_node_pool(m) and policy.gpus_in_container:
+                # Its engines run in its own pod, so all its cards must be on
+                # one node; a pool hands out cards on any node.
+                continue
             if m.id in blocked:
                 busy.add(m.id)
                 continue
@@ -296,6 +301,8 @@ class PolicySessionEngine:
         from app.control.orchestrator.lifecycle import machine_has_live_session
         from app.control.orchestrator.occupancy import reservations_on
 
+        if is_node_pool(machine):
+            return self._allocation_on_pool(db, campaign, policy, machine)
         live_runs = self.sup._live_runs_on(db, machine)
         dying = self.sup._teardown_pending_on(db, machine)
         # A campaign admitted to this machine whose run is not placed yet holds
@@ -341,6 +348,42 @@ class PolicySessionEngine:
                 ports.append(port)
             port += 1
         if len(ports) < n_ports:
+            return None
+        return free[:needed], ports
+
+    def _allocation_on_pool(
+        self, db: Session, campaign: Campaign, policy: Policy, machine: Machine
+    ) -> tuple[list[int], list[int]] | None:
+        """A session's share of a node pool: as many card slots as it may use
+        at once (the campaign's `cards`, else its widest config), taken next to
+        whatever else runs on the pool. The slots are a budget, not devices:
+        each launch's pod goes to whichever node the scheduler finds room on,
+        and waits there if none has. So the only refusal is the pool's slots
+        being all handed out; whether a pod fits is the cluster's answer."""
+        tenants = db.scalars(
+            select(PolicySession).where(
+                PolicySession.machine_id == machine.id,
+                PolicySession.status.not_in([s.value for s in TERMINAL_SESSION_STATES]),
+            )
+        ).all()
+        live_runs = self.sup._live_runs_on(db, machine)
+        dying = self.sup._teardown_pending_on(db, machine)
+        held_cards = {i for t in tenants for i in (t.gpu_indices or [])}
+        held_cards |= {i for r in live_runs + dying for i in (r.gpu_indices or [])}
+        held_ports = {p for t in tenants for p in (t.ports or [])}
+        held_ports |= {r.service_port for r in live_runs + dying if r.service_port}
+
+        total = machine.gpu_count or 0
+        needed = settings_of(campaign).cards or widest_cards(campaign.search_space) or 1
+        free = [i for i in range(total) if i not in held_cards]
+        if total and len(free) < needed:
+            return None
+        base = campaign.service_port or 28200
+        ports = [
+            p for p in range(base, base + 4096)
+            if p not in held_ports and not 30000 <= p <= 32767
+        ][: policy.ports or 1]
+        if len(ports) < (policy.ports or 1):
             return None
         return free[:needed], ports
 
@@ -700,6 +743,13 @@ class PolicySessionEngine:
                 if run.status == RunStatus.SUCCEEDED.value
                 else ContenderStatus.FAILED.value
             )
+            if run.status != RunStatus.SUCCEEDED.value and run.waiting_since is not None:
+                # Ended still queued for cards: never measured, which is not a
+                # verdict on the config.
+                contender.status = ContenderStatus.SKIPPED.value
+                contender.skip_reason = (
+                    "the cluster had no free cards for it before the night ended"
+                )
             if session.serving_contender_id == contender.id:
                 session.serving_contender_id = None
             self.sup._event(

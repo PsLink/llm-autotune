@@ -63,7 +63,8 @@ subjects:
 # platform reads allocatable GPUs and the GPU product label to fill in a
 # machine's card count and type instead of asking you to type them, and reads
 # InternalIP to resolve a NodePort endpoint. It never writes a node — no
-# cordon, no label, no taint.
+# cordon, no label, no taint. With gpuCluster.countFreeCards it also lists pods
+# in every namespace, to count the cards other workloads hold on each node.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -73,6 +74,11 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list"]
+  {{- if .Values.gpuCluster.countFreeCards }}
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -45,6 +45,10 @@ from app.control.launch.clusters import K8sClusterSettings, as_cluster
 
 logger = logging.getLogger(__name__)
 
+# Pods that still hold what they asked for: a finished pod's requests no
+# longer count against its node.
+_UNFINISHED_PODS = "status.phase!=Succeeded,status.phase!=Failed"
+
 
 def _unlink_quietly(path: str) -> None:
     try:
@@ -93,6 +97,13 @@ class K8sApi(ABC):
         SelfSubjectAccessReview — asks the API server, creates nothing). None
         when the transport cannot ask, which a caller reads as "unknown"."""
         return None
+
+    def list_cluster_pods(self) -> list[dict]:
+        """Every pod in the cluster that is not finished, in all namespaces.
+        Read-only, for counting the cards other workloads hold on a node. A
+        transport without it raises NotImplementedError; a credential the
+        cluster refuses raises K8sError."""
+        raise NotImplementedError
 
     @abstractmethod
     def logs(self, label_selector: str, tail: int = 200) -> str:
@@ -227,6 +238,18 @@ class KubectlApi(K8sApi):
         result = self._run(args)
         if result.returncode != 0:
             raise K8sError(f"kubectl get {resource} failed: {result.stderr.strip()[:500]}")
+        try:
+            return json.loads(result.stdout).get("items", [])
+        except (json.JSONDecodeError, AttributeError):
+            return []
+
+    def list_cluster_pods(self) -> list[dict]:
+        result = self._run([
+            "get", "pods", "--all-namespaces", "-o", "json",
+            "--field-selector", _UNFINISHED_PODS,
+        ])
+        if result.returncode != 0:
+            raise K8sError(f"kubectl get pods -A failed: {result.stderr.strip()[:500]}")
         try:
             return json.loads(result.stdout).get("items", [])
         except (json.JSONDecodeError, AttributeError):
@@ -475,6 +498,14 @@ class ClientApi(K8sApi):
                 raise K8sError(f"client list of '{resource}' is not supported")
         except self._ApiException as exc:
             raise K8sError(f"client list {resource} failed: {exc.reason}") from exc
+        return [self._sanitize(item) for item in resp.items]
+
+    def list_cluster_pods(self) -> list[dict]:
+        self._ensure()
+        try:
+            resp = self._core.list_pod_for_all_namespaces(field_selector=_UNFINISHED_PODS)
+        except self._ApiException as exc:
+            raise K8sError(f"client list pods in all namespaces failed: {exc.reason}") from exc
         return [self._sanitize(item) for item in resp.items]
 
     def can_i(self, verb: str, resource: str, group: str = "") -> bool | None:

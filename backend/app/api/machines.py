@@ -23,6 +23,7 @@ from app.db.models import (
     RunNode,
     User,
 )
+from app.hardware import is_node_pool, record_capacity
 from app.schemas.core import MachineCreate, MachineOut, MachineStateUpdate
 
 router = APIRouter(prefix="/machines", tags=["machines"])
@@ -74,7 +75,8 @@ def _machine_out(
 ) -> MachineOut:
     name, rank = membership or ("", None)
     return MachineOut.model_validate(machine).model_copy(
-        update={"gpus_busy": busy, "group": name, "group_rank": rank, "cluster_name": cluster_name}
+        update={"gpus_busy": busy, "group": name, "group_rank": rank,
+                "cluster_name": cluster_name, "pool": is_node_pool(machine)}
     )
 
 
@@ -160,10 +162,7 @@ def _apply_probe(machine: Machine, probe: dict) -> None:
     no nodes is left alone — it is a selector mistake, not a reason to zero the
     capacity the operator typed. A machine left with no count at all is
     refused: a guessed one would be scheduled against."""
-    if probe.get("supported") and probe.get("node_count"):
-        machine.gpu_count = probe.get("gpu_count", machine.gpu_count)
-        if probe.get("gpu_type"):
-            machine.gpu_type = probe["gpu_type"]
+    record_capacity(machine, probe)
     if not machine.gpu_count:
         reason = "; ".join(probe.get("warnings") or []) or "the machine did not answer"
         raise HTTPException(

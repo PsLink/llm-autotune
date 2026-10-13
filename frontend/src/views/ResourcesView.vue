@@ -105,9 +105,10 @@ const probingCluster = ref<number | null>(null)
 /** -- adding a GPU cluster ---------------------------------------------------
  *
  * Upload the kubeconfig deploy/gpu-cluster.sh wrote (it names its namespace),
- * then pick which of the cluster's GPU nodes to register: each becomes a
- * machine pinned to that node. The node step also re-opens from a cluster's
- * Nodes button, to register nodes added since or see ones that left.
+ * then register its GPUs: one pool per GPU type (a machine spanning every node
+ * of that type, runs going wherever the cluster has room), or one machine
+ * pinned to each node. The step also re-opens from a cluster's Nodes button,
+ * to register nodes added since or see ones that left.
  */
 interface GpuNode {
   node: string
@@ -119,10 +120,19 @@ interface GpuNode {
   schedulable: boolean
   machine: { id: number; name: string } | null
 }
+interface GpuPool {
+  product: string
+  gpu_type: string
+  nodes: string[]
+  gpu_count: number
+  node_gpu_max: number
+  machine: { id: number; name: string } | null
+}
 interface NodesView {
   cluster: string
   namespace: string
   nodes: GpuNode[]
+  pools: GpuPool[]
   gone: { id: number; name: string; hostname: string }[]
 }
 const showAddCluster = ref(false)
@@ -137,6 +147,12 @@ const nodesCluster = ref<{ id: number; name: string } | null>(null)
 const nodesView = ref<NodesView | null>(null)
 const nodesError = ref('')
 const pickedNodes = ref<string[]>([])
+const pickedPools = ref<string[]>([])
+/** Pools by default: on a shared cluster, the scheduler is the one who knows
+ *  which node has room. One machine per node is for pinning work by hand. */
+const registerAs = ref<'pools' | 'nodes'>('pools')
+const picked = computed(() =>
+  registerAs.value === 'pools' ? pickedPools.value.length : pickedNodes.value.length)
 /** Lease the nodes as they are registered: one step instead of a Lease press
  *  per machine. */
 const leaseOnRegister = ref(true)
@@ -181,6 +197,7 @@ async function loadNodes(cluster: { id: number; name: string }) {
     nodesView.value = (await api.get(`/clusters/${cluster.id}/nodes`)).data
     pickedNodes.value = nodesView.value!.nodes
       .filter((n) => !n.machine && n.ready && n.schedulable).map((n) => n.hostname)
+    pickedPools.value = nodesView.value!.pools.filter((p) => !p.machine).map((p) => p.product)
   } catch (error: any) {
     nodesError.value = apiErrorText(error, 'Could not read the cluster\'s nodes')
   }
@@ -211,8 +228,11 @@ async function registerNodes() {
   if (!nodesCluster.value) return
   busy.value = true
   try {
-    const { data } = await api.post(`/clusters/${nodesCluster.value.id}/nodes`,
-      { nodes: pickedNodes.value })
+    const { data } = registerAs.value === 'pools'
+      ? await api.post(`/clusters/${nodesCluster.value.id}/pools`,
+        { products: pickedPools.value })
+      : await api.post(`/clusters/${nodesCluster.value.id}/nodes`,
+        { nodes: pickedNodes.value })
     const names: string[] = data.registered
     if (leaseOnRegister.value) {
       // The same call as the Lease button, so the machines end up identical.
@@ -825,6 +845,12 @@ onMounted(async () => {
               : `Worker rank ${m.group_rank} of node group ${m.group}`">
             {{ m.group }} · {{ m.group_rank === 0 ? 'master' : `rank ${m.group_rank}` }}
           </el-tag>
+          <el-tag v-if="m.pool" size="small" effect="plain"
+            :title="`Runs go to whichever of its ${m.node_count} nodes has room `
+              + `(${m.node_selector || 'any node'}); one run fits on one node, up to `
+              + `${m.node_gpu_max} cards`">
+            pool · {{ m.node_count }} node{{ m.node_count === 1 ? '' : 's' }}
+          </el-tag>
           <span class="mono muted">{{ m.host }}</span>
           <el-tag :type="(leaseLook(m).type as any)" size="small">{{ leaseLook(m).text }}</el-tag>
           <el-tag v-if="stageOf(m) && (m.lease_state === 'active' || m.lease_state === 'draining')"
@@ -836,6 +862,11 @@ onMounted(async () => {
           <span class="muted tiny">
             {{ m.gpus_busy }}/{{ m.gpu_count }} cards in use
             <template v-if="m.gpu_type"> · {{ m.gpu_type }}</template>
+            <template v-if="m.driver === 'k8s' && m.gpu_free != null">
+              · <span :title="`Cards no pod on the cluster holds, on nodes that take new pods`
+                + (m.capacity_checked_at ? ` (read ${relativeTime(m.capacity_checked_at)})` : '')">
+                {{ m.gpu_free }} free on the cluster</span>
+            </template>
           </span>
           <span v-if="m.notes" class="muted tiny">· {{ m.notes }}</span>
         </div>
@@ -1194,7 +1225,49 @@ onMounted(async () => {
             Namespace <span class="mono">{{ nodesView.namespace }}</span>
             · {{ nodesView.nodes.length }} GPU node(s)
           </div>
-          <el-table :data="nodesView.nodes" size="small" row-key="hostname"
+          <div class="register-as">
+            <el-radio-group v-model="registerAs" size="small">
+              <el-radio-button value="pools">One pool per GPU type</el-radio-button>
+              <el-radio-button value="nodes">One machine per node</el-radio-button>
+            </el-radio-group>
+            <InfoHint v-if="registerAs === 'pools'">A pool spans every node with that GPU;
+              each run goes to whichever node has room, and waits if none has. One run
+              is always on one node.</InfoHint>
+            <InfoHint v-else>Each machine is pinned to its node: runs go there and wait
+              for its cards, even when another node is free.</InfoHint>
+          </div>
+          <el-table v-if="registerAs === 'pools'" :data="nodesView.pools" size="small"
+            row-key="product" empty-text="No GPU nodes visible to this kubeconfig">
+            <el-table-column width="48">
+              <template #default="{ row }">
+                <el-checkbox v-if="!row.machine" :model-value="pickedPools.includes(row.product)"
+                  @update:model-value="(on: any) => pickedPools = on
+                    ? [...pickedPools, row.product]
+                    : pickedPools.filter((p) => p !== row.product)" />
+              </template>
+            </el-table-column>
+            <el-table-column label="GPU" min-width="170">
+              <template #default="{ row }">
+                {{ row.gpu_type || row.product }}
+                <div class="muted tiny mono">{{ row.product }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="Nodes" min-width="170">
+              <template #default="{ row }">
+                {{ row.nodes.length }} · {{ row.gpu_count }} cards
+                <div class="muted tiny">{{ row.nodes.join(', ') }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="Status" min-width="150">
+              <template #default="{ row }">
+                <el-tag v-if="row.machine" size="small" type="success" effect="plain">
+                  registered as {{ row.machine.name }}
+                </el-tag>
+                <span v-else class="muted tiny">new</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-table v-else :data="nodesView.nodes" size="small" row-key="hostname"
             empty-text="No GPU nodes visible to this kubeconfig">
             <el-table-column width="48">
               <template #default="{ row }">
@@ -1227,7 +1300,9 @@ onMounted(async () => {
               </template>
             </el-table-column>
           </el-table>
-          <el-checkbox v-if="nodesView.nodes.some((n) => !n.machine)" v-model="leaseOnRegister"
+          <el-checkbox v-if="registerAs === 'pools'
+              ? nodesView.pools.some((p) => !p.machine) : nodesView.nodes.some((n) => !n.machine)"
+            v-model="leaseOnRegister"
             class="lease-now">
             Lease them to the platform now
             <InfoHint>Campaigns only run on leased machines. Untick to register them
@@ -1246,9 +1321,10 @@ onMounted(async () => {
         <el-button v-if="addStep === 'connect'" type="primary" :loading="busy"
           :disabled="!newCluster.kubeconfig.trim() || !newCluster.name.trim()"
           @click="connectCluster">Connect</el-button>
-        <el-button v-else type="primary" :loading="busy" :disabled="!pickedNodes.length"
+        <el-button v-else type="primary" :loading="busy" :disabled="!picked"
           @click="registerNodes">
-          Register {{ pickedNodes.length || '' }} node{{ pickedNodes.length === 1 ? '' : 's' }}
+          Register {{ picked || '' }}
+          {{ registerAs === 'pools' ? 'pool' : 'node' }}{{ picked === 1 ? '' : 's' }}
         </el-button>
       </template>
     </el-dialog>
@@ -1406,6 +1482,12 @@ onMounted(async () => {
 <style scoped>
 .dialog-advanced {
   border-top: none;
+}
+.register-as {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 .nodes-head {
   margin-bottom: 8px;

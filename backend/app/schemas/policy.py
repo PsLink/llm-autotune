@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT_VERSION = "1.1"
+CONTRACT_VERSION = "1.2"
 
 # Inbound payloads from policy containers: unknown fields are the future, not
 # an error.
@@ -113,6 +113,13 @@ class ManifestHardware(BaseModel):
     gpu_indices: list[int] = Field(default_factory=list)
     ports: list[int] = Field(default_factory=list)
     gpus_visible_in_container: bool = True
+    # 1.2: a k8s node pool. `gpu_indices` are then slots (how many cards the
+    # session may use at once), not devices: each launch's pod goes to any
+    # node with room, and one launch's cards are always on one node, so no
+    # launch may need more than `node_gpu_max`.
+    pool: bool = False
+    node_count: int = 0
+    node_gpu_max: int = 0
 
 
 class ManifestObjective(BaseModel):
@@ -311,6 +318,10 @@ class LaunchOut(BaseModel):
     # truth — and where it steps outside the declared space.
     config: dict[str, Any] = Field(default_factory=dict)
     deviations: list[dict[str, Any]] = Field(default_factory=list)
+    # 1.2: while the cluster has no room for the launch, `status` is "queued"
+    # and these say why and since when. It starts by itself once cards free up.
+    waiting_reason: str = ""
+    waiting_since: datetime | None = None
 
 
 # -- benchmarks ------------------------------------------------------------------------

@@ -148,12 +148,20 @@ defineExpose({ reload: load })
       <el-table-column :label="t('runs.status')" width="140">
         <template #default="{ row }">
           <el-tag :type="runStatus(row.status).type" size="small">{{ runLabel(row.status) }}</el-tag>
+          <el-tooltip v-if="row.waiting_since && isLive(row.status)"
+            :content="t('runs.waitingCardsHint')" placement="top">
+            <el-tag size="small" type="warning" effect="plain" class="waiting">
+              {{ t('runs.waitingCards') }}</el-tag>
+          </el-tooltip>
         </template>
       </el-table-column>
       <el-table-column prop="failure_class" :label="t('runs.failure')" width="120" />
       <el-table-column :label="t('runs.gpus')" width="110">
         <template #default="{ row }">
-          <span class="mono">{{ row.gpu_indices?.length ? row.gpu_indices.join(',') : '—' }}</span>
+          <!-- On a node pool the indices are slots, so the node says more. -->
+          <span v-if="row.node" class="mono" :title="row.node">
+            {{ row.node }} · {{ row.gpu_indices?.length ?? 0 }}</span>
+          <span v-else class="mono">{{ row.gpu_indices?.length ? row.gpu_indices.join(',') : '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column prop="endpoint_url" :label="t('runs.endpoint')" min-width="180"
@@ -187,8 +195,15 @@ defineExpose({ reload: load })
             <span class="mono">{{ selectedRun.endpoint_url }}</span></div>
           <div v-if="selectedRun.container_name"><span class="muted">{{ t('runs.container') }}</span>
             <span class="mono">{{ selectedRun.container_name }}</span></div>
-          <div v-if="selectedRun.gpu_indices?.length"><span class="muted">{{ t('runs.gpus') }}</span>
+          <div v-if="selectedRun.node"><span class="muted">{{ t('runs.node') }}</span>
+            <span class="mono">{{ selectedRun.node }}</span>
+            <span class="muted"> · {{ t('runs.cards', { n: selectedRun.gpu_indices?.length ?? 0 }) }}</span></div>
+          <div v-else-if="selectedRun.gpu_indices?.length"><span class="muted">{{ t('runs.gpus') }}</span>
             <span class="mono">{{ selectedRun.gpu_indices.join(',') }}</span></div>
+          <div v-if="selectedRun.waiting_since && isLive(selectedRun.status)">
+            <el-tag size="small" type="warning" effect="plain">{{ t('runs.waitingCards') }}</el-tag>
+            <span class="muted tiny"> {{ relativeTime(selectedRun.waiting_since) }} ·
+              {{ t('runs.waitingCardsHint') }}</span></div>
           <div><span class="muted">{{ t('runs.started') }}</span>
             <span :title="exactTime(selectedRun.started_at)">
               {{ relativeTime(selectedRun.started_at) }}</span>
@@ -244,6 +259,9 @@ defineExpose({ reload: load })
 </template>
 
 <style scoped>
+.waiting {
+  margin-left: 4px;
+}
 .runs-head {
   display: flex;
   justify-content: space-between;

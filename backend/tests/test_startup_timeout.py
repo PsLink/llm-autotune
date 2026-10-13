@@ -143,14 +143,14 @@ def test_a_queued_run_is_never_failed_for_waiting():
 
 def test_placement_that_can_never_succeed_still_fails_fast():
     """The other half of the bargain: waiting forever is only safe because a pod
-    no node could ever take is a different class, and fails at the budget rather
-    than sitting politely until the lease expires."""
+    no node could ever take is a different class. It fails as soon as the
+    cluster says so, well inside the pull budget, rather than sitting politely
+    until the lease expires."""
     sup = _sup(pull=45, ready=30)
     hopeless = _queued_driver(
         ("unplaceable", "no cluster node matches this machine's node selector (gpu=typo)")
     )
-    assert sup._startup_timed_out(_run(20), hopeless, None)[0] is False  # inside the budget
-    timed_out, why, waiting = sup._startup_timed_out(_run(50), hopeless, None)
+    timed_out, why, waiting = sup._startup_timed_out(_run(2), hopeless, None)
     assert timed_out is True
     assert "node selector" in why
     assert waiting == ""

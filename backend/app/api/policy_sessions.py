@@ -58,6 +58,7 @@ from app.db.models import (
     RunKind,
     RunStatus,
 )
+from app.hardware import is_node_pool
 from app.objective import direction, redlines, target_metric
 from app.schemas.policy import (
     CONTRACT_VERSION,
@@ -210,6 +211,20 @@ async def _idempotent_run(
     ).scalar_one_or_none()
 
 
+def _check_fits_a_node(machine: Machine | None, needed: int) -> None:
+    """On a node pool a launch's cards are all on one node, so a config wider
+    than the widest node could never be scheduled: refuse it now, rather than
+    let it wait for room that will never come. Unknown sizes pass."""
+    if machine is None or not is_node_pool(machine) or not machine.node_gpu_max:
+        return
+    if needed > machine.node_gpu_max:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"config uses {needed} card(s) (tp×dp×pp), but the largest node in "
+            f"{machine.name} has {machine.node_gpu_max}: no node could ever hold it",
+        )
+
+
 def _check_cards_and_port(
     session: PolicySession,
     live: list[Run],
@@ -276,7 +291,9 @@ async def _make_candidate(
     return candidate
 
 
-def _launch_out(run: Run, candidate: Candidate | None = None) -> LaunchOut:
+def _launch_out(
+    run: Run, candidate: Candidate | None = None, waiting_reason: str = ""
+) -> LaunchOut:
     mapping = {
         RunStatus.PENDING.value: "queued",
         RunStatus.LAUNCHING.value: "launching",
@@ -290,6 +307,11 @@ def _launch_out(run: Run, candidate: Candidate | None = None) -> LaunchOut:
     state = mapping.get(run.status, run.status)
     if run.status == RunStatus.SERVING.value and run.release_requested_at is not None:
         state = "releasing"
+    # Started, but the cluster has no room for its pod yet: queued again, not
+    # launching, so a policy can tell waiting for cards from loading a model.
+    waiting = run.waiting_since is not None and state == "launching"
+    if waiting:
+        state = "queued"
     return LaunchOut(
         id=run.id,
         status=state,
@@ -299,7 +321,24 @@ def _launch_out(run: Run, candidate: Candidate | None = None) -> LaunchOut:
         error=(run.error or "")[:2000],
         config=(candidate.config if candidate else {}),
         deviations=list((candidate.deviations if candidate else None) or []),
+        waiting_reason=waiting_reason if waiting else "",
+        waiting_since=run.waiting_since if waiting else None,
     )
+
+
+async def _waiting_reason(db: AsyncSession, run: Run) -> str:
+    """What the cluster last said about a run it has not placed."""
+    if run.waiting_since is None:
+        return ""
+    payload = (
+        await db.execute(
+            select(Event.payload)
+            .where(Event.run_id == run.id, Event.kind == "run_waiting_for_cluster")
+            .order_by(Event.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return str((payload or {}).get("reason") or "")
 
 
 async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None) -> BenchmarkOut:
@@ -454,6 +493,9 @@ async def manifest(
                 if policy
                 else True
             ),
+            pool=bool(machine and is_node_pool(machine)),
+            node_count=(machine.node_count if machine else 0) or 0,
+            node_gpu_max=(machine.node_gpu_max if machine else 0) or 0,
         ),
         objective={SCREEN: _objective(SCREEN), VERIFY: _objective(VERIFY)},
         search_space=campaign.search_space or {},
@@ -662,6 +704,7 @@ async def request_launch(
             f"config uses {needed} card(s) (tp×dp×pp) but {len(body.gpu_indices)} were "
             "requested — they must match",
         )
+    _check_fits_a_node(machine, needed)
     live = await _live_session_runs(db, session)
     port = _check_cards_and_port(session, live, body.gpu_indices, body.port)
 
@@ -698,7 +741,9 @@ async def launch_status(
     db: AsyncSession = Depends(get_async_session),
 ):
     run = await _session_run(db, caller, run_id, RunKind.POLICY_LAUNCH.value)
-    return _launch_out(run, await db.get(Candidate, run.candidate_id))
+    return _launch_out(
+        run, await db.get(Candidate, run.candidate_id), await _waiting_reason(db, run)
+    )
 
 
 @router.delete("/launches/{run_id}", response_model=LaunchOut)

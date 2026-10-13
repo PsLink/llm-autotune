@@ -745,6 +745,16 @@ def _node_gpu_count(node: dict) -> int:
         return 0
 
 
+def _node_takes_pods(node: dict) -> bool:
+    """Ready and not cordoned: a node the scheduler places new pods on."""
+    if (node.get("spec") or {}).get("unschedulable"):
+        return False
+    return any(
+        cond.get("type") == "Ready" and cond.get("status") == "True"
+        for cond in (node.get("status") or {}).get("conditions") or []
+    )
+
+
 def _node_gpu_type(node: dict) -> str:
     """The node's canonical card type from its GPU product label, or "" if the
     label is absent or names a card the platform does not know yet."""
@@ -1222,12 +1232,19 @@ class K8sDriver(DeploymentDriver):
         the count is summed across matched nodes, and the type is the one they
         share — a selector that spans two card types is a mistake worth a loud
         warning, not a silently-averaged number.
+
+        Also how many cards are free right now, for people to read: what other
+        pods hold is subtracted node by node, and nodes that take no new pods
+        (cordoned, not Ready) count as nothing free. Placement never relies on
+        it; whether a run is running or waiting is what its pod says.
+        `gpu_free` is None when other namespaces' pods cannot be read.
         """
         selector = machine.node_selector or self.settings.k8s_node_selector
         warnings: list[str] = []
         if not selector.strip():
             return {
                 "supported": True, "gpu_count": 0, "gpu_type": "", "node_count": 0,
+                "node_gpu_max": 0, "gpu_free": None, "gpu_types": [],
                 "nodes": [],
                 "warnings": ["no node selector set — cannot tell which nodes this "
                              "machine is; pin a hostname or a GPU-type label"],
@@ -1236,15 +1253,42 @@ class K8sDriver(DeploymentDriver):
             nodes = self.api.list("nodes", label_selector=selector.strip())
         except Exception as exc:
             return {"supported": True, "gpu_count": 0, "gpu_type": "", "node_count": 0,
+                    "node_gpu_max": 0, "gpu_free": None, "gpu_types": [],
                     "nodes": [], "warnings": [f"could not read nodes: {exc}"]}
+
+        resource = self.settings.k8s_gpu_resource
+        held: dict[str, int] | None = None
+        if nodes:
+            try:
+                held = {}
+                for pod in self.api.list_cluster_pods():
+                    where = (pod.get("spec") or {}).get("nodeName")
+                    if where:
+                        held[where] = held.get(where, 0) + _pod_gpu_request(pod, resource)
+            except NotImplementedError:
+                held = None
+            except Exception:
+                held = None
+                warnings.append(
+                    "cannot read other namespaces' pods, so free cards are unknown "
+                    "(the platform needs a cluster-wide read of pods)"
+                )
 
         detail: list[dict[str, Any]] = []
         total = 0
+        largest = 0
+        free_total = 0
         types: set[str] = set()
         for node in nodes:
             count = _node_gpu_count(node)
             gpu_type = _node_gpu_type(node)
             total += count
+            schedulable = _node_takes_pods(node)
+            used = None if held is None else held.get(_node_name(node), 0)
+            free = None if used is None else (max(count - used, 0) if schedulable else 0)
+            if schedulable:
+                largest = max(largest, count)
+                free_total += free or 0
             if gpu_type:
                 types.add(gpu_type)
             else:
@@ -1255,7 +1299,10 @@ class K8sDriver(DeploymentDriver):
                     "app.hardware.GPU_TYPES" if raw
                     else f"{_node_name(node)}: no GPU product label"
                 )
-            detail.append({"node": _node_name(node), "gpu_count": count, "gpu_type": gpu_type})
+            detail.append({
+                "node": _node_name(node), "gpu_count": count, "gpu_type": gpu_type,
+                "schedulable": schedulable, "gpu_used": used, "gpu_free": free,
+            })
 
         if not nodes:
             warnings.append(f"selector {selector!r} matched no nodes")
@@ -1268,7 +1315,12 @@ class K8sDriver(DeploymentDriver):
             "supported": True,
             "gpu_count": total,
             "gpu_type": next(iter(types)) if len(types) == 1 else "",
+            "gpu_types": sorted(types),
             "node_count": len(nodes),
+            # The widest pod that could ever be placed here: the biggest node
+            # that takes new pods.
+            "node_gpu_max": largest,
+            "gpu_free": None if held is None else free_total,
             "nodes": detail,
             "warnings": warnings,
         }
