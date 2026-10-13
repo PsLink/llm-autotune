@@ -62,7 +62,8 @@ def test_a_spec_is_exactly_the_body_that_recreates_the_campaign():
         benchmark_slug="", service_port=28200, run_baseline_canary=True, share_machine=False,
         daily_start="", daily_end="", schedule_timezone="", max_run_minutes=150,
         confirm_top_k=0, confirm_repeats=3, verify_benchmark_slug="", verify_top_k=0,
-        verify_max_run_minutes=180, dataset_profile="", dataset_policy="rebuild_at_start",
+        verify_max_run_minutes=180, dataset_profile="", dataset_frozen="",
+        dataset_policy="rebuild_at_start",
     )
     body = CampaignCreate.model_validate(spec_of(campaign))
     assert body.policy_id == 3 and body.node_group == "pair" and body.share_machine is False

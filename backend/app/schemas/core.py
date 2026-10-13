@@ -341,6 +341,9 @@ class CampaignCreate(BaseModel):
     # = whatever the benchmark resolves at submit time, which is fine for a
     # campaign that finishes in one night and wrong for one that does not.
     dataset_profile: str = ""
+    # A frozen LLMBench dataset the replay workload replays instead (set from
+    # the workload; a frozen dataset never changes, so nothing is pinned).
+    dataset_frozen: str = ""
     dataset_policy: str = "rebuild_at_start"
     # What enabled plugins keep about this campaign, keyed by plugin name
     # (docs/plugins.md): each plugin is handed its own part when the campaign
@@ -406,6 +409,7 @@ class CampaignOut(BaseModel):
     verify_objective: dict[str, Any]
     verify_max_run_minutes: int
     dataset_profile: str
+    dataset_frozen: str = ""
     dataset_policy: str
     # What the campaign is actually measuring against, once it has started:
     # the build id, its hash, and whether that was a fresh build or one it

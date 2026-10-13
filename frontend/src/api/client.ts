@@ -374,6 +374,9 @@ export interface Campaign {
   /** The replay dataset this campaign is held to. `dataset_profile` is what was
    *  asked for; the rest is what it actually pinned, once it started. */
   dataset_profile: string
+  /** A frozen LLMBench dataset the replay measures against instead: a file
+   *  that never changes, so nothing is pinned. */
+  dataset_frozen?: string
   dataset_policy: string
   dataset_build_id: string
   dataset_sha256: string
@@ -635,6 +638,26 @@ export interface DatasetList {
   collector: boolean
   victorialogs_url: string
   llmbench_url: string
+}
+
+/** A frozen dataset on LLMBench (GET /datasets/frozen): a file that never
+ *  changes, frozen from a build there or imported from another installation. */
+export interface FrozenDataset {
+  name: string
+  records: number | null
+  bytes: number | null
+  sha256: string | null
+  frozen_at: string | null
+  source_profile: string | null
+  source_build_id: string | null
+  window_start: string | null
+  window_end: string | null
+  /** "upload" = imported from a file. */
+  origin: string | null
+  /** LLMBench benchmarks that replay it. */
+  used_by: string[] | null
+  /** Campaigns here that replay it. */
+  campaigns: { id: number; name: string; status: string }[]
 }
 
 export interface DatasetProfile {

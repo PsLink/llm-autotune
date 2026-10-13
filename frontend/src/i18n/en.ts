@@ -284,6 +284,8 @@ export default {
       failed: '{n} failed',
       notPinned: 'not pinned yet',
       datasetTip: 'The traffic sample the replay runs use, kept for the whole campaign so their scores compare.',
+      frozen: 'frozen',
+      frozenTip: 'A frozen dataset on LLMBench: a file that never changes, so every run, in this campaign and any other replaying it, sees the same requests.',
     },
     tabs: {
       leaderboard: 'Leaderboard',

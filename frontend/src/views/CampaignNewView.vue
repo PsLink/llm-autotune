@@ -18,6 +18,7 @@ import {
   type Baseline,
   type Campaign,
   type DatasetProfile,
+  type FrozenDataset,
   type Machine,
   type MachineGroup,
   type Objective,
@@ -54,6 +55,7 @@ const groups = ref<MachineGroup[]>([])
 const searchSpaces = ref<SearchSpace[]>([])
 const objectives = ref<Objective[]>([])
 const datasetProfiles = ref<DatasetProfile[]>([])
+const frozenDatasets = ref<FrozenDataset[]>([])
 /** What LLMBench will run a submission against, for "an existing benchmark".
  *  Empty when LLMBench is unreachable — the picker still takes a typed slug. */
 const benchmarks = ref<BenchmarkChoice[]>([])
@@ -120,6 +122,7 @@ const form = ref({
   // life. Empty = whatever the benchmark resolves each time it submits, which
   // is fine for one night and not for several.
   dataset_profile: '',
+  dataset_frozen: '',
   dataset_policy: 'rebuild_at_start',
   daily_start: '23:00',
   daily_end: '08:00',
@@ -187,7 +190,7 @@ watch(verifyModule, () => {
 /** The rolling dataset this campaign replays, so it is pinned for its life:
  *  a described replay names it; an existing benchmark may resolve one. */
 function replaysOf(w: Workload): string {
-  if (w.mode === 'replay') return w.dataset_profile
+  if (w.mode === 'replay') return w.dataset_frozen ? '' : w.dataset_profile
   if (w.mode === 'existing') return benchmarks.value.find((b) => b.slug === w.slug)?.replays_profile ?? ''
   return ''
 }
@@ -200,7 +203,10 @@ function describeWorkload(w: Workload): string {
   if (w.mode === 'sweep') {
     return `synthetic ${w.input_tokens} in / ${w.output_tokens} out at ${w.concurrencies}`
   }
-  if (w.mode === 'replay') return `replay of ${w.dataset_profile || 'the example set'}`
+  if (w.mode === 'replay') {
+    return w.dataset_frozen ? `replay of frozen ${w.dataset_frozen}`
+      : `replay of ${w.dataset_profile || 'the example set'}`
+  }
   return w.slug.trim() || 'the platform default'
 }
 
@@ -439,6 +445,12 @@ async function loadDatasetProfiles() {
     datasetProfiles.value = (await api.get('/campaigns/dataset-profiles')).data
   } catch {
     datasetProfiles.value = []
+  }
+  // An LLMBench too old to share them just offers none.
+  try {
+    frozenDatasets.value = (await api.get('/datasets/frozen')).data.frozen
+  } catch {
+    frozenDatasets.value = []
   }
 }
 
@@ -1177,7 +1189,7 @@ onMounted(async () => {
                 </InfoHint>
               </template>
               <WorkloadPicker v-model="workload" v-model:rebuild="rebuildAtStart"
-                :profiles="datasetProfiles" :benchmarks="benchmarks"
+                :profiles="datasetProfiles" :frozen="frozenDatasets" :benchmarks="benchmarks"
                 @module="(m) => (screenModule = m)" @datasets-changed="loadDatasetProfiles" />
             </el-form-item>
 
@@ -1236,7 +1248,7 @@ onMounted(async () => {
                   </div>
                   <template v-if="form.verify_enabled">
                     <WorkloadPicker v-model="verifyWorkload" v-model:rebuild="rebuildAtStart"
-                      :profiles="datasetProfiles" :benchmarks="benchmarks" no-sweep
+                      :profiles="datasetProfiles" :frozen="frozenDatasets" :benchmarks="benchmarks" no-sweep
                       @module="(m) => (verifyModule = m)" @datasets-changed="loadDatasetProfiles" />
                     <div class="grid-2 verify-fields">
                       <label class="field">

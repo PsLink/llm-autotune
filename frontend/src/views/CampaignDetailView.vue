@@ -847,6 +847,13 @@ const configRows = computed(() => {
         ? `ranked by ${verifyObjective.value.key}`
         : '',
     },
+    ...(!c.dataset_profile && c.dataset_frozen
+      ? [{
+          label: 'Replay dataset',
+          value: `${c.dataset_frozen} (frozen)`,
+          hint: 'a file on LLMBench that never changes; nothing to pin',
+        }]
+      : []),
     ...(c.dataset_profile
       ? [{
           label: 'Replay dataset',
@@ -1275,6 +1282,11 @@ onMounted(() => {
         <template #sub><span :class="{ mono: !!campaign.dataset_build_id }">{{
           campaign.dataset_build_id || t('campaign.fact.notPinned') }}</span></template>
         <template #tip>{{ t('campaign.fact.datasetTip') }}</template>
+      </FactTile>
+      <FactTile v-else-if="campaign.dataset_frozen" :icon="Coin" :label="t('campaign.fact.dataset')">
+        {{ campaign.dataset_frozen }}
+        <template #sub>{{ t('campaign.fact.frozen') }}</template>
+        <template #tip>{{ t('campaign.fact.frozenTip') }}</template>
       </FactTile>
     </div>
 

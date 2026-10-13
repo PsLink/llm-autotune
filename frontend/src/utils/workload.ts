@@ -11,8 +11,10 @@ export interface Workload {
   requests_per_concurrency: number
   /** Caps a level that has not finished its requests. */
   max_seconds_per_level: number
-  /** '' = LLMBench's built-in example set. */
+  /** A rolling collection profile; '' with no frozen one = the example set. */
   dataset_profile: string
+  /** A frozen dataset instead: a file that never changes. */
+  dataset_frozen: string
   requests: number
   concurrency: number
   slug: string
@@ -21,7 +23,7 @@ export interface Workload {
 export function defaultWorkload(mode: Workload['mode'] = 'sweep'): Workload {
   return {
     mode, input_tokens: 2048, output_tokens: 512, concurrencies: '1, 4, 16, 64',
-    requests_per_concurrency: 20, max_seconds_per_level: 600, dataset_profile: '', requests: 500, concurrency: 16, slug: '',
+    requests_per_concurrency: 20, max_seconds_per_level: 600, dataset_profile: '', dataset_frozen: '', requests: 500, concurrency: 16, slug: '',
   }
 }
 
@@ -37,8 +39,9 @@ export function specOf(w: Workload): Record<string, unknown> | null {
     }
   }
   return {
-    kind: 'replay', dataset_profile: w.dataset_profile, requests: w.requests,
-    concurrency: w.concurrency,
+    kind: 'replay', requests: w.requests, concurrency: w.concurrency,
+    ...(w.dataset_frozen ? { dataset_frozen: w.dataset_frozen }
+      : { dataset_profile: w.dataset_profile }),
   }
 }
 

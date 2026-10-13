@@ -332,6 +332,8 @@ async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
         setattr(body, slug_field, ensured.slug)
         if spec.kind == "replay" and spec.dataset_profile.strip() and not body.dataset_profile:
             body.dataset_profile = spec.dataset_profile.strip()
+        if spec.kind == "replay" and spec.dataset_frozen.strip():
+            body.dataset_frozen = spec.dataset_frozen.strip()
 
 
 async def _benchmark_estimates(body: CampaignCreate) -> dict[str, float | None]:

@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   teams' pod specs, so it is off by default.
 - A run waiting for cards shows **waiting for cards**, and its node once it
   has one.
+- **Frozen datasets** in a Replay workload: a frozen LLMBench dataset, a
+  file that never changes (frozen there, or imported from another
+  installation), next to the rolling samples. Every campaign replaying one
+  sees the same requests, with nothing to pin. **Automatic Tuning ▸ Datasets**
+  lists them with the campaigns that replay each (`GET /datasets/frozen`); the
+  workload spec takes `dataset_frozen`, and a campaign records it
+  (`dataset_frozen`, migration `010_frozen_datasets`). Needs an LLMBench whose
+  service accounts may list frozen datasets; one that does not simply offers
+  none ([Frozen datasets](docs/guide/datasets.md#frozen-datasets)).
 - Policy contract 1.2: the manifest's `hardware` has `pool`, `node_count` and
   `node_gpu_max`, and a launch the cluster has no room for reads `queued`
   again, with `waiting_reason` and `waiting_since`. A 1.1 policy keeps working

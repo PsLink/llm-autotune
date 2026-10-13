@@ -41,6 +41,8 @@ export const PORTABLE_KEYS = [
   // The profile and the policy travel; the pin does not. A pinned build id is
   // something this campaign holds, not something a copy of it should claim.
   'dataset_profile',
+  // The frozen dataset its benchmark replays, when it replays one.
+  'dataset_frozen',
   'dataset_policy',
   'daily_start',
   'daily_end',

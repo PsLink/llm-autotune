@@ -229,6 +229,21 @@ class DatasetProfileClient:
         """The models or backends the store has seen, with request counts."""
         return self._json("POST", "/replay-datasets/values", "read the log store", json=body)
 
+    def frozen(self) -> list[dict[str, Any]]:
+        """LLMBench's frozen datasets: files that never change, frozen from a
+        build or imported from another installation."""
+        response = self._request("GET", "/replay-datasets/frozen")
+        if response.status_code == 403:
+            raise DatasetProfileError(
+                "LLMBench did not let this platform list frozen datasets. It needs an "
+                "LLMBench whose service accounts may read them."
+            )
+        if response.status_code >= 400:
+            raise DatasetProfileError(_refusal("list frozen datasets", response))
+        body = response.json()
+        frozen = body.get("frozen", body) if isinstance(body, dict) else body
+        return [d for d in frozen or [] if isinstance(d, dict)]
+
     def builds(self, profile_id: int, limit: int = 10) -> list[dict[str, Any]]:
         body = self._json(
             "GET", f"/replay-datasets/profiles/{profile_id}/builds", "read the builds",

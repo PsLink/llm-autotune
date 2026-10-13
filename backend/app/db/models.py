@@ -626,6 +626,9 @@ class Campaign(Base):
     # life: candidates are ranked against each other, so they have to be
     # measured with the same instrument. See app/datasets/pinning.py.
     dataset_profile: Mapped[str] = mapped_column(String(100), default="")
+    # A frozen LLMBench dataset the replay stage measures against instead: a
+    # file that never changes, so there is nothing to pin. Recorded to show it.
+    dataset_frozen: Mapped[str] = mapped_column(String(100), default="", server_default="")
     dataset_policy: Mapped[str] = mapped_column(String(24), default="rebuild_at_start")
     dataset_build_id: Mapped[str] = mapped_column(String(64), default="")
     dataset_sha256: Mapped[str] = mapped_column(String(64), default="")

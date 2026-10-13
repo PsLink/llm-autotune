@@ -17,10 +17,10 @@ import hashlib
 import json
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.config import get_settings
-from app.evaluation.benchmarks import GROUP_TAG, Ensured, ensure_document
+from app.evaluation.benchmarks import GROUP_TAG, BenchmarkRefused, Ensured, ensure_document
 from app.evaluation.llmbench import LLMBenchClient
 
 SWEEP_MODULE = "perf_guidellm_sweep"
@@ -55,9 +55,11 @@ class BenchmarkSpec(BaseModel):
       fast the engine is; `max_seconds_per_level` caps a slow one. Fast, and
       blind to prefix-cache reuse.
     - `replay`: requests recorded from real traffic, replayed `concurrency` at
-      a time. `dataset_profile` names an LLMBench collection profile; empty
-      replays LLMBench's built-in example set (proves the pipeline, measures
-      nothing). `requests` caps how many (0 = the whole dataset).
+      a time. `dataset_profile` names an LLMBench collection profile (a rolling
+      sample), or `dataset_frozen` a frozen dataset (a file that never
+      changes); neither replays LLMBench's built-in example set (proves the
+      pipeline, measures nothing). `requests` caps how many (0 = the whole
+      dataset).
     """
 
     kind: Literal["sweep", "replay"] = "sweep"
@@ -67,6 +69,7 @@ class BenchmarkSpec(BaseModel):
     requests_per_concurrency: int = Field(default=20, ge=1, le=10_000)
     max_seconds_per_level: int = Field(default=600, ge=10, le=7200)
     dataset_profile: str = ""
+    dataset_frozen: str = ""
     requests: int = Field(default=500, ge=0, le=1_000_000)
     concurrency: int = Field(default=16, ge=1, le=4096)
 
@@ -80,6 +83,12 @@ class BenchmarkSpec(BaseModel):
             raise ValueError("at most 12 concurrency levels")
         return levels
 
+    @model_validator(mode="after")
+    def _one_dataset(self) -> BenchmarkSpec:
+        if self.dataset_profile.strip() and self.dataset_frozen.strip():
+            raise ValueError("a replay names a collection profile or a frozen dataset, not both")
+        return self
+
     def essentials(self) -> dict:
         """Only what this kind actually uses, so two specs that differ in an
         unused field are the same benchmark."""
@@ -88,8 +97,12 @@ class BenchmarkSpec(BaseModel):
                     "output_tokens": self.output_tokens, "concurrencies": self.concurrencies,
                     "requests_per_concurrency": self.requests_per_concurrency,
                     "max_seconds_per_level": self.max_seconds_per_level}
-        return {"kind": "replay", "dataset_profile": self.dataset_profile.strip(),
-                "requests": self.requests, "concurrency": self.concurrency}
+        out = {"kind": "replay", "dataset_profile": self.dataset_profile.strip(),
+               "requests": self.requests, "concurrency": self.concurrency}
+        # Only when set, so every replay spec written before keeps its slug.
+        if self.dataset_frozen.strip():
+            out["dataset_frozen"] = self.dataset_frozen.strip()
+        return out
 
     @property
     def slug(self) -> str:
@@ -105,7 +118,8 @@ class BenchmarkSpec(BaseModel):
             return (f"AutoTune sweep — {self.input_tokens} in / {self.output_tokens} out "
                     f"at concurrency {levels}, {self.requests_per_concurrency} requests "
                     "per slot")
-        dataset = self.dataset_profile.strip() or "the example set"
+        dataset = (self.dataset_profile.strip() or self.dataset_frozen.strip()
+                   or "the example set")
         count = f"{self.requests} requests" if self.requests else "all requests"
         return f"AutoTune replay — {dataset}, {count} at concurrency {self.concurrency}"
 
@@ -144,6 +158,9 @@ def document(spec: BenchmarkSpec, client: LLMBenchClient | None = None) -> dict:
         params: dict = {"concurrency": spec.concurrency, "max_samples": spec.requests}
         if spec.dataset_profile.strip():
             params.update(dataset_source="auto", dataset_profile=spec.dataset_profile.strip())
+        elif spec.dataset_frozen.strip():
+            params.update(dataset_source="fixed",
+                          dataset_path=frozen_path(spec.dataset_frozen.strip(), client))
         module = {
             "module_name": replay_module(),
             "params": params,
@@ -160,6 +177,17 @@ def document(spec: BenchmarkSpec, client: LLMBenchClient | None = None) -> dict:
         "modules": [{**module, "order_index": 0, "weight": 1.0,
                      "skip_if_prev_failed": False}],
     }
+
+
+def frozen_path(name: str, client: LLMBenchClient | None) -> str:
+    """Where LLMBench keeps the frozen dataset `name`: what a `fixed` replay
+    module reads. Refused (BenchmarkRefused) when LLMBench has no such dataset."""
+    from app.datasets.profiles import DatasetProfileClient
+
+    for dataset in DatasetProfileClient(client).frozen():
+        if dataset.get("name") == name and dataset.get("path"):
+            return str(dataset["path"])
+    raise BenchmarkRefused(f"LLMBench has no frozen dataset named {name}")
 
 
 def _replay_metrics(client: LLMBenchClient | None) -> list[dict]:
