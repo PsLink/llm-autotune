@@ -41,8 +41,11 @@ from app.control.managed import (
     ManagedCampaignRefused,
     Owner,
     create_managed_campaign,
+    extend_managed_campaign,
     owners_of,
+    pin_managed_dataset,
     record_event,
+    start_managed_campaign,
     stop_managed_campaign,
 )
 from app.control.orchestrator.groups import group_blockers, group_lease_warnings, members_by_rank
@@ -50,7 +53,9 @@ from app.control.orchestrator.lifecycle import (
     accepts_new_work,
     as_utc,
     lease_expired,
+    leased_target_count,
     machine_has_live_session,
+    machine_warnings,
     now,
 )
 from app.control.orchestrator.machine_queue import campaign_key, session_key
@@ -157,8 +162,11 @@ __all__ = [
     "Owner",
     "campaign_errors",
     "create_managed_campaign",
+    "extend_managed_campaign",
     "owners_of",
+    "pin_managed_dataset",
     "record_event",
+    "start_managed_campaign",
     "stop_managed_campaign",
     # The platform's tables (read-only to plugins)
     "TERMINAL_RUN_STATES",
@@ -207,7 +215,9 @@ __all__ = [
     "group_blockers",
     "group_lease_warnings",
     "lease_expired",
+    "leased_target_count",
     "machine_has_live_session",
+    "machine_warnings",
     "members_by_rank",
     "now",
     "policy_settings_of",

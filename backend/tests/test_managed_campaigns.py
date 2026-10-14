@@ -15,12 +15,28 @@ from app.control.managed import (
     ManagedCampaignRefused,
     Owner,
     create_managed_campaign,
+    extend_managed_campaign,
     owners_of,
+    pin_managed_dataset,
     record_event,
+    start_managed_campaign,
     stop_managed_campaign,
 )
+from app.datasets import pinning
+from app.datasets.profiles import DatasetBuild
 from app.db.base import Base
-from app.db.models import Campaign, CampaignStatus, Candidate, Event, Run, RunStatus, User
+from app.db.models import (
+    Campaign,
+    CampaignStatus,
+    Candidate,
+    Event,
+    Policy,
+    PolicySession,
+    PolicySessionStatus,
+    Run,
+    RunStatus,
+    User,
+)
 
 SPEC = {
     "name": "one config",
@@ -110,3 +126,79 @@ def test_a_plugin_writes_to_the_event_log_under_its_own_name(session):
     event = session.scalars(select(Event)).one()
     assert (event.actor, event.kind, event.payload) == (
         "plugin:example", "request_started", {"request": 4})
+
+
+def test_an_event_a_person_asked_for_is_theirs(session):
+    record_event(session, "request_cancelled", plugin="example", actor="alice")
+    assert session.scalars(select(Event)).one().actor == "alice"
+
+
+def test_a_plugin_starts_its_campaign_later_on_the_machines_it_chose(session):
+    campaign = create_managed_campaign(session, owner=OWNER, owner_id=1, spec=SPEC)
+    moment = datetime(2026, 10, 14, 8, 0, tzinfo=UTC)
+    start_managed_campaign(
+        session, campaign, plugin="example", start_for=timedelta(hours=2),
+        machine_names=["gpu-a"], at=moment,
+    )
+    assert campaign.status == CampaignStatus.ACTIVE.value
+    assert campaign.machine_names == ["gpu-a"]
+    assert campaign.window_end == campaign.override_until == moment + timedelta(hours=2)
+    with pytest.raises(ManagedCampaignRefused, match="already active"):
+        start_managed_campaign(session, campaign, plugin="example", start_for=timedelta(hours=1))
+
+
+def test_extending_moves_the_end_of_a_running_campaign_only(session):
+    campaign = create_managed_campaign(session, owner=OWNER, owner_id=1, spec=SPEC)
+    later = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+    extend_managed_campaign(session, campaign, plugin="example", until=later)
+    assert campaign.window_end is None  # not started: left alone
+    start_managed_campaign(session, campaign, plugin="example", start_for=timedelta(hours=1))
+    extend_managed_campaign(session, campaign, plugin="example", until=later)
+    assert campaign.window_end == campaign.override_until == later
+
+
+def test_a_pinned_dataset_is_held_before_the_campaign_starts(session):
+    campaign = create_managed_campaign(
+        session, owner=OWNER, owner_id=1, spec={**SPEC, "dataset_profile": "traffic"}
+    )
+    build = DatasetBuild(build_id="D7", sha256="abc", records=10)
+    pin_managed_dataset(
+        session, campaign, plugin="example", build=build, applied=pinning.APPLIED_CURRENT
+    )
+    session.flush()
+    assert (campaign.dataset_build_id, campaign.dataset_sha256) == ("D7", "abc")
+    assert pinning.holders(session, "traffic", "D7") == [campaign]
+
+    pin_managed_dataset(session, campaign, plugin="example", build=None)
+    assert campaign.dataset_build_id == "" and campaign.dataset_pinned_at is None
+
+
+def test_stopping_aborts_a_live_policy_session(session):
+    session.add(Policy(id=1, owner_id=1, name="p", image="img"))
+    campaign = create_managed_campaign(
+        session, owner=OWNER, owner_id=1, spec={**SPEC, "policy_id": 1},
+        start_for=timedelta(hours=1),
+    )
+    live = PolicySession(
+        campaign_id=campaign.id, policy_id=1, status=PolicySessionStatus.SEARCHING.value
+    )
+    session.add(live)
+    session.flush()
+
+    assert stop_managed_campaign(session, campaign, plugin="example") is False
+    assert live.abort_requested_at is not None
+    live.status = PolicySessionStatus.ABORTED.value
+    assert stop_managed_campaign(session, campaign, plugin="example") is True
+
+
+def test_a_plugin_changes_only_the_campaigns_it_runs(session):
+    theirs = create_managed_campaign(session, owner=OWNER, owner_id=1, spec=SPEC)
+    plain = Campaign(owner_id=1, name="by hand", engine="sglang", image="img",
+                     model_path="/m", served_model_name="m", search_space={"base": {}})
+    session.add(plain)
+    session.flush()
+    for campaign, plugin in ((theirs, "other"), (plain, "example")):
+        with pytest.raises(ManagedCampaignRefused, match="is not run by plugin"):
+            stop_managed_campaign(session, campaign, plugin=plugin)
+        with pytest.raises(ManagedCampaignRefused, match="is not run by plugin"):
+            start_managed_campaign(session, campaign, plugin=plugin, start_for=timedelta(1))

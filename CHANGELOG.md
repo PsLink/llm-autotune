@@ -94,7 +94,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `promotion_origin` already went with the GitLab merge-request path.
 - **Managed campaigns:** a plugin runs its work as a campaign the platform
   owns and runs (`create_managed_campaign` from a campaign spec, checked by
-  the rules every campaign follows; `stop_managed_campaign`; `record_event`).
+  the rules every campaign follows). It changes the campaign only through
+  services that refuse a campaign it does not own: `start_managed_campaign`
+  (later, optionally on machines it chose), `extend_managed_campaign` (move
+  the end of the window), `pin_managed_dataset` (hold several campaigns to
+  one dataset build so they compare) and `stop_managed_campaign` (which also
+  aborts a live policy session). `record_event` writes to the event log, as
+  the plugin or as the person who asked.
   The owner is recorded (migration `011_campaign_owners`): the campaign list
   leaves managed campaigns out unless asked (`GET /api/campaigns?managed=`,
   and a switch on the Campaigns page when plugins are installed), and a
