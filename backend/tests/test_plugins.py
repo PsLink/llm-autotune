@@ -26,6 +26,11 @@ OLD = Plugin(name="old", api_version=PLUGIN_API_VERSION - 1)
 MISNAMED = Plugin(name="other", api_version=PLUGIN_API_VERSION)
 BAD_NAME = Plugin(name="Bad-Name", api_version=PLUGIN_API_VERSION)
 NOT_A_PLUGIN = {"name": "dict"}
+BASE = Plugin(name="base", api_version=PLUGIN_API_VERSION)
+ON_BASE = Plugin(name="on_base", api_version=PLUGIN_API_VERSION, requires=("base",))
+TOP = Plugin(name="top", api_version=PLUGIN_API_VERSION, requires=("on_base", "base"))
+LOOP_A = Plugin(name="loop_a", api_version=PLUGIN_API_VERSION, requires=("loop_b",))
+LOOP_B = Plugin(name="loop_b", api_version=PLUGIN_API_VERSION, requires=("loop_a",))
 
 
 def _installed(**targets: str) -> dict[str, EntryPoint]:
@@ -39,6 +44,27 @@ def test_loads_the_listed_plugins_in_order():
     installed = _installed(good="GOOD", other="MISNAMED")
     assert plugins.load(["good"], installed) == [GOOD]
     assert plugins.load([], installed) == []
+
+
+def test_a_plugin_loads_after_the_plugins_it_requires():
+    installed = _installed(base="BASE", on_base="ON_BASE", top="TOP")
+    # Listed in any order, a plugin comes after what it builds on: it mounts,
+    # migrates and ticks after it.
+    assert plugins.load(["top", "on_base", "base"], installed) == [BASE, ON_BASE, TOP]
+    assert plugins.load(["base", "top", "on_base"], installed) == [BASE, ON_BASE, TOP]
+
+
+@pytest.mark.parametrize(
+    ("names", "says"),
+    [
+        (["on_base"], "requires 'base', which AUTOTUNE_PLUGINS does not enable"),
+        (["loop_a", "loop_b"], "in a cycle: loop_a -> loop_b -> loop_a"),
+    ],
+)
+def test_a_missing_or_circular_requirement_stops_startup(names, says):
+    installed = _installed(base="BASE", on_base="ON_BASE", loop_a="LOOP_A", loop_b="LOOP_B")
+    with pytest.raises(PluginError, match=re.escape(says)):
+        plugins.load(names, installed)
 
 
 def test_an_installed_plugin_stays_off_unless_listed(monkeypatch):
@@ -311,3 +337,21 @@ def test_extra_fields_reach_the_body_but_never_replace_the_endpoint():
 
     assert seen[0]["board_token"] == "t0k"
     assert seen[0]["endpoint_url"] == "http://engine"
+
+
+def test_the_examples_import_ban_covers_every_private_module():
+    """The example's ruff `banned-api` list is the boundary a plugin copies;
+    a new top-level module in `app` that it misses is a hole in it."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    config = tomllib.loads((root / "tests/plugins/example/pyproject.toml").read_text())
+    banned = set(config["tool"]["ruff"]["lint"]["flake8-tidy-imports"]["banned-api"])
+    modules = {
+        f"app.{p.stem if p.suffix == '.py' else p.name}"
+        for p in (root / "app").iterdir()
+        if (p.suffix == ".py" or (p.is_dir() and (p / "__init__.py").exists()))
+        and p.name != "__init__.py"
+    }
+    assert modules - banned == {"app.plugin_api"}

@@ -155,6 +155,8 @@ export default {
     oneOff: 'one-off window',
     manual: 'manual',
     gridAll: 'grid (every config)',
+    includeManaged: 'Include campaigns that plugins run',
+    runBy: 'run for {label}',
   },
 
 

@@ -1,17 +1,15 @@
 # Plugins
 
-A plugin adds to LLM AutoTune without changing it: its own API routes, work
-the worker does every tick, tables of its own, and planners. It is a Python
-package installed into the platform's environment, kept in its own
-repository, and upgraded independently of the platform.
+A plugin adds to LLM AutoTune without changing it: its own API routes and
+pages, work the worker does every tick, tables of its own, and work it runs
+on the platform's machines as managed campaigns. It is a Python package
+installed into the platform's environment, kept in its own repository, and
+upgraded independently of the platform.
 
-For a new search strategy, a [policy](api/policy-contract.md) is usually
-the better fit. A policy is a container the platform talks to over HTTP: it
-needs no Python inside the platform, can be written in any language, and
-can be registered without a redeploy. A plugin planner runs in the worker's
-own process and reads the campaign's history directly. It's the right
-choice when the strategy needs no container at all, or must be there for
-every campaign of a deployment.
+A new search strategy is not a plugin: it is a
+[policy](api/policy-contract.md), a container the platform talks to over
+HTTP. It needs no Python inside the platform, can be written in any
+language, and can be registered without a redeploy.
 
 The [example plugin](../backend/tests/plugins/example) uses every hook. It is
 the place to start: copy it and rename it.
@@ -51,7 +49,6 @@ Every hook is optional:
 | `tick_steps` | calls each `step(supervisor, session)` at the start of every worker tick, so whatever a step starts is planned, scheduled and advanced in the same tick. Each step runs in a savepoint: one that raises is logged and its writes rolled back, and the tick goes on |
 | `migrations` | upgrades the plugin's own Alembic directory to head on every deploy, after the platform's schema and before seeding. The worker waits for it as it waits for the platform's |
 | `on_bootstrap(engine)` | runs after the platform's own seeding on every deploy. Like that seeding, it should only add what is missing; if it fails, the failure is logged and the deploy goes on |
-| `propose_candidates(ctx)` | plans a campaign in-process, in place of the default enumeration of its space. See [Planning](#planning) |
 | `on_campaign_created(session, campaign, data)` | receives `extensions[<plugin name>]` of a new campaign, in the same transaction; raising `ExtensionRefused` refuses the campaign with that message. See [Campaign extensions](#campaign-extensions) |
 | `campaign_extensions(session, campaigns)` | returns `{campaign_id: data}`, shown on the campaign as `extensions[<plugin name>]` |
 | `queue_waiters(supervisor, session)` | the plugin's waiters (`QueueWaiter`) in the machine queue, served in arrival order with the platform's own. See [The machine queue](#the-machine-queue) |
@@ -63,38 +60,56 @@ Every hook is optional:
 | `openapi_tags` | descriptions of the plugin's API tags, shown in the API docs with the platform's |
 
 `name` is lowercase letters, digits and underscores, and must equal the
-entry-point name.
+entry-point name. `requires` names other plugins it builds on (see
+[Plugins that build on others](#plugins-that-build-on-others)).
 
-## Planning
+## Managed campaigns
 
-Each tick, for every ACTIVE campaign that has no policy container, the
-platform asks each plugin's `propose_candidates` in turn. The first to
-return something other than `None` plans that campaign; if none does, the
-platform enumerates the campaign's space as usual. A plugin returns `None`
-for a campaign it does not plan, so it decides which campaigns are its own,
-typically from its own side table.
+A plugin that needs something measured (one config on one machine, or a
+policy searching a space) runs it as a **managed campaign**. It doesn't build
+campaign rows or drive the scheduler. It hands the platform a campaign spec,
+the same body `POST /api/campaigns` takes and a campaign's YAML export holds,
+and the platform runs it like any other campaign: the machine queue, leases,
+windows, benchmarks and results are the platform's.
 
-The `PlanContext` it receives carries:
-- `session` and `campaign`;
-- `history()`: every run and queued or rejected candidate as a `RunRecord`,
-  with the campaign's objective already applied (its value, whether it was
-  feasible, and redline slacks), so every planner ranks on the number the
-  report shows;
-- `queued()` and `startable_slots()`, to size a batch: an adaptive planner
-  should ask for about as many points as can start, not commit to a hundred
-  guesses before any result has come back;
-- `batch_cap`, the cap for a space whose points do not depend on results.
+```python
+from datetime import timedelta
 
-What it returns is validated and deduplicated by the platform exactly like
-an enumerated point: a duplicate is dropped, and a configuration that cannot
-fit is recorded as rejected. A planner that raises is logged, and the
-campaign gets no new candidates that tick. It does not fall back to
-enumeration, which would queue every point of a space meant to be searched
-selectively.
+from app.plugin_api import Owner, create_managed_campaign, stop_managed_campaign
 
-The search-space helpers (`expand`, `axes`, `grid_values`, `range_specs`,
-`tied_groups`, `prune_inactive`) and the objective's `direction` are in
-`app.plugin_api` too.
+campaign = create_managed_campaign(
+    session,
+    owner=Owner(plugin="example", label="Request #4", link="/example/requests/4"),
+    owner_id=user.id,
+    spec={"name": "...", "engine": "sglang", "image": "...", "model_path": "...",
+          "served_model_name": "...", "search_space": {"base": {"tp": 2}},
+          "benchmark_slug": "..."},
+    start_for=timedelta(hours=2),
+)
+```
+
+- **Same rules as any campaign.** The spec is checked by the rules the API
+  applies (`campaign_errors`), and a broken one raises
+  `ManagedCampaignRefused` with the reason; nothing is created. A managed
+  campaign names its benchmarks by slug (`benchmark_spec` is refused: making
+  a benchmark is a call to LLMBench, which does not belong in a tick).
+- **Started or not.** `start_for` starts it now and holds it open that long,
+  as Force start does. Without it the campaign is created as the API creates
+  one (DRAFT, or SCHEDULED when the spec has a nightly window).
+- **Its owner is on record.** The campaign list leaves managed campaigns out
+  unless asked (`GET /api/campaigns?managed=include|only`, and a switch on
+  the Campaigns page when plugins are installed). The campaign's page says
+  what it runs for and links to `Owner.link`.
+- **Reading progress.** The plugin keeps the campaign id and reads the
+  platform's own rows: the campaign's status, its runs and their results.
+- **Closing it.** `stop_managed_campaign(session, campaign, plugin=...)` shuts
+  the window now, so the platform ends whatever is still running the way it
+  ends any campaign's runs at the end of a window. It returns True once the
+  campaign is DONE, which is when nothing of it is running; call it again on
+  a later tick until then.
+- **On the record.** `record_event(session, kind, plugin=..., ...)` adds to
+  the platform's event log, which a campaign's Activity tab and the reports
+  read.
 
 ## Campaign extensions
 
@@ -103,7 +118,7 @@ by plugin name, on every way a campaign is made and read:
 
 ```json
 POST /api/campaigns
-{"name": "...", "search_space": {...}, "extensions": {"example": {"label": "plan:reverse"}}}
+{"name": "...", "search_space": {...}, "extensions": {"example": {"label": "nightly"}}}
 ```
 
 - **Creating:** each plugin's `on_campaign_created` gets its part and saves
@@ -162,6 +177,17 @@ and `GET /api/agent/v1/reports?group=<slug>` lists by it. A group with a
 `page_path` (its page in the web UI, usually a plugin route) is linked from
 the report pages.
 
+## Plugins that build on others
+
+A plugin may build on another: list it in `requires`, and the platform loads,
+migrates, mounts and ticks it after the one it requires. The plugin may then
+import that plugin's own modules and point foreign keys at its tables. A
+requirement that `AUTOTUNE_PLUGINS` does not enable, or two plugins that
+require each other, stop startup with a message that says which.
+
+Keep the dependency one-way and narrow (one module the other plugin offers
+for the purpose), so either can still be removed in the right order.
+
 ## Frontend
 
 A plugin's pages live in a folder compiled into the frontend at build time:
@@ -177,7 +203,6 @@ const plugin: FrontendPlugin = {
   nav: [{ path: '/example', label: 'example.nav', group: 'top', order: 45 }],
   messages: { en: { example: { nav: 'Example' } }, zh: { example: { nav: '示例' } } },
   slots: { 'account.cards': AccountCard },
-  strategies: { group: 'Example plugin', options: [...], apply, selected, describe },
 }
 export default plugin
 ```
@@ -192,20 +217,22 @@ export default plugin
   - `account.cards`: cards on the account page, with props `me` and `reload`;
   - `campaign-detail.sections`: sections above a campaign's tabs, with props
     `campaign` and `reload`.
-- **`strategies`** add options to New campaign ▸ Search ▸ Strategy, for a
-  campaign the backend half plans with `propose_candidates`:
-  - `apply(extensions, value)` writes the choice into the campaign's
-    `extensions`, or clears it when another strategy is picked;
-  - `selected(extensions)` reads the choice back, for an imported or cloned
-    campaign;
-  - `describe(extensions)` is how the campaign's strategy reads in lists and on
-    its page.
-
 A frontend plugin imports from `@/plugins/api` only: the API client, `useI18n`,
-`usePoll`, the link helpers, the report renderer and the shared components
-(`MergeRequestDialog`, `CampaignRuns`, `LogDialog`, `LinkButton`, …). CI builds
-the frontend with `backend/tests/plugins/example/frontend` installed on every
-change.
+`usePoll`, the link and list-filter helpers, the report renderer, and the
+building blocks of the platform's own pages, so a plugin's pages look and
+behave like them:
+- **Lists:** `ListFilters` with `useQueryFilters` and `countOptions`;
+- **At a glance:** `FactTile`, `ScoreBars`, `ConfigChips`, `FlagChips`, the
+  status helpers (`campaignStatus`, `runStatus`, `failureLabel`);
+- **Forms:** `WorkloadPicker`, `NightlyWindow`, `InfoHint`;
+- **Runs and results:** `CampaignRuns`, `LogDialog`, `CatalogExportDialog`;
+- **Links:** `LinkButton`, `BackLink`.
+
+Keep a plugin's forms to what most people change, and put the rest under an
+**Advanced** section (an `el-collapse`), as the platform's own forms do.
+
+CI builds the frontend with `backend/tests/plugins/example/frontend`
+installed on every change.
 
 ## Turning one on
 
@@ -232,12 +259,34 @@ RUN uv pip install --python /app/.venv/bin/python /plugins/my-plugin
 The API, worker and migrate job all run from this one image, so all three
 get the plugin.
 
-## What a plugin may use
+## What a plugin may touch
 
-`app.plugin_api` and nothing else. It re-exports the hook types, the models a
-plugin reads (`Campaign`, `Run`, `Machine`, `User`…), the database sessions,
-the login dependencies, and `migration_env`. Every other module in `app` is
-private to the platform and can change in any release.
+`app.plugin_api` and nothing else. Every other module in `app` is private to
+the platform and can change in any release. It offers:
+- **the hooks** and their types;
+- **managed campaigns**: `create_managed_campaign`, `stop_managed_campaign`,
+  `owners_of`, `record_event`, and the spec type `CampaignCreate`;
+- **the platform's tables**, to read: `Campaign`, `Run`, `Result`, `Machine`,
+  `Event`, `User`… and their status enums;
+- **users, sessions, settings and secrets**: the login dependencies, the
+  database sessions, `get_settings`, `encrypt_secret` / `decrypt_secret`;
+- **machines and the queue**: lease and availability checks, `busy_reason`,
+  `reservations_on`, the queue keys, `preflight`;
+- **the search space, engines and configs**: `expand`, `space_errors`,
+  `cards_used`, `LaunchConfig`, `parse_launch_command`, the flag helpers;
+- **measuring**: objectives (`direction`, `target_metric`, `sort_key`),
+  `summary_of`, `Gate`, `scenarios`, `LLMBenchClient`, dataset pinning;
+- **the agent API's run documents**: `load_run`, the document parts and
+  their schemas.
+
+With it come three rules:
+- **The platform's tables are read-only to a plugin.** It reads them freely
+  and changes them only through the services above: work it needs run is a
+  managed campaign, and what it wants on the record goes through
+  `record_event`.
+- **A plugin's own tables point at the platform's only by primary key** (see
+  [Data](#data)).
+- **A plugin imports another plugin only if it `requires` it.**
 
 The example's `pyproject.toml` enforces this with ruff's `banned-api`. Copy
 that section into yours, so an import from anywhere else fails your own lint.

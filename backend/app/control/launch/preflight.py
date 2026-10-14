@@ -13,10 +13,13 @@ because people stop reading the ones next to it.
 """
 
 import json
+import logging
 import shlex
 from dataclasses import dataclass, field
 from difflib import get_close_matches
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 PASS = "pass"
 WARN = "warn"  # will probably work, but costs time or hides a surprise
@@ -600,3 +603,52 @@ def summarize(machine_name: str, checks: list[Check]) -> dict:
 
 def as_json(checks: list[Check]) -> str:
     return json.dumps([c.as_dict() for c in checks], indent=2)
+
+
+# -- what LLMBench and the space say, shared with plugins' own preflights ------
+
+
+def benchmark_catalog(client: Any) -> dict[str, list[str]] | None:
+    """What LLMBench offers this account. None when it could not be asked —
+    which is a fact about the platform right now, never a verdict on a
+    campaign, so the checks built from it degrade to SKIP."""
+    try:
+        return client.modules_by_benchmark()
+    except Exception as exc:  # unreachable, unauthorized, shape changed
+        logger.info("preflight could not list benchmarks: %s", exc)
+        return None
+
+
+def dataset_wiring(client: Any) -> tuple[dict[str, str] | None, list[str] | None]:
+    """Which profile each benchmark replays, and which profiles exist.
+
+    Both None when LLMBench could not be asked — same rule as the benchmark
+    catalog: a fact about the platform right now is never a verdict on a
+    campaign, so the check degrades to SKIP rather than blocking a night.
+    """
+    try:
+        wired = client.dataset_profiles_by_benchmark()
+    except Exception as exc:
+        logger.info("preflight could not read benchmark datasets: %s", exc)
+        return None, None
+    try:
+        from app.datasets.profiles import DatasetProfileClient
+
+        profiles = DatasetProfileClient(client).names()
+    except Exception as exc:
+        # The wiring check still works without the list; only the "does this
+        # profile exist" half is lost.
+        logger.info("preflight could not list dataset profiles: %s", exc)
+        profiles = None
+    return wired, profiles
+
+
+def widest_candidate(search_space: dict) -> int:
+    """Cards the largest configuration in this space would occupy."""
+    try:
+        from app.control.search.space import expand
+        from app.control.search.validation import cards_used
+
+        return max((cards_used(c) for c in expand(search_space or {})), default=0)
+    except Exception:
+        return 0

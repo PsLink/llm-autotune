@@ -166,69 +166,50 @@ async def test_the_platforms_routes_are_untouched(client):
     assert (await client.get("/api/health")).json() == {"status": "ok"}
 
 
-def test_its_planner_plans_only_the_campaigns_it_labels(tmp_path, monkeypatch):
-    from app.db.models import CampaignStatus, Candidate, Machine, MachineState
+async def test_it_runs_work_as_a_managed_campaign_the_list_keeps_apart(client):
+    spec = {
+        "name": "measure m", "engine": "sglang", "image": "img", "model_path": "/m",
+        "served_model_name": "m", "search_space": {"base": {"tp": 1}},
+    }
+    made = await client.post("/api/example/measurements", json={"spec": spec, "hours": 1})
+    assert made.status_code == 200, made.text
+    campaign_id = made.json()["campaign_id"]
 
-    url, engine = _database(tmp_path)
-    plugins.upgrade(example_plugin.plugin, url)
-    factory = sessionmaker(engine, expire_on_commit=False)
-    with factory() as session:
-        session.add(User(id=1, username="u", password_hash="x"))
-        session.add(
-            Machine(
-                id=1, name="gpu-01", host="10.0.0.1", gpu_count=8,
-                state=MachineState.AVAILABLE.value,
-            )
-        )
-        for campaign_id in (1, 2):
-            session.add(
-                Campaign(
-                    id=campaign_id, owner_id=1, name=f"c{campaign_id}", engine="sglang",
-                    image="img", model_path="/m", served_model_name="m",
-                    search_space={"grid": {"tp": [1, 2, 4]}},
-                    status=CampaignStatus.ACTIVE.value, run_baseline_canary=False,
-                )
-            )
-        session.flush()
-        session.add(CampaignLabel(campaign_id=1, label="plan:reverse"))
-        session.commit()
-    supervisor = Supervisor(session_factory=factory)
-    supervisor.driver = NullDriver()
-    monkeypatch.setattr(plugins, "enabled", lambda: (example_plugin.plugin,))
+    detail = (await client.get(f"/api/campaigns/{campaign_id}")).json()
+    assert detail["status"] == "active" and detail["window_end"]
+    assert detail["managed_by"] == {
+        "plugin": "example", "label": "Measurement for admin", "link": "/example/ticks"}
+    listed = [c["id"] for c in (await client.get("/api/campaigns")).json()]
+    assert campaign_id not in listed and 7 in listed, "hidden from the list by default"
+    only = [c["id"] for c in (await client.get("/api/campaigns?managed=only")).json()]
+    assert only == [campaign_id]
+    both = [c["id"] for c in (await client.get("/api/campaigns?managed=include")).json()]
+    assert set(both) == {7, campaign_id}
 
-    with factory() as session:
-        supervisor._plan(session)
-        session.commit()
-        planned = {
-            campaign_id: [
-                c.config["tp"]
-                for c in session.scalars(
-                    select(Candidate)
-                    .where(Candidate.campaign_id == campaign_id)
-                    .order_by(Candidate.id)
-                )
-            ]
-            for campaign_id in (1, 2)
-        }
+    stopped = await client.post(f"/api/example/measurements/{campaign_id}/stop")
+    assert stopped.json() == {"campaign_id": campaign_id, "done": True}
+    assert (await client.get(f"/api/campaigns/{campaign_id}")).json()["status"] == "done"
 
-    assert planned == {1: [4, 2, 1], 2: [1, 2, 4]}, "labelled: reversed; the other: enumerated"
+    refused = await client.post(
+        "/api/example/measurements", json={"spec": {**spec, "engine": "trt"}})
+    assert refused.status_code == 422 and "engine" in refused.text
 
 
 async def test_a_campaign_is_created_and_read_with_its_label(client):
     body = {
         "name": "labelled", "engine": "sglang", "image": "img", "model_path": "/m",
         "served_model_name": "m", "search_space": {"grid": {"tp": [1]}},
-        "extensions": {"example": {"label": "plan:reverse"}},
+        "extensions": {"example": {"label": "nightly"}},
     }
     created = await client.post("/api/campaigns", json=body)
     assert created.status_code == 200, created.text
     campaign_id = created.json()["id"]
-    assert created.json()["extensions"] == {"example": {"label": "plan:reverse"}}
+    assert created.json()["extensions"] == {"example": {"label": "nightly"}}
     async with client.db() as session:
-        assert (await session.get(CampaignLabel, campaign_id)).label == "plan:reverse"
+        assert (await session.get(CampaignLabel, campaign_id)).label == "nightly"
 
     spec = (await client.get(f"/api/campaigns/{campaign_id}/spec")).json()
-    assert spec["extensions"] == {"example": {"label": "plan:reverse"}}
+    assert spec["extensions"] == {"example": {"label": "nightly"}}
 
     refused = await client.post(
         "/api/campaigns", json={**body, "extensions": {"example": {"label": ""}}}

@@ -31,5 +31,5 @@
 - [Agent API](api/agent-api.md): the read models LLM-written performance
   reports use (off by default), and the
   [report agent prompt](perf-report-prompt.md).
-- [Plugins](plugins.md): routes, worker steps, tables, planners and pages from
-  a separately installed package.
+- [Plugins](plugins.md): routes, worker steps, tables, managed campaigns and
+  pages from a separately installed package.

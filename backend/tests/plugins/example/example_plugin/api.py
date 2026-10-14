@@ -1,10 +1,23 @@
 """The example plugin's routes, mounted under /api/example."""
 
-from app.plugin_api import Campaign, User, get_async_session, get_current_user
+from typing import Any
+
+from app.plugin_api import (
+    Campaign,
+    ExtensionRefused,
+    ManagedCampaignRefused,
+    Owner,
+    User,
+    create_managed_campaign,
+    get_async_session,
+    get_current_user,
+    stop_managed_campaign,
+)
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from example_plugin.models import CampaignLabel, Setting, TickNote
 
@@ -54,3 +67,56 @@ async def put_label(
         row.label = body.label
     await session.commit()
     return {"campaign_id": campaign_id, "label": row.label}
+
+
+class MeasureIn(BaseModel):
+    # A campaign spec: the body POST /api/campaigns takes.
+    spec: dict[str, Any]
+    hours: float = Field(default=2, gt=0, le=24)
+
+
+@router.post("/measurements")
+async def measure(
+    body: MeasureIn,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Run a spec as a managed campaign, started now for `hours`."""
+    from datetime import timedelta
+
+    def _create(sync: Session) -> int:
+        campaign = create_managed_campaign(
+            sync,
+            owner=Owner(plugin="example", label=f"Measurement for {user.username}",
+                        link="/example/ticks"),
+            owner_id=user.id,
+            spec=body.spec,
+            start_for=timedelta(hours=body.hours),
+        )
+        return campaign.id
+
+    try:
+        campaign_id = await session.run_sync(_create)
+    except (ManagedCampaignRefused, ExtensionRefused) as exc:
+        await session.rollback()
+        raise HTTPException(422, str(exc)) from exc
+    await session.commit()
+    return {"campaign_id": campaign_id}
+
+
+@router.post("/measurements/{campaign_id}/stop")
+async def stop_measurement(
+    campaign_id: int,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user),
+) -> dict:
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(404, f"no campaign {campaign_id}")
+    done = await session.run_sync(
+        lambda sync: stop_managed_campaign(
+            sync, sync.get(Campaign, campaign_id), plugin="example", reason="stopped"
+        )
+    )
+    await session.commit()
+    return {"campaign_id": campaign_id, "done": done}

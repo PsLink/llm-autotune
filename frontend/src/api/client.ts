@@ -312,6 +312,9 @@ export interface Campaign {
   owner_name?: string
   /** What installed plugins keep about the campaign, by plugin name. */
   extensions?: Record<string, Record<string, unknown>>
+  /** Set when a plugin runs this campaign for something of its own: which
+   *  plugin, what for, and the page it belongs to. */
+  managed_by?: { plugin: string; label: string; link: string } | null
   name: string
   engine: string
   image: string

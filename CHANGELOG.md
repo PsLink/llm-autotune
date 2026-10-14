@@ -73,6 +73,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again, with `waiting_reason` and `waiting_since`. A 1.1 policy keeps working
   ([Evolution](docs/api/policy-contract.md#evolution)).
 
+
+### Plugin API
+
+- **Version 2.** A plugin written for version 1 must be updated.
+- **Removed:** in-process planning (`propose_candidates`, `PlanContext`,
+  `RunRecord`) and its frontend half (`strategies` on a frontend plugin). A
+  search strategy is a [policy](docs/api/policy-contract.md) container.
+  `promotion_origin` already went with the GitLab merge-request path.
+- **Managed campaigns:** a plugin runs its work as a campaign the platform
+  owns and runs (`create_managed_campaign` from a campaign spec, checked by
+  the rules every campaign follows; `stop_managed_campaign`; `record_event`).
+  The owner is recorded (migration `011_campaign_owners`): the campaign list
+  leaves managed campaigns out unless asked (`GET /api/campaigns?managed=`,
+  and a switch on the Campaigns page when plugins are installed), and a
+  managed campaign's page links back to the page it runs for
+  (`managed_by` on the campaign API).
+- **`requires`:** a plugin may build on another. It loads, migrates, mounts
+  and ticks after the plugins it requires; a missing or circular requirement
+  stops startup.
+- **`app.plugin_api` covers what plugins need:** read access to the
+  platform's tables, the users, sessions, settings and secrets, machine and
+  lease checks, the search space and engine helpers, objectives and result
+  summaries, the LLMBench client, dataset pinning, and the agent API's run
+  documents. Three rules come with it (docs/plugins.md, "What a plugin may
+  touch"): the platform's tables are read-only to a plugin, its own tables
+  point at the platform's only by primary key, and it imports another plugin
+  only if it requires it.
+- **`@/plugins/api` exports the building blocks of the platform's pages:**
+  `FactTile`, `ListFilters`, `WorkloadPicker`, `ScoreBars`, `NightlyWindow`,
+  `CatalogExportDialog`, and the status, time and filter helpers.
 ### Changed
 
 - The campaign page is shorter. The lines of text under the name are now a

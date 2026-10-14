@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { describeStrategy } from '../plugins'
+import { plugins } from '../plugins'
 import { computed, onMounted, ref } from 'vue'
 import { api, type Campaign, type Policy } from '../api/client'
 import LinkButton from '../components/LinkButton.vue'
@@ -14,9 +14,14 @@ const campaignRows = useRowLink((row: Campaign) => `/campaigns/${row.id}`)
 const { t } = useI18n()
 const campaigns = ref<Campaign[]>([])
 const policies = ref<Policy[]>([])
+/** Campaigns installed plugins run for something of their own (a request on
+ *  a plugin's page) are left out unless asked for; each links to its page. */
+const withManaged = ref(false)
 
 async function load() {
-  campaigns.value = (await api.get('/campaigns')).data
+  campaigns.value = (await api.get('/campaigns', {
+    params: { managed: withManaged.value ? 'include' : 'exclude' },
+  })).data
   try {
     policies.value = (await api.get('/policies')).data
   } catch {
@@ -89,12 +94,17 @@ onMounted(load)
     <ListFilters v-model="selected" v-model:search="search" :fields="filterFields"
       :search-placeholder="t('filters.searchCampaigns')" :shown="shown.length"
       :total="campaigns.length" />
+    <el-checkbox v-if="plugins.length" v-model="withManaged" class="managed-toggle"
+      @change="load">{{ t('campaigns.includeManaged') }}</el-checkbox>
 
     <el-table :data="shown" v-bind="campaignRows" style="cursor: pointer">
       <el-table-column prop="id" :label="t('common.id')" width="70" />
       <el-table-column :label="t('common.name')" min-width="200">
         <template #default="{ row }">
           <router-link :to="`/campaigns/${row.id}`" class="nav-link">{{ row.name }}</router-link>
+          <div v-if="row.managed_by" class="muted tiny">
+            {{ t('campaigns.runBy', { label: row.managed_by.label || row.managed_by.plugin }) }}
+          </div>
         </template>
       </el-table-column>
       <el-table-column :label="t('common.model')" min-width="150">
@@ -122,8 +132,6 @@ onMounted(load)
       <el-table-column :label="t('campaigns.search')" width="160">
         <template #default="{ row }">
           <span v-if="row.policy_id != null" class="mono">{{ policyName(row.policy_id) }}</span>
-          <span v-else-if="describeStrategy(row.extensions)" class="mono">
-            {{ describeStrategy(row.extensions) }}</span>
           <span v-else class="muted" :title="t('campaign.enumerates')">{{ t('campaigns.gridAll') }}</span>
         </template>
       </el-table-column>
@@ -137,6 +145,7 @@ onMounted(load)
 </template>
 
 <style scoped>
+.managed-toggle { margin: -4px 0 10px; }
 .header-row {
   display: flex;
   justify-content: space-between;

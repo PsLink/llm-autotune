@@ -14,25 +14,33 @@ export { navigate, useLinkTo, useRowLink, wantsNewTab } from '../utils/nav'
 export { apiErrorText } from '../utils/apiError'
 export { copyText } from '../utils/clipboard'
 export { sweptKeysOf } from '../utils/space'
-export { campaignStatus } from '../utils/status'
-export { absoluteTime, exactTime, relativeTime } from '../utils/time'
+export {
+  campaignStatus, failureLabel, isLive, runLabel, runStatus, type StatusLook,
+} from '../utils/status'
+export { absoluteTime, clockTime, duration, exactTime, relativeTime } from '../utils/time'
+export { countOptions, useQueryFilters } from '../utils/queryFilters'
+export { beatsBaselineRatio, baselineDeltaPct, fmtBaselineDelta } from '../utils/baseline'
+export { defaultWorkload, specOf, type Workload } from '../utils/workload'
 export { fromYaml, toYaml, YamlError } from '../utils/yaml'
 export { renderReport, type ReportInput } from '../report/render'
 
+// The building blocks of the platform's own pages, so a plugin's pages look
+// and behave like them: at-a-glance tiles, list filters, the workload picker,
+// score bars, the nightly window editor.
 export { default as BackLink } from '../components/BackLink.vue'
 export { default as CampaignRuns } from '../components/CampaignRuns.vue'
 export { default as ConfigChips } from '../components/ConfigChips.vue'
 export { default as CopyButton } from '../components/CopyButton.vue'
+export { default as FactTile } from '../components/FactTile.vue'
 export { default as FlagChips } from '../components/FlagChips.vue'
 export { default as InfoHint } from '../components/InfoHint.vue'
 export { default as LinkButton } from '../components/LinkButton.vue'
+export { default as ListFilters } from '../components/ListFilters.vue'
+export type { FilterField, FilterOption } from '../components/ListFilters.vue'
 export { default as LogDialog } from '../components/LogDialog.vue'
+export { default as NightlyWindow } from '../components/NightlyWindow.vue'
 export { default as PluginSlot } from '../components/PluginSlot.vue'
+export { default as ScoreBars } from '../components/ScoreBars.vue'
+export { default as WorkloadPicker } from '../components/WorkloadPicker.vue'
 
-export type {
-  Extensions,
-  FrontendPlugin,
-  NavItem,
-  StrategyContribution,
-  StrategyOption,
-} from './index'
+export type { Extensions, FrontendPlugin, NavItem } from './index'

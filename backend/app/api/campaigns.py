@@ -1,9 +1,9 @@
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import delete as sa_delete
@@ -14,24 +14,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import plugins
+from app.campaign_rules import ALLOWED_ENGINES, campaign_errors
 from app.campaign_spec import SPEC_KEYS, DraftRequest, draft_campaign, spec_of
+from app.control import managed
 from app.control.baseline import resolve_baseline
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch import preflight as pf
 from app.control.orchestrator import lifecycle, timing
 from app.control.orchestrator import schedule as sched
 from app.control.search.parity import missing_flags
-from app.control.search.space import candidate_count, expand, space_errors, swept_keys
+from app.control.search.space import candidate_count, space_errors, swept_keys
 from app.control.search.validation import cards_used
 from app.core.auth import get_current_user
 from app.core.config import get_settings
-from app.datasets import pinning
 from app.datasets.profiles import DatasetProfileClient, DatasetProfileError
 from app.db.base import get_async_session
 from app.db.models import (
     TERMINAL_RUN_STATES,
     TERMINAL_SESSION_STATES,
     Campaign,
+    CampaignOwner,
     CampaignStatus,
     Candidate,
     Event,
@@ -64,92 +66,17 @@ from app.schemas.core import (
     CandidateOut,
     LeaderboardEntry,
     MachineWarningOut,
+    ManagedByOut,
     RunOut,
     served_name_for,
 )
-from app.schemas.policy import PolicySettings
 from app.staging import SCREEN, VERIFY
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
-_ALLOWED_ENGINES = {"sglang", "vllm"}
 _TERMINAL_RUN_VALUES = [s.value for s in TERMINAL_RUN_STATES]
-
-
-async def _node_group_errors(session: AsyncSession, body: CampaignCreate) -> list[str]:
-    """Validate a declared node group at save time.
-
-    Cheap and static: the group must exist, and vLLM is refused outright — its
-    multi-node topology (a Ray head plus workers, or external_launcher) is a
-    different bootstrap that the platform does not have, and half-wiring it would
-    fail at launch with a config that looks fine.
-    """
-    name = (body.node_group or "").strip()
-    if not name:
-        return []
-    if body.engine != "sglang":
-        return [
-            f"{body.engine} multi-node deployment is not supported yet; use sglang "
-            "for a node group"
-        ]
-    group = (
-        await session.execute(select(MachineGroup).where(MachineGroup.name == name))
-    ).scalar_one_or_none()
-    if group is None:
-        return [f"no node group named {name!r} — create one on the Resources page"]
-    # A gang on the cluster is one LeaderWorkerSet (design step 9). Until the k8s
-    # driver renders that, launching N separate Deployments would be N
-    # single-node engines rather than the deployment that was asked for, so the
-    # pin is refused here instead of silently mislaunching it.
-    drivers = (
-        await session.execute(
-            select(Machine.driver)
-            .join(MachineGroupMember, MachineGroupMember.machine_id == Machine.id)
-            .where(MachineGroupMember.group_id == group.id)
-        )
-    ).scalars().all()
-    non_ssh = sorted({(driver or "ssh_docker") for driver in drivers} - {"ssh_docker"})
-    if non_ssh:
-        return [
-            f"node group {name!r} runs on {', '.join(non_ssh)}, and multi-node "
-            "deployment is only implemented for ssh+docker hosts so far"
-        ]
-    return []
-
-
-
-def _staging_errors(body: CampaignCreate) -> list[str]:
-    """Half a staged campaign is worse than none.
-
-    A top-k with no benchmark would re-run the winners against the same cheap
-    test and present the result as verification; a benchmark with no top-k is
-    configuration that silently never fires. Both read, at 8am, as "the second
-    stage did not happen" with nothing to say why.
-    """
-    errors: list[str] = []
-    if body.verify_top_k < 0:
-        errors.append("verify_top_k must be >= 0")
-    if body.verify_top_k > 0 and not body.verify_benchmark_slug.strip():
-        errors.append(
-            "verify_top_k needs verify_benchmark_slug — which benchmark should "
-            "the best candidates be re-measured against?"
-        )
-    if body.verify_benchmark_slug.strip() and body.verify_top_k <= 0:
-        errors.append(
-            "verify_benchmark_slug needs verify_top_k > 0, or nothing is ever "
-            "sent to it"
-        )
-    if body.verify_top_k > 0 and body.verify_max_run_minutes < 1:
-        errors.append("verify_max_run_minutes must be >= 1")
-    if body.dataset_policy and body.dataset_policy not in pinning.POLICIES:
-        errors.append(f"dataset_policy must be one of {list(pinning.POLICIES)}")
-    # No longer tied to the verify stage: when the single benchmark IS the
-    # replay, the primary stage pins the dataset. A profile set on a campaign
-    # whose benchmark never replays is harmless — the pin is computed and simply
-    # never matched against — so it is not worth refusing here.
-    return errors
 
 
 @router.get("/dataset-profiles", summary="Replay collection profiles on LLMBench")
@@ -274,18 +201,30 @@ async def draft(
 
 @router.get("", response_model=list[CampaignOut])
 async def list_campaigns(
-    _: User = Depends(get_current_user), session: AsyncSession = Depends(get_async_session)
+    managed: Literal["exclude", "include", "only"] = Query(
+        "exclude",
+        description="Campaigns plugins run for something of their own: left out "
+        "(the default), listed too, or listed alone.",
+    ),
+    _: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
 ):
-    campaigns = (
-        (await session.execute(select(Campaign).order_by(Campaign.id.desc()))).scalars().all()
-    )
+    query = select(Campaign).order_by(Campaign.id.desc())
+    owned = select(CampaignOwner.campaign_id)
+    if managed == "exclude":
+        query = query.where(Campaign.id.not_in(owned))
+    elif managed == "only":
+        query = query.where(Campaign.id.in_(owned))
+    campaigns = (await session.execute(query)).scalars().all()
     extensions = await _extensions_of(session, campaigns)
+    managers = await _managers_of(session, campaigns)
     owners = await _usernames(session)
     out = []
     for campaign in campaigns:
         row = CampaignOut.model_validate(campaign)
         row.extensions = extensions[campaign.id]
         row.owner_name = owners.get(campaign.owner_id, "")
+        row.managed_by = managers.get(campaign.id)
         out.append(row)
     return out
 
@@ -364,45 +303,13 @@ async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Ca
     """Validate and save a campaign. The one path every way of making one takes
     — the form, an imported spec, a clone, a posted draft — so a rule added here
     holds for all of them."""
-    if body.engine not in _ALLOWED_ENGINES:
+    # The cheap refusal first, before a workload is created on LLMBench.
+    if body.engine not in ALLOWED_ENGINES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "engine must be sglang|vllm")
-    # With no policy the platform simply enumerates the declared space; with
-    # one, the container decides what to try and the space is only the bounds
-    # it must stay inside.
-    if body.policy_id is not None:
-        policy = await session.get(Policy, body.policy_id)
-        if policy is None:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"no policy with id {body.policy_id}"
-            )
-        try:
-            PolicySettings.model_validate(body.policy_settings or {})
-        except ValidationError as exc:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"policy_settings: {exc.errors()}"
-            ) from exc
-    if body.confirm_top_k < 0 or body.confirm_repeats < 1:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "confirm_top_k must be >= 0 and confirm_repeats >= 1",
-        )
     await _resolve_benchmark_specs(body)
-    for message in _staging_errors(body):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, message)
-    for message in await _node_group_errors(session, body):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, message)
-    # A malformed space does not fail loudly — it quietly expands to a different
-    # candidate list than the one that was reviewed. Catch it at creation, not
-    # at 2am when the policy has already spent half the night on it.
-    errors = space_errors(body.search_space or {})
+    errors = await session.run_sync(lambda sync: campaign_errors(sync, body))
     if errors:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(errors))
-    # A schedule that does not parse leaves the campaign asleep forever, and
-    # the only symptom is nothing happening at 23:00 — the worst possible time
-    # to discover a typo.
-    schedule_errors = sched.errors(body.daily_start, body.daily_end, body.schedule_timezone)
-    if schedule_errors:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(schedule_errors))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, errors[0])
     campaign = Campaign(owner_id=user.id, **body.model_dump(
         exclude={"extensions", "benchmark_spec", "verify_benchmark_spec"}))
     timing.set_priors(campaign, await _benchmark_estimates(body))
@@ -514,6 +421,16 @@ async def _extensions_of(
     )
 
 
+async def _managers_of(session: AsyncSession, campaigns) -> dict[int, ManagedByOut]:
+    """Which plugin runs each of these campaigns, for the ones a plugin runs."""
+    found = await session.run_sync(
+        lambda sync: managed.owners_of(sync, [c.id for c in campaigns])
+    )
+    return {
+        cid: ManagedByOut(plugin=o.plugin, label=o.label, link=o.link) for cid, o in found.items()
+    }
+
+
 async def _usernames(session: AsyncSession) -> dict[int, str]:
     return dict((await session.execute(select(User.id, User.username))).all())
 
@@ -527,6 +444,7 @@ async def _campaign_out(session: AsyncSession, campaign: Campaign) -> CampaignOu
     out.owner_name = owner.username if owner is not None else ""
     out.learned_timing = timing.summary(campaign)
     out.extensions = (await _extensions_of(session, [campaign]))[campaign.id]
+    out.managed_by = (await _managers_of(session, [campaign])).get(campaign.id)
     if campaign.status in _LIVE_CAMPAIGN_STATES:
         machines = (await session.execute(select(Machine))).scalars().all()
         out.machine_warnings = [
@@ -636,6 +554,7 @@ async def delete_campaign(
         )
     await session.execute(sa_delete(PolicyState).where(PolicyState.campaign_id == campaign_id))
     await session.execute(sa_delete(Candidate).where(Candidate.campaign_id == campaign_id))
+    await session.execute(sa_delete(CampaignOwner).where(CampaignOwner.campaign_id == campaign_id))
     await session.execute(
         sa_update(Event).where(Event.campaign_id == campaign_id).values(campaign_id=None))
     await session.delete(campaign)
@@ -711,39 +630,6 @@ def _with_specs(
             body.dataset_profile = spec.dataset_profile.strip()
 
 
-def _benchmark_catalog(client: LLMBenchClient) -> dict[str, list[str]] | None:
-    """What LLMBench offers this account. None when it could not be asked —
-    which is a fact about the platform right now, never a verdict on a
-    campaign, so the checks built from it degrade to SKIP."""
-    try:
-        return client.modules_by_benchmark()
-    except Exception as exc:  # unreachable, unauthorized, shape changed
-        logger.info("preflight could not list benchmarks: %s", exc)
-        return None
-
-
-def _dataset_wiring(client: LLMBenchClient) -> tuple[dict[str, str] | None, list[str] | None]:
-    """Which profile each benchmark replays, and which profiles exist.
-
-    Both None when LLMBench could not be asked — same rule as the benchmark
-    catalog: a fact about the platform right now is never a verdict on a
-    campaign, so the check degrades to SKIP rather than blocking a night.
-    """
-    try:
-        wired = client.dataset_profiles_by_benchmark()
-    except Exception as exc:
-        logger.info("preflight could not read benchmark datasets: %s", exc)
-        return None, None
-    try:
-        profiles = DatasetProfileClient(client).names()
-    except Exception as exc:
-        # The wiring check still works without the list; only the "does this
-        # profile exist" half is lost.
-        logger.info("preflight could not list dataset profiles: %s", exc)
-        profiles = None
-    return wired, profiles
-
-
 def _benchmark_checks(
     body: PreflightRequest, catalog: dict[str, list[str]] | None, client: LLMBenchClient
 ) -> list:
@@ -763,7 +649,7 @@ def _benchmark_checks(
                 ),
             )
         )
-        wired, profiles = _dataset_wiring(client)
+        wired, profiles = pf.dataset_wiring(client)
         _with_specs(body, None, wired)
         checks.append(
             pf.dataset_check(
@@ -771,14 +657,6 @@ def _benchmark_checks(
             )
         )
     return checks
-
-
-def _widest_candidate(search_space: dict) -> int:
-    """Cards the largest configuration in this space would occupy."""
-    try:
-        return max((cards_used(c) for c in expand(search_space or {})), default=0)
-    except Exception:
-        return 0
 
 
 def _run_preflight(
@@ -789,14 +667,14 @@ def _run_preflight(
     Runs in a worker thread: it is ssh, and a form that blocks the event loop
     for two seconds per machine is a form nobody waits for.
     """
-    widest = _widest_candidate(body.search_space)
+    widest = pf.widest_candidate(body.search_space)
     space_check = pf.space_check(
         candidate_count(body.search_space or {}), space_errors(body.search_space or {})
     )
     # One catalog read for the whole campaign, not one per machine or per
     # question: the client memoizes it, and both checks share this client.
     llmbench = LLMBenchClient()
-    benchmark_checks = _benchmark_checks(body, _benchmark_catalog(llmbench), llmbench)
+    benchmark_checks = _benchmark_checks(body, pf.benchmark_catalog(llmbench), llmbench)
     # A declared node group is a fact about the deployment, worth one line so the
     # author sees the shape they are about to save (and that the Machines list is
     # no longer the pin). Its existence was checked when the campaign was built;
