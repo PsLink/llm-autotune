@@ -102,14 +102,29 @@ campaign = create_managed_campaign(
   what it runs for and links to `Owner.link`.
 - **Reading progress.** The plugin keeps the campaign id and reads the
   platform's own rows: the campaign's status, its runs and their results.
+- **Starting it later.** A campaign created without `start_for` waits until
+  `start_managed_campaign(session, campaign, plugin=..., start_for=...,
+  machine_names=[...])` starts it, optionally on the machines the plugin
+  chose (a plugin that hands out machines one campaign at a time).
+- **Moving its end.** `extend_managed_campaign(session, campaign, plugin=...,
+  until=...)` moves the end of a running campaign's window, for work whose
+  clock should start when it is placed rather than when it was started.
+- **One dataset for several.** `pin_managed_dataset(session, campaign,
+  plugin=..., build=..., applied=...)` gives a campaign a dataset build
+  before it measures, so campaigns that must compare (and are started one
+  after another) measure on the same one: a campaign holding a build, started
+  or not, keeps it from being rebuilt. `build=None` clears it.
 - **Closing it.** `stop_managed_campaign(session, campaign, plugin=...)` shuts
   the window now, so the platform ends whatever is still running the way it
-  ends any campaign's runs at the end of a window. It returns True once the
-  campaign is DONE, which is when nothing of it is running; call it again on
-  a later tick until then.
+  ends any campaign's runs at the end of a window, and aborts a live policy
+  session. It returns True once the campaign is DONE, which is when nothing
+  of it is running; call it again on a later tick until then.
+- **Only its own.** Each of these refuses (`ManagedCampaignRefused`) a
+  campaign the plugin does not own.
 - **On the record.** `record_event(session, kind, plugin=..., ...)` adds to
   the platform's event log, which a campaign's Activity tab and the reports
-  read.
+  read. Pass `actor=` (a username) for something a person asked for;
+  without it the event is the plugin's own.
 
 ## Campaign extensions
 
@@ -264,13 +279,15 @@ get the plugin.
 `app.plugin_api` and nothing else. Every other module in `app` is private to
 the platform and can change in any release. It offers:
 - **the hooks** and their types;
-- **managed campaigns**: `create_managed_campaign`, `stop_managed_campaign`,
+- **managed campaigns**: `create_managed_campaign`, `start_managed_campaign`,
+  `extend_managed_campaign`, `pin_managed_dataset`, `stop_managed_campaign`,
   `owners_of`, `record_event`, and the spec type `CampaignCreate`;
 - **the platform's tables**, to read: `Campaign`, `Run`, `Result`, `Machine`,
   `Event`, `User`… and their status enums;
 - **users, sessions, settings and secrets**: the login dependencies, the
   database sessions, `get_settings`, `encrypt_secret` / `decrypt_secret`;
-- **machines and the queue**: lease and availability checks, `busy_reason`,
+- **machines and the queue**: lease and availability checks
+  (`machine_warnings`, and `preflight.lease_check` to show one), `busy_reason`,
   `reservations_on`, the queue keys, `preflight`;
 - **the search space, engines and configs**: `expand`, `space_errors`,
   `cards_used`, `LaunchConfig`, `parse_launch_command`, the flag helpers;

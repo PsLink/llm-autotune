@@ -652,3 +652,18 @@ def widest_candidate(search_space: dict) -> int:
         return max((cards_used(c) for c in expand(search_space or {})), default=0)
     except Exception:
         return 0
+
+
+def lease_check(warning: dict) -> Check:
+    """A machine warning (`lifecycle.machine_warnings`) as a preflight check.
+    A machine that is not leased, or whose lease is past due, fails: nothing
+    started on it will run. One whose lease ends before the run would only
+    warns."""
+    from app.control.orchestrator import lifecycle
+
+    blocking = warning["status"] in (lifecycle.MACHINE_UNAVAILABLE, lifecycle.MACHINE_EXPIRED)
+    if warning["status"] == lifecycle.MACHINE_UNAVAILABLE:
+        hint = "Lease it from the Resources page first."
+    else:
+        hint = "Extend the lease (a later due date), or leave it open-ended."
+    return Check("lease", "Machine lease", FAIL if blocking else WARN, warning["detail"], hint)
