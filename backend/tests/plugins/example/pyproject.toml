@@ -36,6 +36,7 @@ known-first-party = ["example_plugin"]
 # submodules are banned with it).
 "app.agent".msg = "import from app.plugin_api"
 "app.api".msg = "import from app.plugin_api"
+"app.campaign_rules".msg = "import from app.plugin_api"
 "app.campaign_spec".msg = "import from app.plugin_api"
 "app.catalog".msg = "import from app.plugin_api"
 "app.control".msg = "import from app.plugin_api"

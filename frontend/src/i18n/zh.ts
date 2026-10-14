@@ -157,6 +157,8 @@ const zh: typeof en = {
     oneOff: '单次窗口',
     manual: '手动',
     gridAll: '网格（全部配置）',
+    includeManaged: '包括插件运行的 campaign',
+    runBy: '为 {label} 运行',
   },
 
 

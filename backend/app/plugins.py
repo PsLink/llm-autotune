@@ -38,8 +38,6 @@ if TYPE_CHECKING:
     from app.agent.overlay import RunOverlay
     from app.control.orchestrator.occupancy import Reservation
     from app.control.orchestrator.supervisor import Supervisor
-    from app.control.search import CandidateConfig
-    from app.control.search.history import RunRecord
     from app.db.models import Campaign, Machine, Run
 
 logger = logging.getLogger(__name__)
@@ -47,7 +45,10 @@ logger = logging.getLogger(__name__)
 # The version of the hooks and of `app.plugin_api`. It changes only when a
 # change would break a plugin written against the previous one; additions do
 # not change it. A plugin states the version it was written for.
-PLUGIN_API_VERSION = 1
+# 2: in-process planning (`propose_candidates`, PlanContext) is gone; a search
+#    strategy is a policy container. Plugins may depend on each other
+#    (`requires`), and run their work as managed campaigns.
+PLUGIN_API_VERSION = 2
 
 ENTRY_POINT_GROUP = "llm_autotune.plugins"
 
@@ -60,53 +61,6 @@ class PluginError(RuntimeError):
     """A plugin that cannot be loaded as configured."""
 
 
-@dataclass(frozen=True)
-class PlanContext:
-    """What a planner is handed about one ACTIVE campaign, every tick.
-
-    `session` is the worker's own; read from it, and leave the candidate
-    rows to the platform: whatever `propose_candidates` returns is validated,
-    deduplicated against what the campaign already holds, and saved."""
-
-    session: Session
-    campaign: Campaign
-    supervisor: Supervisor
-
-    # Unstarted work worth queuing at once for a space whose points do not
-    # depend on results (a grid): the queue refills as runs consume it.
-    batch_cap: int = 100
-
-    def history(self) -> list[RunRecord]:
-        """Every run and queued or rejected candidate, objective applied."""
-        from app.control.search.history import campaign_history
-
-        return campaign_history(self.session, self.campaign)
-
-    def queued(self) -> int:
-        """Valid candidates waiting for a run."""
-        from sqlalchemy import func, select
-
-        from app.db.models import Candidate, CandidateStatus
-
-        return (
-            self.session.scalar(
-                select(func.count(Candidate.id)).where(
-                    Candidate.campaign_id == self.campaign.id,
-                    Candidate.status == CandidateStatus.VALID.value,
-                )
-            )
-            or 0
-        )
-
-    def startable_slots(self) -> int:
-        """How many runs this campaign could start right now on its machines.
-        An adaptive planner asks for about this many points: asking a model
-        for a hundred with eight cards free commits to a hundred guesses
-        before any result can teach it anything."""
-        return self.supervisor._startable_slots(self.session, self.campaign)
-
-
-Proposer = Callable[[PlanContext], "Sequence[CandidateConfig] | None"]
 CampaignCreated = Callable[["Session", "Campaign", dict[str, Any]], None]
 CampaignExtensions = Callable[["Session", "Sequence[Campaign]"], dict[int, dict[str, Any]]]
 
@@ -155,6 +109,9 @@ class Plugin:
     name: lowercase letters, digits and underscores; the name AUTOTUNE_PLUGINS
         lists, and the suffix of the plugin's migration version table.
     api_version: the PLUGIN_API_VERSION the plugin was written for.
+    requires: names of other plugins this one builds on. They must be enabled
+        too; they load, mount and tick before it. A plugin may import a
+        required plugin's own modules and reference its tables.
     routers: FastAPI routers, mounted under /api after the platform's own.
     openapi_tags: descriptions for the tags those routers use, as FastAPI's
         `openapi_tags` entries, shown in the API docs with the platform's.
@@ -169,13 +126,6 @@ class Plugin:
     on_bootstrap: called after the platform's own seeding on every deploy,
         with a sync engine. Like the platform's seeding it should only ever
         add what is missing.
-    propose_candidates: plans a campaign in-process instead of the default
-        enumeration of its space. Called with a `PlanContext` for every ACTIVE
-        campaign that has no policy container, each tick; returns the points
-        to add now (possibly none), or None for a campaign this plugin does
-        not plan. The first plugin to answer anything but None plans it. One
-        that raises is logged, and the campaign gets no new candidates that
-        tick.
     on_campaign_created: `(session, campaign, data)`, when a campaign is
         created (from the form, an imported spec or a clone) with
         `extensions[<plugin name>] = data`. It runs in the same transaction:
@@ -216,12 +166,12 @@ class Plugin:
 
     name: str
     api_version: int
+    requires: Sequence[str] = ()
     routers: Sequence[APIRouter] = ()
     openapi_tags: Sequence[dict[str, Any]] = ()
     tick_steps: Sequence[TickStep] = ()
     migrations: str | None = None
     on_bootstrap: Callable[[Engine], None] | None = None
-    propose_candidates: Proposer | None = None
     on_campaign_created: CampaignCreated | None = None
     campaign_extensions: CampaignExtensions | None = None
     queue_waiters: Callable[[Supervisor, Session], Iterable[QueueWaiter]] | None = None
@@ -278,7 +228,39 @@ def load(names: Iterable[str], installed: dict[str, EntryPoint] | None = None) -
                 "made for this release"
             )
         plugins.append(obj)
-    return plugins
+    return _in_dependency_order(plugins)
+
+
+def _in_dependency_order(plugins: list[Plugin]) -> list[Plugin]:
+    """The plugins with each one after those it requires, otherwise in the
+    order listed. A requirement that is not enabled stops startup: a plugin
+    without the one it builds on would fail later and less clearly."""
+    by_name = {p.name: p for p in plugins}
+    for plugin in plugins:
+        missing = [r for r in plugin.requires if r not in by_name]
+        if missing:
+            raise PluginError(
+                f"plugin {plugin.name!r} requires {', '.join(repr(m) for m in missing)}, "
+                "which AUTOTUNE_PLUGINS does not enable"
+            )
+    ordered: list[Plugin] = []
+    visiting: set[str] = set()
+
+    def visit(plugin: Plugin, chain: tuple[str, ...]) -> None:
+        if plugin in ordered:
+            return
+        if plugin.name in visiting:
+            cycle = " -> ".join((*chain, plugin.name))
+            raise PluginError(f"plugins require each other in a cycle: {cycle}")
+        visiting.add(plugin.name)
+        for name in plugin.requires:
+            visit(by_name[name], (*chain, plugin.name))
+        visiting.discard(plugin.name)
+        ordered.append(plugin)
+
+    for plugin in plugins:
+        visit(plugin, ())
+    return ordered
 
 
 def configured_names() -> list[str]:

@@ -968,9 +968,7 @@ class Supervisor:
         A campaign that wants to be clever about WHICH points to spend the
         night on names a policy container instead, and then its candidates
         arrive over the policy session API and this step does nothing
-        (`api/policy_sessions.py`). Or a plugin plans it in-process
-        (`Plugin.propose_candidates`); what the plugin proposes is validated
-        and deduplicated here exactly like an enumerated point.
+        (`api/policy_sessions.py`).
         """
         campaigns = session.scalars(
             select(Campaign).where(
@@ -979,19 +977,12 @@ class Supervisor:
             )
         ).all()
         for campaign in campaigns:
-            planned, proposals = self._plugin_proposals(session, campaign)
-            if planned and proposals is None:
-                continue  # a planner that failed this tick; try again next tick
-            if not planned and not (campaign.search_space or {}):
+            if not (campaign.search_space or {}):
                 # Nothing declared at all. Not the same as a space whose only
                 # content is a `base`, which is one deliberate configuration —
                 # this is a campaign whose configs arrive some other way.
                 continue
-            points = (
-                proposals
-                if planned
-                else [CandidateConfig(engine_args=c) for c in expand(campaign.search_space)]
-            )
+            points = [CandidateConfig(engine_args=c) for c in expand(campaign.search_space)]
             existing_hashes = set(
                 session.scalars(
                     select(Candidate.config_hash).where(Candidate.campaign_id == campaign.id)
@@ -1028,31 +1019,6 @@ class Supervisor:
                     campaign_id=campaign.id,
                     payload={"config": config, "error": error or ""},
                 )
-
-    def _plugin_proposals(
-        self, session: Session, campaign: Campaign
-    ) -> tuple[bool, list[CandidateConfig] | None]:
-        """(planned, proposals): whether a plugin plans this campaign, and what
-        it proposes now. The first plugin to answer anything but None plans
-        it. A planner that raises is logged and the campaign gets no new
-        candidates this tick (planned, None): falling back to enumeration
-        would fill a campaign meant to be searched cleverly with every point
-        of its space."""
-        context = plugins.PlanContext(session=session, campaign=campaign, supervisor=self)
-        for plugin in plugins.enabled():
-            if plugin.propose_candidates is None:
-                continue
-            try:
-                with session.begin_nested():
-                    proposals = plugin.propose_candidates(context)
-            except Exception:
-                logger.exception(
-                    "plugin %s: planning campaign %s failed", plugin.name, campaign.id
-                )
-                return True, None
-            if proposals is not None:
-                return True, list(proposals)
-        return False, None
 
     # -------------------------------------------------------------- schedule
 

@@ -9,7 +9,6 @@ import {
 import { computed, h, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PluginSlot from '../components/PluginSlot.vue'
-import { describeStrategy } from '../plugins'
 import {
   api,
   downloadText,
@@ -698,7 +697,7 @@ const searchFact = computed(() => {
   return {
     value: c.policy_id != null
       ? (policy.value?.name ?? `#${c.policy_id}`)
-      : (describeStrategy(c.extensions) ?? t('campaign.fact.everyConfig')),
+      : t('campaign.fact.everyConfig'),
     sub: [spaceName.value, size ? t('campaign.fact.configs', { n: size }) : '']
       .filter(Boolean).join(' · '),
     tip: [
@@ -915,7 +914,7 @@ const configRows = computed(() => {
         }]
       : [{
           label: 'Search',
-          value: describeStrategy(c.extensions) ?? 'every configuration in the space, in order',
+          value: 'every configuration in the space, in order',
         }]),
     {
       label: 'Run length',
@@ -1192,6 +1191,17 @@ onMounted(() => {
         <span class="muted tiny owner">
           <template v-if="campaign.owner_name">{{ campaign.owner_name }} · </template>
           <span :title="exactTime(campaign.created_at)">{{ relativeTime(campaign.created_at) }}</span>
+        </span>
+        <!-- A plugin runs this campaign for something of its own: say so, and
+             link back to where it is managed. -->
+        <span v-if="campaign.managed_by" class="muted tiny owner">
+          ·
+          <router-link v-if="campaign.managed_by.link" :to="campaign.managed_by.link" class="nav-link">
+            {{ t('campaigns.runBy', { label: campaign.managed_by.label || campaign.managed_by.plugin }) }}
+          </router-link>
+          <template v-else>
+            {{ t('campaigns.runBy', { label: campaign.managed_by.label || campaign.managed_by.plugin }) }}
+          </template>
         </span>
       </div>
       <div class="actions">

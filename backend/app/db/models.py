@@ -1035,6 +1035,24 @@ class Dataset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class CampaignOwner(Base):
+    """A campaign a plugin runs for something of its own (a managed campaign,
+    app/control/managed.py): which plugin, what to call it, and the page it
+    belongs to. The campaign list hides these unless asked, and a campaign's
+    page links back to its owner. A campaign without a row is a person's."""
+
+    __tablename__ = "campaign_owners"
+
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="CASCADE"), primary_key=True
+    )
+    plugin: Mapped[str] = mapped_column(String(40), index=True)
+    # What the campaign is for, as its owner names it ("Submission #42").
+    label: Mapped[str] = mapped_column(String(200), default="")
+    # The owner's page for it, an app path ("/submissions/42").
+    link: Mapped[str] = mapped_column(String(300), default="")
+
+
 class ReplayDataset(Base):
     """A replay dataset set up from this platform's Datasets page.
 

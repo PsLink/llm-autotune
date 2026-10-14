@@ -367,12 +367,24 @@ class MachineWarningOut(BaseModel):
     detail: str
 
 
+class ManagedByOut(BaseModel):
+    """The plugin that runs a campaign for something of its own, what that
+    is, and the page it belongs to (app/control/managed.py)."""
+
+    plugin: str
+    label: str = ""
+    link: str = ""
+
+
 class CampaignOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     owner_id: int
     # The owner's username, filled at read time: lists filter by it.
     owner_name: str = ""
+    # Set when a plugin runs this campaign for something of its own; the
+    # campaign list hides these unless asked (`?managed=`).
+    managed_by: ManagedByOut | None = None
     name: str
     engine: str
     image: str

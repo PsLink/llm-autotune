@@ -1,8 +1,9 @@
 """Which candidate to start next, given the cards currently free on a machine.
 
-This is a scheduling decision, not a search one: the Planner decides WHAT to
-try, this decides WHEN and WHERE it runs. Keeping them apart is what lets a
-new search algorithm drop in without touching machine allocation.
+This is a scheduling decision, not a search one: the search (the space's
+enumeration, or a policy) decides WHAT to try, this decides WHEN and WHERE it
+runs. Keeping them apart is what lets a new search algorithm drop in without
+touching machine allocation.
 
 The problem: a grid that mixes tp=2 and tp=4 gives jobs of different widths,
 and an 8-card node running them one at a time finishes in as many rounds as

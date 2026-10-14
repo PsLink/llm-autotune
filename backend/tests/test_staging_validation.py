@@ -8,7 +8,7 @@ holds.
 
 from types import SimpleNamespace
 
-from app.api.campaigns import _staging_errors
+from app.campaign_rules import staging_errors as _staging_errors
 
 
 def _body(**kw) -> SimpleNamespace:

@@ -27,30 +27,6 @@ export interface NavItem {
   order: number
 }
 
-export interface StrategyOption {
-  value: string
-  label: string
-  help?: string
-}
-
-/** Search strategies a plugin plans in-process (the backend's
- *  `propose_candidates`), offered in the New campaign Strategy select next to
- *  "no policy" and the policy containers. Choosing one writes the campaign's
- *  `extensions`, which is how the backend plugin learns it plans it. */
-export interface StrategyContribution {
-  /** The option group's title, an i18n key or plain text. */
-  group: string
-  options: StrategyOption[]
-  /** The campaign's `extensions` with this plugin's strategy set to `value`,
-   *  or cleared (null) when another strategy is chosen. Leave the rest of
-   *  `extensions` as it is. */
-  apply(extensions: Extensions, value: string | null): Extensions
-  /** Which of this plugin's options a campaign's `extensions` select, if any. */
-  selected(extensions: Extensions): string | null
-  /** How a campaign planned this way reads in lists and summaries. */
-  describe(extensions: Extensions): string | null
-}
-
 export interface FrontendPlugin {
   name: string
   routes?: RouteRecordRaw[]
@@ -59,7 +35,6 @@ export interface FrontendPlugin {
   messages?: Partial<Record<Locale, Record<string, unknown>>>
   /** Components rendered where the app places `<PluginSlot name="…">`. */
   slots?: Record<string, Component>
-  strategies?: StrategyContribution
 }
 
 const found = import.meta.glob<{ default: FrontendPlugin }>('./installed/*/index.ts', {
@@ -86,46 +61,4 @@ export function pluginNav(group: NavItem['group']): NavItem[] {
 
 export function slotComponents(name: string): Component[] {
   return plugins.flatMap((p) => (p.slots?.[name] ? [p.slots[name]] : []))
-}
-
-/** Strategy select values are namespaced, so two plugins cannot collide with
- *  each other or with the app's own (`''`, `policy:<id>`). */
-export function strategyValue(plugin: string, value: string): string {
-  return `plugin:${plugin}:${value}`
-}
-
-export function strategyOf(value: string): { plugin: FrontendPlugin; value: string } | null {
-  const m = /^plugin:([^:]+):(.*)$/.exec(value)
-  const plugin = m ? plugins.find((p) => p.name === m[1] && p.strategies) : undefined
-  return m && plugin ? { plugin, value: m[2] } : null
-}
-
-/** The Strategy select value a campaign's `extensions` stand for, or ''. */
-export function strategyFromExtensions(extensions: Extensions | undefined): string {
-  for (const plugin of plugins) {
-    const chosen = plugin.strategies?.selected(extensions ?? {})
-    if (chosen) return strategyValue(plugin.name, chosen)
-  }
-  return ''
-}
-
-/** `extensions` for the Strategy select's `value`: the chosen plugin's
- *  strategy set, every other plugin's cleared. */
-export function applyStrategy(extensions: Extensions, value: string): Extensions {
-  const chosen = strategyOf(value)
-  let out: Extensions = { ...extensions }
-  for (const plugin of plugins) {
-    if (!plugin.strategies) continue
-    out = plugin.strategies.apply(out, chosen?.plugin === plugin ? chosen.value : null)
-  }
-  return out
-}
-
-/** How a campaign's plugin strategy reads, or null when none plans it. */
-export function describeStrategy(extensions: Extensions | undefined): string | null {
-  for (const plugin of plugins) {
-    const text = plugin.strategies?.describe(extensions ?? {})
-    if (text) return text
-  }
-  return null
 }

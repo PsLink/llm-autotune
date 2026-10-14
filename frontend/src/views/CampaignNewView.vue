@@ -29,14 +29,7 @@ import InfoHint from '../components/InfoHint.vue'
 import NightlyWindow from '../components/NightlyWindow.vue'
 import SpaceMap from '../components/SpaceMap.vue'
 import WorkloadPicker from '../components/WorkloadPicker.vue'
-import {
-  applyStrategy,
-  describeStrategy,
-  plugins,
-  strategyFromExtensions,
-  strategyValue,
-  type Extensions,
-} from '../plugins'
+import { type Extensions } from '../plugins'
 import { campaignFromYaml, campaignToYaml } from '../utils/campaignYaml'
 import { rememberValues, withPlatformValues } from '../utils/recent'
 import { absoluteTime } from '../utils/time'
@@ -100,10 +93,9 @@ const form = ref({
   benchmark_slug: '',
   // '' = no policy: the campaign tries every configuration in the space, in
   // order. `policy:<id>` = an external policy container searches it instead.
-  // `plugin:<name>:<value>` = an installed plugin plans it (src/plugins).
   strategy: '',
-  // What installed plugins keep about the campaign, by plugin name; the
-  // Strategy select writes a plugin strategy into it on create.
+  // What installed plugins keep about the campaign, by plugin name; carried
+  // through from an imported or copied campaign.
   extensions: {} as Extensions,
   // Only sent for a policy campaign: how many of its finalists the platform
   // re-measures at the end. Their benchmark and startup time are learned.
@@ -398,12 +390,6 @@ function stepStatus(i: number): 'process' | 'success' | 'error' | 'wait' {
   return problems.value[i].length ? 'error' : 'success'
 }
 
-/** Installed plugins that offer search strategies of their own. */
-const strategyPlugins = plugins.filter((p) => p.strategies)
-/** How the chosen plugin strategy reads, or null when none is chosen. */
-const pluginStrategyText = computed(() =>
-  describeStrategy(applyStrategy(form.value.extensions, form.value.strategy)))
-
 /** The policy picked in the Strategy select, or null to enumerate the space. */
 const selectedPolicy = computed<Policy | null>(() => {
   const m = /^policy:(\d+)$/.exec(form.value.strategy)
@@ -598,9 +584,7 @@ function applyImport(opts: { review?: boolean } = {}) {
   // A policy campaign travels as policy_id + policy_settings; the form holds
   // them as the Strategy select and the three budget inputs.
   const policyId = parsed.fields.policy_id
-  form.value.strategy = typeof policyId === 'number'
-    ? `policy:${policyId}`
-    : strategyFromExtensions(form.value.extensions)
+  form.value.strategy = typeof policyId === 'number' ? `policy:${policyId}` : ''
   const { max_contenders, ...pinned } =
     (parsed.fields.policy_settings ?? {}) as Record<string, number>
   if (max_contenders) form.value.policy_max_contenders = max_contenders
@@ -842,7 +826,7 @@ async function create() {
       max_run_minutes: form.value.max_run_minutes,
       ...benchmarkFields(),
       policy_id: selectedPolicy.value?.id ?? null,
-      extensions: applyStrategy(form.value.extensions, form.value.strategy),
+      extensions: form.value.extensions,
       policy_settings: selectedPolicy.value
         ? { ...form.value.policy_pinned, max_contenders: form.value.policy_max_contenders }
         : {},
@@ -1122,14 +1106,6 @@ onMounted(async () => {
                     <span class="muted opt-help mono">{{ p.image }}</span>
                   </el-option>
                 </el-option-group>
-                <el-option-group v-for="p in strategyPlugins" :key="p.name"
-                  :label="p.strategies!.group">
-                  <el-option v-for="o in p.strategies!.options" :key="o.value"
-                    :value="strategyValue(p.name, o.value)" :label="o.label">
-                    <span>{{ o.label }}</span>
-                    <span v-if="o.help" class="muted opt-help">{{ o.help }}</span>
-                  </el-option>
-                </el-option-group>
               </el-select>
             </el-form-item>
 
@@ -1382,7 +1358,7 @@ onMounted(async () => {
               {{ selectedSpace.name }}
               <span class="muted">· {{ selectedSpace.candidate_count }} candidates
                 · {{ selectedPolicy ? `policy ${selectedPolicy.name}`
-                  : (pluginStrategyText ?? 'every configuration, in order') }}</span>
+                  : 'every configuration, in order' }}</span>
             </template>
             <template v-else>not chosen</template>
           </dd>
