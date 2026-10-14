@@ -153,6 +153,28 @@ Apply these to the serving deployment, by hand or from a pipeline. Then update
 the baseline on [Baselines](baselines.md), so the next campaign measures
 against the new production config.
 
+### Publishing it to the model catalog
+
+**⋯ ▸ Export to model catalog** turns measured runs into an entry for
+[model-catalog](https://github.com/modelsphere/model-catalog): a
+`catalog.swiss/v1` version file with one variant per run, and a
+`metadata.yaml` for a model the catalog doesn't have yet.
+
+- **Runs:** every run on the leaderboard is listed. The baseline and the
+  winner are ticked to start, as roles *baseline* and *optimized*; the
+  optimized variant's description states how much it gained.
+- **Entry:** the name, version and metadata are drafted from the model and
+  can be edited. The weights are named by `source.hf`, never by a path on
+  your machines.
+- **Advanced:** variant ids, the default variant, env and host-path volumes,
+  the startup budget, `gpuProduct` node labels, extending an already
+  published version, and a saved report to ship next to the entry.
+
+The files are checked against the catalog's schema as you go. Nothing is
+pushed: download them, put them under `models/<name>/` in model-catalog, and
+open a pull request. The provenance lines (which campaign and run measured
+each variant) are for the pull request description.
+
 ---
 
 ← [Running a campaign](running-campaigns.md) · [User guide](README.md) · Next: [Baselines](baselines.md) →

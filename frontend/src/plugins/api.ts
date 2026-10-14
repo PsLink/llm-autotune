@@ -21,6 +21,8 @@ export { renderReport, type ReportInput } from '../report/render'
 
 export { default as BackLink } from '../components/BackLink.vue'
 export { default as CampaignRuns } from '../components/CampaignRuns.vue'
+export { default as CatalogExportDialog } from '../components/CatalogExportDialog.vue'
+export type { CatalogCandidate } from '../components/CatalogExportDialog.vue'
 export { default as ConfigChips } from '../components/ConfigChips.vue'
 export { default as CopyButton } from '../components/CopyButton.vue'
 export { default as FlagChips } from '../components/FlagChips.vue'
