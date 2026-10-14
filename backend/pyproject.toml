@@ -20,6 +20,10 @@ dependencies = [
     # call — so it is encrypted at rest rather than hashed like a password.
     "cryptography>=42",
     "kubernetes>=36.0.3",
+    # model-catalog export: the entry is YAML, validated against the
+    # catalog's own JSON Schema.
+    "pyyaml>=6",
+    "jsonschema>=4.21",
 ]
 
 [project.optional-dependencies]

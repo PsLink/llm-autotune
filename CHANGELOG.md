@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Export to model catalog** on a campaign's page (**⋯** menu): measured
+  runs become a [model-catalog](https://github.com/modelsphere/model-catalog)
+  entry, a `catalog.swiss/v1` version file with one variant per run plus a
+  `metadata.yaml` for a model new to the catalog. The baseline and the winner
+  are ticked to start; the optimized variant's description carries its gain
+  over the baseline. The entry is validated against the catalog's schema, and
+  nothing site-specific (host paths, scheduling, placement flags) is
+  written. Nothing is pushed: the files are downloaded for a pull request
+  ([Reading results](docs/guide/results.md#publishing-it-to-the-model-catalog)).
+  API: `POST /api/catalog-export/preview`. Plugins can open the same dialog
+  (`CatalogExportDialog` in `@/plugins/api`).
 - **Automatic Tuning ▸ Datasets** sets up replay datasets without leaving
   AutoTune: a model, optionally the nodes serving it, a sample size and how
   often to take a new sample. The model and node lists come from the

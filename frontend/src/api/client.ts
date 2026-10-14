@@ -482,6 +482,32 @@ export interface RunDetail extends Run {
   }[]
 }
 
+/** POST /catalog-export/preview: measured runs as a model-catalog entry. */
+export interface CatalogExportPreview {
+  path: string
+  text: string
+  document: { name: string; version: string; variants: { id: string }[] } & Record<string, unknown>
+  metadata_path: string
+  metadata_text: string
+  metadata: Record<string, unknown> | null
+  warnings: string[]
+  errors: string[]
+  valid: boolean
+  /** Where each variant came from: for the pull request description, never the file. */
+  provenance: string[]
+  /** The report to commit next to the entry, when report_id was given. */
+  report_path: string
+  report_html: string
+  name: string
+  version: string
+  hf: string
+  /** The metadata the server drafted (or was given), for the form to adopt. */
+  display_name: string
+  description: string
+  family: string
+  tags: string[]
+}
+
 export interface LeaderboardEntry {
   run_id: number
   config: Record<string, unknown>

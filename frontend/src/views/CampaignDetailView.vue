@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   AlarmClock, Aim, ArrowDown, ArrowUp, CircleCheck, CircleCheckFilled, CircleCloseFilled, Coin,
   CopyDocument, Cpu, Delete, Document, Download, EditPen, MagicStick, MoreFilled, Odometer,
-  RefreshRight, Tickets, Timer, Top, Bottom, VideoPause, VideoPlay, WarningFilled,
+  RefreshRight, Tickets, Timer, Top, Bottom, Upload, VideoPause, VideoPlay, WarningFilled,
 } from '@element-plus/icons-vue'
 import { computed, h, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -29,6 +29,7 @@ import {
   type Run,
   type RunDetail,
 } from '../api/client'
+import CatalogExportDialog, { type CatalogCandidate } from '../components/CatalogExportDialog.vue'
 import InfoHint from '../components/InfoHint.vue'
 import LogDialog from '../components/LogDialog.vue'
 import NightlyWindow from '../components/NightlyWindow.vue'
@@ -350,6 +351,36 @@ function copyReport() {
 // -- export ------------------------------------------------------------------
 
 const exportOpen = ref(false)
+const catalogOpen = ref(false)
+
+/** Every measured run on the boards, the deciding stage's entry first, for
+ *  the model-catalog export. It opens with the baseline and the winner
+ *  ticked. */
+const catalogCandidates = computed<CatalogCandidate[]>(() => {
+  const seen = new Set<number>()
+  const out: CatalogCandidate[] = []
+  for (const row of [...verifiedBoard.value, ...screenBoard.value]) {
+    if (seen.has(row.run_id)) continue
+    seen.add(row.run_id)
+    out.push({
+      run_id: row.run_id,
+      label: row.is_baseline
+        ? `${t('campaign.baselineRow')} · ${t('campaign.run')} ${row.run_id}`
+        : `${t('campaign.run')} ${row.run_id}`,
+      detail: row.score != null ? `${fmtScore(row.score)} (${row.stage})` : row.stage,
+    })
+  }
+  return out
+})
+const catalogInitial = computed(() => {
+  const board = verifiedBoard.value.length ? verifiedBoard.value : screenBoard.value
+  const baseline = board.find((e) => e.is_baseline)
+  const winner = board.find((e) => !e.is_baseline && e.holds_redlines)
+  return [
+    ...(baseline ? [{ run_id: baseline.run_id, role: 'baseline' }] : []),
+    ...(winner ? [{ run_id: winner.run_id, role: 'optimized' }] : []),
+  ]
+})
 
 /** This campaign as a file. Only the inputs — status, the window it happens to
  *  be serving and any force-start override are results of running it, and a
@@ -757,6 +788,7 @@ function moreAction(command: string) {
   if (command === 'logs') logOpen.value = true
   else if (command === 'clone') copyToNew()
   else if (command === 'export') exportOpen.value = true
+  else if (command === 'catalog') catalogOpen.value = true
   else if (command === 'delete') void deleteCampaign()
   else if (command === 'done') void markDone()
 }
@@ -1177,6 +1209,9 @@ onMounted(() => {
               <el-dropdown-item command="export" :icon="Download"
                 title="Everything needed to recreate this campaign — import it on the New campaign page">
                 {{ t('campaign.exportYaml') }}
+              </el-dropdown-item>
+              <el-dropdown-item command="catalog" :icon="Upload" :disabled="!catalogCandidates.length">
+                {{ t('catalogExport.menu') }}
               </el-dropdown-item>
               <el-dropdown-item v-if="closable" command="done" :icon="CircleCheck" divided>
                 {{ t('campaign.markDone') }}
@@ -1738,6 +1773,8 @@ onMounted(() => {
       </template>
     </el-dialog>
 
+    <CatalogExportDialog v-model="catalogOpen" :candidates="catalogCandidates"
+      :initial="catalogInitial" :model-name="campaign?.served_model_name" />
     <el-dialog v-model="exportOpen" :title="t('campaign.exportTitle')" width="760px">
       <pre class="mono block report">{{ exportYaml }}</pre>
       <template #footer>
