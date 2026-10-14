@@ -71,3 +71,37 @@ envFrom:
 env: {{- toYaml . | nindent 2 }}
 {{- end }}
 {{- end -}}
+
+{{/*
+Why the runLogs claim may never bind, read from the cluster at install time:
+"" when it should bind (or when there is no cluster to ask, as in
+`helm template`), "no-default" when no class is named and the cluster has no
+default one, "missing <class>" when the named class does not exist, and
+"rwo <class> <provisioner>" when the class's provisioner only makes
+single-node volumes, which a ReadWriteMany claim waits on forever. The list is
+of provisioners known to be ReadWriteOnce only; an unknown one is given the
+benefit of the doubt.
+*/}}
+{{- define "llm-autotune.runLogsProblem" -}}
+{{- if .Values.runLogs.enabled -}}
+{{- $classes := lookup "storage.k8s.io/v1" "StorageClass" "" "" -}}
+{{- if $classes -}}
+{{- $sc := dict -}}
+{{- $name := .Values.runLogs.storageClass -}}
+{{- range ($classes.items | default list) -}}
+{{- $isDefault := index (.metadata.annotations | default dict) "storageclass.kubernetes.io/is-default-class" | default "" -}}
+{{- if or (and $name (eq .metadata.name $name)) (and (not $name) (eq $isDefault "true")) -}}
+{{- $sc = . -}}
+{{- end -}}
+{{- end -}}
+{{- if not $sc -}}
+{{- if $name -}}missing {{ $name }}{{- else -}}no-default{{- end -}}
+{{- else -}}
+{{- $rwoOnly := list "rancher.io/local-path" "k8s.io/minikube-hostpath" "docker.io/hostpath" "kubernetes.io/host-path" "kubernetes.io/no-provisioner" "openebs.io/local" "topolvm.io" "ebs.csi.aws.com" "kubernetes.io/aws-ebs" "pd.csi.storage.gke.io" "kubernetes.io/gce-pd" "disk.csi.azure.com" "kubernetes.io/azure-disk" "cinder.csi.openstack.org" "kubernetes.io/cinder" -}}
+{{- if or (has $sc.provisioner $rwoOnly) (hasSuffix ".rbd.csi.ceph.com" $sc.provisioner) -}}
+rwo {{ $sc.metadata.name }} {{ $sc.provisioner }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

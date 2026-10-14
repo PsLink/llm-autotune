@@ -122,6 +122,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CatalogExportDialog`, and the status, time and filter helpers.
 ### Changed
 
+- The chart's install notes warn when the `runLogs` claim cannot bind: the
+  storage class it would get only makes single-node volumes (local-path,
+  hostpath, cloud block disks), the cluster has no default class, or the named
+  class does not exist. Until now the API and worker stayed Pending without a
+  word.
 - The campaign page is shorter. The lines of text under the name are now a
   row of tiles (model, search, objective, schedule, progress, replay sample)
   with their details in tooltips; the policy panel is one strip with its

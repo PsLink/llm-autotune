@@ -207,6 +207,14 @@ storage class. On a cluster without one, set `runLogs.enabled=false`. The UI
 still shows logs: the end of every engine and policy log is stored in the
 database, and a running container's log is read from the cluster.
 
+The install checks the class the claim would get. When it only makes
+single-node volumes (local-path, hostpath, a cloud block disk such as EBS or a
+GCE persistent disk), when the cluster has no default class, or when the named
+class does not exist, the install notes say so: the claim would never bind,
+and the API and worker would stay Pending. `helm install --wait` prints no
+notes; it times out instead, with the API and worker Pending and the
+`<release>-runlogs` claim unbound.
+
 While a container runs, the worker saves the end of its log every two minutes,
 each save replacing the last, so a pod that is evicted or lost before its run
 ends still leaves its last lines. A saved log is the last 2,000 lines, at most
