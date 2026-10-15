@@ -22,14 +22,17 @@ class CatalogVariantIn(BaseModel):
     # platform keeps only the normalized card name, so this is never guessed.
     gpu_product: list[str] = Field(default_factory=list)
     nodes: int | None = None  # pods per group; 1 when empty
+    # The tag to publish when the run's image was named by digest alone.
+    image_tag: str = ""
 
 
 class CatalogExportRequest(BaseModel):
     variants: list[CatalogVariantIn] = Field(min_length=1)
-    name: str = ""  # catalog id; derived from the served model name when empty
-    version: str = "1.0.0"
+    # The catalog's name for the model. A model the catalog already has keeps
+    # its own; for a new one, empty = derived from the served model name.
+    name: str = ""
     served_name: str = ""
-    chart_version: str = ""
+    chart_version: str = ""  # empty = the engine's minimum, as a range
     default_variant: str = ""
     include_env: bool = True
     include_volumes: bool = False
@@ -38,7 +41,8 @@ class CatalogExportRequest(BaseModel):
     # nvidia.com/gpu.product labels for every variant without its own; empty =
     # the known label of the card each config was measured on.
     gpu_product: list[str] = Field(default_factory=list)
-    with_metadata: bool = True
+    # metadata.yaml for a model new to the catalog. source.hf is required then:
+    # every site finds the weights by it.
     hf: str = ""
     hf_revision: str = ""
     display_name: str = ""
@@ -47,35 +51,44 @@ class CatalogExportRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     license: str = ""
     homepage: str = ""
-    # The latest published version of this model, as YAML text. Given, the
-    # export is that version extended (its variants and default kept, the new
-    # ones appended, the version bumped); omit for a model new to the catalog.
-    base_entry: str = ""
-    # A saved perf report (either language) to ship next to the entry. It must
-    # compare exactly the runs being exported.
+    # A saved perf report (either language) to ship next to the files. It must
+    # compare exactly the runs being exported; a tuning result needs one.
     report_id: int | None = None
+    # Look the model up in the published catalog (catalog_index_url).
+    use_catalog: bool = True
+
+
+class CatalogFileOut(BaseModel):
+    path: str
+    kind: str  # variant | metadata | report | validation
+    text: str
+
+
+class CatalogVariantOut(BaseModel):
+    id: str
+    version: str
+    role: str
+    status: str  # new | updated | unchanged
+    path: str
 
 
 class CatalogExportOut(BaseModel):
-    path: str
-    text: str
-    document: dict[str, Any]
-    metadata_path: str = ""
-    metadata_text: str = ""
-    metadata: dict[str, Any] | None = None
+    """The files to add under the catalog's models/<name>/, and what the form
+    should show for fields the caller left empty."""
+
+    name: str
+    # The catalog already has this model: its metadata is updated, not created.
+    existing: bool = False
+    variants: list[CatalogVariantOut] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    files: list[CatalogFileOut] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     valid: bool
     # Where each variant came from, for the pull request description.
     provenance: list[str] = Field(default_factory=list)
-    # The report file to commit next to the entry, when report_id was given.
-    report_path: str = ""
-    report_html: str = ""
-    validation_path: str = ""
-    validation_text: str = ""
-    # What the form should show when the caller left fields empty.
-    name: str
-    version: str
+    # A source.hf read off the weights path, to confirm; never written.
+    hf_suggestion: str = ""
     hf: str = ""
     display_name: str = ""
     description: str = ""

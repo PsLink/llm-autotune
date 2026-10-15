@@ -1,8 +1,10 @@
-"""model-catalog export: measured configs become one catalog.swiss/v1 version
-file that the catalog's own schema accepts, carrying nothing site-owned."""
+"""model-catalog export: measured configs become catalog.swiss/v2 variant files
+and a metadata.yaml that the catalog's own schemas and rules accept, carrying
+nothing site-owned, and building on what the catalog already publishes."""
 
-import hashlib
+import io
 import json
+import zipfile
 from itertools import count
 
 import httpx
@@ -12,6 +14,7 @@ import yaml
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.control.catalog_export import (
+    CatalogModel,
     CatalogOptions,
     VariantSource,
     build_catalog_entry,
@@ -19,8 +22,10 @@ from app.control.catalog_export import (
     guess_hf,
     split_image,
     validate,
+    variant_problems,
 )
-from app.control.catalog_export.validation import validation_file
+from app.control.catalog_export.catalog_index import lookup
+from app.control.catalog_export.validation import content_sha256, validation_file
 from app.control.launch_config import LaunchConfig
 from app.core.auth import create_token
 from app.db.base import Base, get_async_session
@@ -28,6 +33,8 @@ from app.db.models import Campaign, Candidate, Result, Run, User
 from app.main import app
 
 _counter = count()
+HF = "Qwen/Qwen3.5-35B-A3B"
+REPORT = "q-h100-report.html"
 
 
 def _config(**overrides) -> LaunchConfig:
@@ -67,17 +74,42 @@ def _pair() -> list[VariantSource]:
     ]
 
 
-def test_a_baseline_and_its_optimized_sibling_are_two_variants_of_one_version():
-    out = build_catalog_entry(_pair(), CatalogOptions(name="qwen3.5-35b-a3b", version="1.1.0"))
-    assert out.errors == []
-    assert out.path == "models/qwen3.5-35b-a3b/qwen3.5-35b-a3b-1.1.0.yaml"
-    doc = yaml.safe_load(out.text)
-    assert doc == out.document, "the text on disk is the document validated"
-    assert doc["servedName"] == "qwen3.5"
-    base, tuned = doc["variants"]
-    assert base["id"] == "sglang-tp2-h100-baseline"
-    assert tuned["id"] == "sglang-tp2-h100-optimized"
-    assert tuned["default"] is True and "default" not in base
+def _opts(**kw) -> CatalogOptions:
+    """A model new to the catalog, with what that needs: its repo id, and the
+    report a tuning result points at."""
+    return CatalogOptions(**{"name": "q", "hf": HF, "report_file": REPORT, **kw})
+
+
+def _docs(out):
+    return [v.document for v in out.variants]
+
+
+def _text(out, path):
+    return next(f.text for f in out.files if f.path == path)
+
+
+# -- the files ------------------------------------------------------------------
+
+
+def test_a_baseline_and_its_optimized_sibling_are_two_variant_files():
+    out = build_catalog_entry(_pair(), _opts(name="qwen3.5-35b-a3b"))
+    assert out.errors == [], out.errors
+    assert [f.path for f in out.files] == [
+        "models/qwen3.5-35b-a3b/sglang-tp2-h100-baseline.yaml",
+        "models/qwen3.5-35b-a3b/sglang-tp2-h100-optimized.yaml",
+        "models/qwen3.5-35b-a3b/metadata.yaml",
+    ]
+    base, tuned = _docs(out)
+    assert yaml.safe_load(_text(out, out.variants[1].path)) == tuned, "the file is the document"
+    assert {k: base[k] for k in ("apiVersion", "kind", "model", "id", "version")} == {
+        "apiVersion": "catalog.swiss/v2",
+        "kind": "Variant",
+        "model": "qwen3.5-35b-a3b",
+        "id": "sglang-tp2-h100-baseline",
+        "version": "1.0.0",
+    }
+    assert base["servedName"] == "qwen3.5"
+    assert base["chart"] == {"name": "sglang", "version": ">=0.8.0"}, "the catalog's minimum"
     assert tuned["description"] == (
         "Tuned by LLM AutoTune: TP2 on two H100 GPUs, single node."
         " +25% on the tuning benchmark vs the baseline variant."
@@ -91,11 +123,49 @@ def test_a_baseline_and_its_optimized_sibling_are_two_variants_of_one_version():
         "topology": "single-node",
         "gpuProduct": ["NVIDIA-H100-80GB-HBM3"],
     }
+    assert [(v.status, v.role) for v in out.variants] == [("new", "baseline"), ("new", "optimized")]
+
+
+def test_the_metadata_records_the_tuning_result_and_preselects_it():
+    pair = _pair()
+    pair[1].evidence["scenarios"] = [
+        {"key": "a", "label": "50k + 1.5k", "pct": 25.04},
+        {"key": "b", "label": "8k + 1k", "pct": 9.95},
+    ]
+    out = build_catalog_entry(pair, _opts())
+    meta = out.metadata
+    assert meta["apiVersion"] == "catalog.swiss/v2" and meta["source"] == {"hf": HF}
+    assert meta["defaultVariant"] == "sglang-tp2-h100-optimized"
+    assert meta["tuning"] == [
+        {
+            "baseline": "sglang-tp2-h100-baseline@1.0.0",
+            "optimized": "sglang-tp2-h100-optimized@1.0.0",
+            "uplift": 25.0,
+            "workloads": [
+                {"name": "50k + 1.5k", "uplift": 25.0},
+                {"name": "8k + 1k", "uplift": 10.0},
+            ],
+            "report": REPORT,
+        }
+    ]
+    assert validate(meta, "metadata.v2") == []
+    assert list(meta)[:2] == ["apiVersion", "name"] and list(meta)[-1] == "source"
+
+
+def test_a_tuning_result_needs_its_baseline_and_its_report():
+    no_report = build_catalog_entry(_pair(), _opts(report_file=""))
+    assert any("needs its perf report" in e for e in no_report.errors)
+    alone = build_catalog_entry(_pair()[1:], _opts())
+    assert any("needs the baseline" in e for e in alone.errors)
+    # The catalog's own rule: an id named optimized must have a tuning entry.
+    assert any("named optimized needs a tuning entry" in e for e in alone.errors)
+    baseline_only = build_catalog_entry(_pair()[:1], _opts(report_file=""))
+    assert baseline_only.errors == [], "a baseline alone needs no report"
 
 
 def test_nothing_site_owned_or_chart_owned_is_published():
-    out = build_catalog_entry(_pair(), CatalogOptions(name="q"))
-    base, tuned = out.document["variants"]
+    out = build_catalog_entry(_pair(), _opts())
+    base, tuned = _docs(out)
     values = base["values"]
     assert values["extraArgs"] == [
         "--enable-cache-report",
@@ -113,15 +183,14 @@ def test_nothing_site_owned_or_chart_owned_is_published():
     ], "the driver's defaults ride along; CUDA_VISIBLE_DEVICES is the platform's"
     assert [v["name"] for v in values["volumes"]] == ["dot-cache", "dshm"], "no host paths"
     assert any("volumes not exported" in w for w in out.warnings)
-    assert "/models/" not in out.text
+    assert not any("/models/" in f.text for f in out.files)
 
 
 def test_a_config_without_extra_env_still_exports_the_env_it_ran_with():
     out = build_catalog_entry(
-        [VariantSource(_config(extra_env={}), role="baseline")], CatalogOptions(name="q")
+        [VariantSource(_config(extra_env={}), role="baseline")], _opts()
     )
-    env = out.document["variants"][0]["values"]["env"]
-    assert env == [
+    assert _docs(out)[0]["values"]["env"] == [
         {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"},
         {"name": "PYTORCH_ALLOC_CONF", "value": "expandable_segments:True"},
     ]
@@ -131,9 +200,9 @@ def test_a_config_without_extra_env_still_exports_the_env_it_ran_with():
                 _config(extra_env={"PYTORCH_ALLOC_CONF": "x", "SGLANG_FOO": "1"}), role="baseline"
             )
         ],
-        CatalogOptions(name="q"),
+        _opts(),
     )
-    assert own.document["variants"][0]["values"]["env"] == [
+    assert _docs(own)[0]["values"]["env"] == [
         {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"},
         {"name": "PYTORCH_ALLOC_CONF", "value": "x"},
         {"name": "SGLANG_FOO", "value": "1"},
@@ -152,9 +221,9 @@ def test_a_volume_an_engine_flag_reads_from_is_kept():
             "/root/moe-config": "/moe-config:ro",
         },
     )
-    out = build_catalog_entry([VariantSource(cfg, role="optimized")], CatalogOptions(name="q"))
+    out = build_catalog_entry([VariantSource(cfg, role="baseline")], _opts())
     assert out.errors == []
-    values = out.document["variants"][0]["values"]
+    values = _docs(out)[0]["values"]
     assert values["volumes"][0] == {
         "name": "draft-model",
         "hostPath": {"path": "/mnt/disk0/models/EAGLE3-x", "type": "Directory"},
@@ -164,39 +233,30 @@ def test_a_volume_an_engine_flag_reads_from_is_kept():
         "mountPath": "/spec-model",
         "readOnly": True,
     }
-    assert [v["name"] for v in values["volumes"]] == ["draft-model", "dot-cache", "dshm"], (
-        "moe-config stays out"
-    )
+    assert [v["name"] for v in values["volumes"]] == ["draft-model", "dot-cache", "dshm"]
     assert any("an engine flag reads from" in w for w in out.warnings)
     assert any("volumes not exported" in w and "/root/moe-config" in w for w in out.warnings)
 
 
 def test_the_serving_contract_is_added_and_a_weights_file_pins_the_mount():
     cfg = _config(engine_args={"tp": 8, "chat_template": "/model/chat_template.jinja"})
-    out = build_catalog_entry([VariantSource(cfg, role="baseline")], CatalogOptions(name="q"))
-    values = out.document["variants"][0]["values"]
+    out = build_catalog_entry([VariantSource(cfg, role="baseline")], _opts())
+    values = _docs(out)[0]["values"]
     assert "--enable-cache-report" in values["extraArgs"]
     assert "--stream-response-default-include-usage" in values["extraArgs"]
     assert any("serving-contract" in w for w in out.warnings)
     assert values["model"]["mountPath"] == "/model", "--chat-template reads from the weights"
     plain = build_catalog_entry(
-        [
-            VariantSource(
-                _config(engine_args={"tp": 2, "enable_cache_report": False}), role="baseline"
-            )
-        ],
-        CatalogOptions(name="q"),
+        [VariantSource(_config(engine_args={"tp": 2, "enable_cache_report": False}))], _opts()
     )
-    pv = plain.document["variants"][0]["values"]
+    pv = _docs(plain)[0]["values"]
     assert "mountPath" not in pv["model"]
-    assert "--enable-cache-report" not in pv["extraArgs"], (
-        "an explicit False is the config's choice"
-    )
+    assert "--enable-cache-report" not in pv["extraArgs"], "an explicit False is the config's"
 
 
 def test_volumes_only_on_request():
-    out = build_catalog_entry(_pair()[:1], CatalogOptions(name="q", include_volumes=True))
-    values = out.document["variants"][0]["values"]
+    out = build_catalog_entry(_pair()[:1], _opts(include_volumes=True))
+    values = _docs(out)[0]["values"]
     assert values["volumes"][0]["hostPath"]["path"] == "/root/moe-config"
     assert values["volumeMounts"][0] == {
         "name": "moe-config",
@@ -208,8 +268,8 @@ def test_volumes_only_on_request():
 
 def test_multi_node_is_an_lws_group_sized_per_pod():
     cfg = _config(engine_args={"tp": 8, "pp_size": 2})
-    out = build_catalog_entry([VariantSource(cfg, nodes=2)], CatalogOptions(name="kimi-k2.5"))
-    v = out.document["variants"][0]
+    out = build_catalog_entry([VariantSource(cfg, nodes=2)], _opts(name="kimi-k2.5"))
+    v = _docs(out)[0]
     assert {k: x for k, x in v["requires"].items() if k != "gpuProduct"} == {
         "gpus": 8,
         "nodes": 2,
@@ -221,27 +281,8 @@ def test_multi_node_is_an_lws_group_sized_per_pod():
     assert out.errors == []
 
 
-def test_metadata_needs_a_repo_id_and_says_when_it_guessed():
-    out = build_catalog_entry(
-        _pair(), CatalogOptions(name="q", family="Qwen", tags=["MoE", "chat"])
-    )
-    assert out.metadata["source"] == {"hf": "Qwen/Qwen3.5-35B-A3B"}
-    assert out.metadata["family"] == "qwen" and out.metadata["tags"] == ["moe", "chat"]
-    assert any("guessed" in w for w in out.warnings)
-    assert validate(out.metadata, "metadata") == []
-
-    none = build_catalog_entry(
-        [VariantSource(_config(model_path="/data/weights"))], CatalogOptions(name="q")
-    )
-    assert none.metadata is None and none.metadata_text == ""
-
-
 def test_the_schema_catches_what_the_builder_cannot_fix():
-    out = build_catalog_entry(_pair(), CatalogOptions(name="q", version="v1"))
-    assert any(e.startswith("version:") for e in out.errors)
-    too_big = build_catalog_entry(
-        [VariantSource(_config(engine_args={"tp": 16}))], CatalogOptions(name="q")
-    )
+    too_big = build_catalog_entry([VariantSource(_config(engine_args={"tp": 16}))], _opts())
     assert any("requires/gpus" in e for e in too_big.errors), "16 cards on one pod is refused"
 
 
@@ -253,6 +294,337 @@ def test_small_helpers():
         "sglang", {"disable_radix_cache": False, "max_model_len": 8}
     )
     assert context == "8" and "--disable-radix-cache" not in args
+
+
+# -- what the catalog cannot be given silently ----------------------------------
+
+
+def test_a_new_model_needs_its_repo_id_and_it_is_never_guessed_into_the_file():
+    out = build_catalog_entry(_pair(), _opts(hf=""))
+    assert any(e.startswith("source.hf") and HF in e for e in out.errors), "suggested, not set"
+    assert out.hf_suggestion == HF
+    assert "source" not in out.metadata
+    none = build_catalog_entry(
+        [VariantSource(_config(model_path="/data/weights"))], _opts(hf="")
+    )
+    assert none.hf_suggestion == "" and any("source.hf" in e for e in none.errors)
+
+
+def test_an_image_named_by_digest_alone_needs_its_tag():
+    digest = "sha256:" + "c" * 64
+    cfg = _config(image=f"registry.example.com/team/sglang@{digest}")
+    out = build_catalog_entry([VariantSource(cfg)], _opts())
+    assert any("has no tag" in e for e in out.errors), "never the chart's default image"
+    tagged = build_catalog_entry([VariantSource(cfg, image_tag="v0.5.15")], _opts())
+    assert tagged.errors == []
+    assert _docs(tagged)[0]["image"] == {
+        "repository": "registry.example.com/team/sglang",
+        "tag": "v0.5.15",
+        "digest": digest,
+    }
+
+
+def test_a_flag_path_no_mount_provides_is_an_error():
+    # The chart mounts weights at /models unless the variant pins model.mountPath.
+    variant = {
+        "engine": "sglang",
+        "chart": {"name": "sglang"},
+        "requires": {"gpus": 8},
+        "values": {
+            "model": {"hostPathType": "Directory"},
+            "extraArgs": ["--chat-template=/model/chat_template.jinja", "--tp-size=8"],
+            "volumeMounts": [{"name": "dshm", "mountPath": "/dev/shm"}],
+        },
+    }
+    assert any("/model/chat_template.jinja" in e and "no mount" in e
+               for e in variant_problems(variant))
+    variant["values"]["model"]["mountPath"] = "/model"
+    assert variant_problems(variant) == []
+    variant["values"]["extraArgs"].append("--speculative-draft-model-path=/spec-model")
+    assert variant_problems(variant)
+    variant["values"]["volumeMounts"].append({"name": "draft-model", "mountPath": "/spec-model"})
+    assert variant_problems(variant) == []
+    variant["chart"]["name"] = "vllm"
+    assert any("is not its engine" in e for e in variant_problems(variant))
+
+
+# -- a model the catalog already has --------------------------------------------
+
+
+def _published(**variants) -> CatalogModel:
+    first = build_catalog_entry(_pair(), _opts())
+    meta = dict(first.metadata)
+    meta["tuning"] = [{"baseline": "old-baseline@1.0.0", "optimized": "old-optimized@1.0.0",
+                       "report": "old-report.html"}]
+    meta["defaultVariant"] = "old-optimized"
+    return CatalogModel(
+        name="qwen3.5-35b-a3b",
+        metadata=meta,
+        metadata_text=yaml.safe_dump(meta),
+        variants={
+            "old-baseline": {"version": "1.0.0", "document": None},
+            "old-optimized": {"version": "1.0.0", "document": None},
+            **variants,
+        },
+    )
+
+
+def test_a_published_model_keeps_its_name_its_metadata_and_its_default():
+    out = build_catalog_entry(_pair(), _opts(name="anything", hf="", existing=_published()))
+    assert out.errors == [], out.errors
+    assert out.existing and out.name == "qwen3.5-35b-a3b"
+    assert any("exported under that name" in w for w in out.warnings)
+    meta = out.metadata
+    assert meta["source"] == {"hf": HF}, "no new repo id is asked for"
+    assert meta["defaultVariant"] == "old-optimized", "the published default stays"
+    assert [t["optimized"] for t in meta["tuning"]] == [
+        "old-optimized@1.0.0",
+        "sglang-tp2-h100-optimized@1.0.0",
+    ], "the new result is added to the recorded ones"
+
+
+def test_a_republished_variant_is_its_next_version_or_no_file_at_all():
+    first = build_catalog_entry(_pair(), _opts(name="qwen3.5-35b-a3b"))
+    same = {"version": "1.2.0", "document": first.variants[0].document | {"version": "1.2.0"}}
+    changed = {
+        "version": "1.0.3",
+        "document": first.variants[1].document | {"description": "edited by hand"},
+    }
+    published = _published(
+        **{"sglang-tp2-h100-baseline": same, "sglang-tp2-h100-optimized": changed}
+    )
+    out = build_catalog_entry(_pair(), _opts(existing=published))
+    assert out.errors == [], out.errors
+    assert [(v.id, v.status, v.version) for v in out.variants] == [
+        ("sglang-tp2-h100-baseline", "unchanged", "1.2.0"),
+        ("sglang-tp2-h100-optimized", "updated", "1.1.0"),
+    ]
+    assert [f.path for f in out.files] == [
+        "models/qwen3.5-35b-a3b/sglang-tp2-h100-optimized.yaml",
+        "models/qwen3.5-35b-a3b/metadata.yaml",
+    ], "an unchanged variant is not rewritten"
+    assert out.metadata["tuning"][-1] == {
+        "baseline": "sglang-tp2-h100-baseline@1.2.0",
+        "optimized": "sglang-tp2-h100-optimized@1.1.0",
+        "uplift": 25.0,
+        "report": REPORT,
+    }, "the result names the versions measured"
+
+
+def test_a_model_still_in_the_v1_format_is_refused():
+    published = _published()
+    published.metadata["apiVersion"] = "catalog.swiss/v1"
+    out = build_catalog_entry(_pair(), _opts(existing=published))
+    assert any("v1 format" in e for e in out.errors)
+
+
+async def test_the_catalog_is_read_from_its_index():
+    index = {
+        "apiVersion": "catalog.swiss/v2",
+        "raw": "https://raw.example/model-catalog/",
+        "commit": "abc",
+        "models": [
+            {
+                "name": "qwen3.5-35b-a3b",
+                "source": {"hf": HF},
+                "variants": [
+                    {"id": "v1", "version": "1.0.4", "path": "models/qwen3.5-35b-a3b/v1.yaml"}
+                ],
+            }
+        ],
+    }
+    files = {
+        "/model-catalog/abc/models/qwen3.5-35b-a3b/metadata.yaml":
+            f"apiVersion: catalog.swiss/v2\nname: qwen3.5-35b-a3b\nsource:\n  hf: {HF}\n",
+        "/model-catalog/abc/models/qwen3.5-35b-a3b/v1.yaml": "id: v1\nversion: 1.0.4\n",
+    }
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/index-v2.json":
+            return httpx.Response(200, json=index)
+        if request.url.path in files:
+            return httpx.Response(200, text=files[request.url.path])
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(serve)
+    found, note = await lookup("https://site.example/index-v2.json", "other-name", HF.lower(),
+                               transport=transport)
+    assert note == "" and found is not None, "found by its repo id, whatever the name"
+    assert found.name == "qwen3.5-35b-a3b" and found.metadata["source"]["hf"] == HF
+    assert found.variants == {"v1": {"version": "1.0.4", "document": {"id": "v1",
+                                                                      "version": "1.0.4"}}}
+    missing, _ = await lookup("https://site.example/index-v2.json", "new-model", "a/b",
+                              transport=transport)
+    assert missing is None
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route")
+
+    offline, note = await lookup("https://site.example/index-v2.json", "q", HF,
+                                 transport=httpx.MockTransport(down))
+    assert offline is None and "treated as new" in note
+    assert await lookup("", "q", HF) == (None, "")
+
+
+# -- the CI routing file -------------------------------------------------------
+
+
+def test_the_routing_file_names_each_variant_by_content_not_bytes():
+    sources = _pair()
+    for i, source in enumerate(sources):
+        source.origin = {"track_slug": f"track-{i}", "run_id": 100 + i}
+    out = build_catalog_entry(sources, _opts())
+    sidecar = validation_file(out, sources)
+    doc = json.loads(sidecar.text)
+    assert sidecar.path == "models/q/q.validation.json" and doc["schema_version"] == 2
+    assert [(v["variant_id"], v["version"], v["role"], v["file"]) for v in doc["variants"]] == [
+        ("sglang-tp2-h100-baseline", "1.0.0", "baseline", "sglang-tp2-h100-baseline.yaml"),
+        ("sglang-tp2-h100-optimized", "1.0.0", "optimized", "sglang-tp2-h100-optimized.yaml"),
+    ]
+    text = out.files[0].text
+    reformatted = yaml.safe_dump(yaml.safe_load(text), indent=4, sort_keys=True)
+    assert doc["variants"][0]["content_sha256"] == content_sha256(reformatted)
+    # Only an explicit role is routed as optimized.
+    sources[1].role = ""
+    plain = build_catalog_entry(sources, _opts())
+    assert json.loads(validation_file(plain, sources).text)["variants"][1]["role"] == "other"
+
+
+def test_no_routing_file_without_a_track_for_every_run_or_with_errors():
+    sources = _pair()
+    sources[0].origin = {"track_slug": "t", "run_id": 100}
+    out = build_catalog_entry(sources, _opts())
+    assert validation_file(out, sources) is None
+    assert any("must belong to a track" in w for w in out.warnings)
+    out.errors.append("invalid")
+    assert validation_file(out, sources) is None
+
+
+# -- drafted text -----------------------------------------------------------------
+
+
+def test_metadata_is_drafted_from_the_model_and_the_configs():
+    out = build_catalog_entry(
+        _pair(), _opts(name="qwen3.5-35b-a3b", model_label="Qwen3.5-35B-A3B")
+    )
+    meta = out.metadata
+    assert meta["displayName"] == "Qwen3.5-35B-A3B"
+    assert meta["family"] == "qwen"
+    assert meta["tags"] == ["chat", "moe"], "A3B reads as MoE; no parser, no reasoning tag"
+    assert "variant" not in meta["description"], "metadata outlives any one variant"
+    assert meta["description"].startswith("Qwen3.5-35B-A3B on 2 H100 GPUs")
+    given = build_catalog_entry(
+        _pair(),
+        _opts(model_label="Qwen3.5", display_name="Mine", tags=["x"],
+              description="hand-written", homepage="https://example.com"),
+    )
+    assert given.metadata["displayName"] == "Mine"
+    assert given.metadata["tags"] == ["x"]
+    assert given.metadata["description"] == "hand-written"
+    assert given.metadata["homepage"] == "https://example.com"
+    assert given.errors == []
+
+
+def test_the_values_follow_the_catalogs_newest_entries():
+    out = build_catalog_entry(_pair()[:1], _opts())
+    values = _docs(out)[0]["values"]
+    assert values["modelCheck"]["enabled"] is True
+    assert values["resources"]["limits"]["ephemeral-storage"] == "16Gi"
+    assert values["lifecycle"]["preStop"]["drainSeconds"] == 600
+    assert values["terminationGracePeriodSeconds"] == 3600
+    assert values["hangWatcher"] == {"enabled": True}
+    probe = values["startupProbe"]
+    assert probe["periodSeconds"] * probe["failureThreshold"] == 90 * 60, "the 90-minute floor"
+    assert out.files[0].text.startswith("# Serving configs measured"), "a short header"
+    assert "run " not in out.files[0].text
+    assert out.errors == []
+
+
+def test_a_measured_load_only_raises_the_startup_budget():
+    slow = VariantSource(_config(), load_seconds=45 * 60)  # 3 x 45 = 135 minutes
+    fast = VariantSource(_config(), load_seconds=5 * 60)
+    out = build_catalog_entry([slow, fast], _opts())
+    a, b = (v["values"]["startupProbe"] for v in _docs(out))
+    assert a["failureThreshold"] * 30 == 135 * 60
+    assert b["failureThreshold"] * 30 == 90 * 60
+
+
+def test_unknown_cards_and_dev_tags_are_flagged_not_guessed():
+    cfg = _config(gpu_type="H20", image="registry.example.com/team/sglang:dev-dsv41")
+    out = build_catalog_entry([VariantSource(cfg)], _opts())
+    v = _docs(out)[0]
+    assert "gpuProduct" not in v["requires"]
+    assert any("no gpuProduct" in w for w in out.warnings)
+    assert any("does not look like a release" in w for w in out.warnings)
+    pinned = build_catalog_entry(
+        [VariantSource(cfg, image_digest="sha256:" + "b" * 64)],
+        _opts(gpu_product=["NVIDIA-H20"]),
+    )
+    v = _docs(pinned)[0]
+    assert v["image"]["digest"] == "sha256:" + "b" * 64
+    assert v["requires"]["gpuProduct"] == ["NVIDIA-H20"]
+    assert pinned.errors == []
+
+
+def test_speculative_and_quantized_configs_are_described_and_tagged():
+    cfg = _config(
+        engine_args={
+            "tp": 8,
+            "speculative_algorithm": "eagle",
+            "quantization": "fp8",
+            "kv_cache_dtype": "fp8_e4m3",
+        }
+    )
+    out = build_catalog_entry([VariantSource(cfg)], _opts(model_label="MiMo-V2.5"))
+    desc = _docs(out)[0]["description"]
+    assert "fp8 weights, fp8 KV cache, EAGLE speculative decoding" in desc
+    assert "speculative-decoding" in out.metadata["tags"] and "fp8" in out.metadata["tags"]
+
+
+def _judged_pair(scenarios, quality):
+    pair = _pair()
+    pair[1].evidence = {**pair[1].evidence, "scenarios": scenarios, "quality": quality}
+    return pair
+
+
+def test_the_description_carries_every_scenario_and_losses_are_flagged():
+    pair = _judged_pair(
+        [
+            {"key": "a", "label": "50k + 1.5k", "pct": 89.49},
+            {"key": "b", "label": "8k + 1k", "pct": -4.2},
+        ],
+        [{"name": "GPQA Diamond", "baseline": 0.9, "attempt": 0.8384}],
+    )
+    out = build_catalog_entry(pair, _opts())
+    tuned = _docs(out)[1]
+    assert "+89.5% (50k + 1.5k), -4.2% (8k + 1k)" in tuned["description"]
+    assert "on the tuning benchmark" not in tuned["description"], "not the single ranking metric"
+    assert any("does NOT beat the baseline on 8k + 1k" in w for w in out.warnings)
+    assert any(
+        "answer quality drops on GPQA Diamond" in w and "-6.16 points" in w for w in out.warnings
+    )
+    assert out.metadata["tuning"][0]["workloads"][1] == {"name": "8k + 1k", "uplift": -4.2}
+    assert out.errors == [], "a reviewer decides; the export still validates"
+
+
+def test_a_winning_pair_raises_no_judgement():
+    pair = _judged_pair(
+        [
+            {"key": "a", "label": "50k + 1.5k", "pct": 5.5},
+            {"key": "b", "label": "8k + 1k", "pct": 8.1},
+        ],
+        [{"name": "GPQA Diamond", "baseline": 0.8182, "attempt": 0.8485}],
+    )
+    out = build_catalog_entry(pair, _opts())
+    assert not any("does NOT beat" in w or "quality drops" in w for w in out.warnings)
+
+
+def test_changes_round_the_way_the_report_prints_them():
+    from app.control.catalog_export import pct_text, round_pct
+
+    assert pct_text(119.85) == "+119.9%", "half up, like the report; not Python's +119.8%"
+    assert pct_text(9.99) == "+10.0%" and pct_text(-4.25) == "-4.3%" and pct_text(0.04) == "0.0%"
+    assert round_pct(119.85) == 119.9 and round_pct(-4.25) == -4.3
 
 
 # -- the endpoint ---------------------------------------------------------------
@@ -332,35 +704,49 @@ async def _seed(factory):
         await s.commit()
 
 
+PAIR = [{"run_id": 101, "role": "baseline"}, {"run_id": 102, "role": "optimized", "label": "tuned"}]
+
+
 async def test_preview_exports_a_baseline_run_and_a_tuned_run(stack):
     http, factory = stack
     await _seed(factory)
     res = await http.post(
         "/api/catalog-export/preview",
-        json={
-            "variants": [
-                {"run_id": 101, "role": "baseline"},
-                {"run_id": 102, "role": "optimized", "label": "tuned"},
-            ],
-            "version": "1.0.0",
-        },
+        json={"variants": PAIR, "hf": HF, "use_catalog": False},
     )
     assert res.status_code == 200, res.text
     out = res.json()
-    assert out["valid"], out["errors"]
     assert out["name"] == "qwen3.5-35b-a3b", "named after the served model"
-    assert out["path"] == "models/qwen3.5-35b-a3b/qwen3.5-35b-a3b-1.0.0.yaml"
-    assert out["hf"] == "Qwen/Qwen3.5-35B-A3B"
+    assert [v["id"] for v in out["variants"]] == [
+        "sglang-tp2-h800-baseline",
+        "sglang-tp2-h800-optimized",
+    ]
+    assert [f["kind"] for f in out["files"]] == ["variant", "variant", "metadata"]
+    assert any("needs its perf report" in e for e in out["errors"]), "no report was picked"
+    assert out["hf"] == HF
     assert "campaign 9, run 101" in out["provenance"][0]
     assert out["provenance"][1].startswith("tuned: ")
-    assert "run 101" not in out["text"], "platform ids stay out of the public file"
-    ids = [v["id"] for v in out["document"]["variants"]]
-    assert ids == ["sglang-tp2-h800-baseline", "sglang-tp2-h800-optimized"]
-    assert (
-        "+20% on the tuning benchmark vs the baseline variant"
-        in out["document"]["variants"][1]["description"]
+    assert not any("run 101" in f["text"] for f in out["files"]), "platform ids stay out"
+    tuned = yaml.safe_load(out["files"][1]["text"])
+    assert "+20% on the tuning benchmark vs the baseline variant" in tuned["description"]
+
+
+async def test_the_archive_is_the_files_laid_out_as_the_catalog_is(stack):
+    http, factory = stack
+    await _seed(factory)
+    body = {"variants": PAIR[:1], "hf": HF, "use_catalog": False}
+    res = await http.post("/api/catalog-export/archive", json=body)
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"] == "application/zip"
+    names = zipfile.ZipFile(io.BytesIO(res.content)).namelist()
+    assert names == [
+        "models/qwen3.5-35b-a3b/sglang-tp2-h800-baseline.yaml",
+        "models/qwen3.5-35b-a3b/metadata.yaml",
+    ]
+    refused = await http.post(
+        "/api/catalog-export/archive", json={"variants": PAIR, "use_catalog": False}
     )
-    assert out["validation_text"] == "", "campaign-only exports cannot invent a track"
+    assert refused.status_code == 422 and "source.hf" in refused.text
 
 
 async def test_preview_exports_validation_from_plugin_track_overlay(stack, monkeypatch):
@@ -373,49 +759,21 @@ async def test_preview_exports_validation_from_plugin_track_overlay(stack, monke
     ))
     http, factory = stack
     await _seed(factory)
-    res = await http.post("/api/catalog-export/preview", json={"variants": [
-        {"run_id": 101, "role": "baseline", "id": "my-baseline"},
-        {"run_id": 102, "role": "optimized", "id": "my-winner"},
-    ]})
+    res = await http.post("/api/catalog-export/preview", json={
+        "variants": [{"run_id": 101, "role": "baseline", "id": "my-baseline"}],
+        "hf": HF, "use_catalog": False,
+    })
     assert res.status_code == 200, res.text
     out = res.json()
-    manifest = json.loads(out["validation_text"])
-    assert out["validation_path"] == out["path"].replace(".yaml", ".validation.json")
-    assert manifest["catalog_file"] == out["path"].rsplit("/", 1)[-1]
-    assert manifest["catalog_sha256"] == hashlib.sha256(out["text"].encode()).hexdigest()
-    assert manifest["variants"] == [
-        {"variant_id": "my-baseline", "track_slug": "original-track",
-         "source_run_id": 101, "role": "baseline"},
-        {"variant_id": "my-winner", "track_slug": "original-track",
-         "source_run_id": 102, "role": "optimized"},
-    ]
-    assert "original-track" not in out["text"]
-
-
-def test_validation_uses_final_ids_and_only_new_sources_when_extending():
-    sources = _pair()
-    for i, source in enumerate(sources):
-        source.origin = {"track_slug": f"track-{i}", "run_id": 100 + i}
-        source.id = "same-id"
-    export = build_catalog_entry(sources, CatalogOptions(name="q"))
-    _, text = validation_file(export, sources)
-    assert [v["variant_id"] for v in json.loads(text)["variants"]] == ["same-id", "same-id-2"]
-    sources[0].id = "new-id"
-    extended = build_catalog_entry([sources[0]], CatalogOptions(name="q", base_text=export.text))
-    path, text = validation_file(extended, [sources[0]])
-    assert path.endswith("q-1.1.0.validation.json")
-    assert [v["variant_id"] for v in json.loads(text)["variants"]] == ["new-id"]
-    assert len(extended.document["variants"]) == 3
-
-
-def test_validation_is_unavailable_for_invalid_or_partially_unassociated_exports():
-    sources = _pair()
-    sources[0].origin = {"track_slug": "original-track", "run_id": 100}
-    export = build_catalog_entry(sources, CatalogOptions(name="q"))
-    assert validation_file(export, sources) == ("", "")
-    assert any("original track" in w for w in export.warnings)
-    export.errors.append("invalid")
-    assert validation_file(export, sources) == ("", "")
+    sidecar = next(f for f in out["files"] if f["kind"] == "validation")
+    manifest = json.loads(sidecar["text"])
+    assert sidecar["path"] == "models/qwen3.5-35b-a3b/qwen3.5-35b-a3b.validation.json"
+    assert manifest["variants"][0] | {"content_sha256": "-"} == {
+        "variant_id": "my-baseline", "version": "1.0.0", "track_slug": "original-track",
+        "source_run_id": 101, "role": "baseline", "file": "my-baseline.yaml",
+        "content_sha256": "-",
+    }
+    assert not any("original-track" in f["text"] for f in out["files"] if f["kind"] != "validation")
 
 
 @pytest.mark.parametrize(
@@ -430,252 +788,7 @@ def test_validation_is_unavailable_for_invalid_or_partially_unassociated_exports
 async def test_preview_refuses_what_it_cannot_publish(stack, variants, code):
     http, factory = stack
     await _seed(factory)
-    res = await http.post("/api/catalog-export/preview", json={"variants": variants})
+    res = await http.post(
+        "/api/catalog-export/preview", json={"variants": variants, "use_catalog": False}
+    )
     assert res.status_code == code, res.text
-
-
-def test_metadata_is_drafted_from_the_model_and_the_configs():
-    out = build_catalog_entry(
-        _pair(), CatalogOptions(name="qwen3.5-35b-a3b", model_label="Qwen3.5-35B-A3B")
-    )
-    meta = out.metadata
-    assert meta["displayName"] == "Qwen3.5-35B-A3B"
-    assert meta["family"] == "qwen"
-    assert meta["tags"] == ["chat", "moe"], "A3B reads as MoE; no parser, no reasoning tag"
-    assert "variant" not in meta["description"], "metadata outlives any one version"
-    assert meta["description"].startswith("Qwen3.5-35B-A3B on 2 H100 GPUs")
-
-    # The caller's values always win over the draft.
-    given = build_catalog_entry(
-        _pair(),
-        CatalogOptions(
-            name="q",
-            model_label="Qwen3.5",
-            display_name="Mine",
-            tags=["x"],
-            description="hand-written",
-            homepage="https://example.com",
-        ),
-    )
-    assert given.metadata["displayName"] == "Mine"
-    assert given.metadata["tags"] == ["x"]
-    assert given.metadata["description"] == "hand-written"
-    assert given.metadata["homepage"] == "https://example.com"
-    assert given.errors == []
-
-
-def test_the_values_follow_the_catalogs_newest_entries():
-    src = _pair()[1]
-    out = build_catalog_entry([src], CatalogOptions(name="q"))
-    v = out.document["variants"][0]
-    values = v["values"]
-    assert v["chart"]["version"] == "0.7.1"
-    assert values["modelCheck"]["enabled"] is True
-    assert values["resources"]["limits"]["ephemeral-storage"] == "16Gi"
-    assert values["lifecycle"]["preStop"]["drainSeconds"] == 600
-    assert values["terminationGracePeriodSeconds"] == 3600
-    assert values["hangWatcher"] == {"enabled": True}
-    probe = values["startupProbe"]
-    assert probe["periodSeconds"] * probe["failureThreshold"] == 90 * 60, "the 90-minute floor"
-    assert out.text.startswith("# Serving configs measured"), "a short header"
-    assert "run " not in out.text and "Review before" not in out.text
-    assert out.errors == []
-
-
-def test_a_measured_load_only_raises_the_startup_budget():
-    slow = VariantSource(_config(), load_seconds=45 * 60)  # 3 x 45 = 135 minutes
-    fast = VariantSource(_config(), load_seconds=5 * 60)
-    out = build_catalog_entry([slow, fast], CatalogOptions(name="q"))
-    a, b = (v["values"]["startupProbe"] for v in out.document["variants"])
-    assert a["failureThreshold"] * 30 == 135 * 60
-    assert b["failureThreshold"] * 30 == 90 * 60
-
-
-def test_unknown_cards_and_dev_tags_are_flagged_not_guessed():
-    cfg = _config(gpu_type="H20", image="registry.example.com/team/sglang:dev-dsv41")
-    out = build_catalog_entry([VariantSource(cfg)], CatalogOptions(name="q"))
-    v = out.document["variants"][0]
-    assert "gpuProduct" not in v["requires"]
-    assert any("no gpuProduct" in w for w in out.warnings)
-    assert any("does not look like a release" in w for w in out.warnings)
-
-    pinned = build_catalog_entry(
-        [VariantSource(cfg, image_digest="sha256:" + "b" * 64)],
-        CatalogOptions(name="q", gpu_product=["NVIDIA-H20"]),
-    )
-    v = pinned.document["variants"][0]
-    assert v["image"]["digest"] == "sha256:" + "b" * 64
-    assert v["requires"]["gpuProduct"] == ["NVIDIA-H20"]
-    assert pinned.errors == []
-
-
-def test_speculative_and_quantized_configs_are_described_and_tagged():
-    cfg = _config(
-        engine_args={
-            "tp": 8,
-            "speculative_algorithm": "eagle",
-            "quantization": "fp8",
-            "kv_cache_dtype": "fp8_e4m3",
-        }
-    )
-    out = build_catalog_entry(
-        [VariantSource(cfg, role="optimized")], CatalogOptions(name="q", model_label="MiMo-V2.5")
-    )
-    desc = out.document["variants"][0]["description"]
-    assert "fp8 weights, fp8 KV cache, EAGLE speculative decoding" in desc
-    assert "speculative-decoding" in out.metadata["tags"] and "fp8" in out.metadata["tags"]
-    assert out.provenance and "run " not in out.text
-
-
-# -- trust checks (2026-09-29) --------------------------------------------------
-
-
-def test_a_flag_path_no_mount_provides_is_an_error():
-    # The chart mounts weights at /models unless the entry pins model.mountPath.
-    # A variant that reads /model/... without pinning it cannot find the file.
-    from app.control.catalog_export import cross_check
-
-    variant = {
-        "id": "v",
-        "values": {
-            "model": {"hostPathType": "Directory"},
-            "extraArgs": ["--chat-template=/model/chat_template.jinja", "--tp-size=8"],
-            "volumeMounts": [{"name": "dshm", "mountPath": "/dev/shm"}],
-        },
-    }
-    errors = cross_check({"variants": [variant]})
-    assert any("/model/chat_template.jinja" in e and "no mount" in e for e in errors)
-    variant["values"]["model"]["mountPath"] = "/model"
-    assert cross_check({"variants": [variant]}) == []
-    # a draft model is fine when a volume is mounted where the flag points
-    variant["values"]["extraArgs"].append("--speculative-draft-model-path=/spec-model")
-    assert cross_check({"variants": [variant]})
-    variant["values"]["volumeMounts"].append({"name": "draft-model", "mountPath": "/spec-model"})
-    assert cross_check({"variants": [variant]}) == []
-
-
-def _judged_pair(scenarios, quality):
-    pair = _pair()
-    pair[1].evidence = {**pair[1].evidence, "scenarios": scenarios, "quality": quality}
-    return pair
-
-
-def test_the_description_carries_every_scenario_and_losses_are_flagged():
-    pair = _judged_pair(
-        [
-            {"key": "a", "label": "50k + 1.5k", "pct": 89.49},
-            {"key": "b", "label": "8k + 1k", "pct": -4.2},
-        ],
-        [{"name": "GPQA Diamond", "baseline": 0.9, "attempt": 0.8384}],
-    )
-    out = build_catalog_entry(pair, CatalogOptions(name="q"))
-    tuned = out.document["variants"][1]
-    assert "+89.5% (50k + 1.5k), -4.2% (8k + 1k)" in tuned["description"]
-    assert "on the tuning benchmark" not in tuned["description"], "not the single ranking metric"
-    assert any("does NOT beat the baseline on 8k + 1k" in w for w in out.warnings)
-    assert any(
-        "answer quality drops on GPQA Diamond" in w and "-6.16 points" in w for w in out.warnings
-    )
-    assert out.errors == [], "a reviewer decides; the export still validates"
-
-
-def test_a_winning_pair_raises_no_judgement():
-    pair = _judged_pair(
-        [
-            {"key": "a", "label": "50k + 1.5k", "pct": 5.5},
-            {"key": "b", "label": "8k + 1k", "pct": 8.1},
-        ],
-        [{"name": "GPQA Diamond", "baseline": 0.8182, "attempt": 0.8485}],
-    )
-    out = build_catalog_entry(pair, CatalogOptions(name="q"))
-    assert not any("does NOT beat" in w or "quality drops" in w for w in out.warnings)
-
-
-BASE = """apiVersion: catalog.swiss/v1
-name: q
-version: 1.0.0
-servedName: qwen
-variants:
-  - id: sglang-tp2-h100
-    default: true
-    engine: sglang
-    # a reviewer's comment that must survive
-    description: TP2 on two H100 GPUs.
-    chart:
-      name: sglang
-      version: 0.7.1
-    requires:
-      gpus: 2
-      topology: single-node
-    values:
-      model:
-        mountPath: /models
-      extraArgs:
-        - --tp-size=2
-"""
-
-
-def test_an_existing_version_is_extended_not_rewritten():
-    out = build_catalog_entry(_pair(), CatalogOptions(name="q", base_text=BASE))
-    assert out.errors == [], out.errors
-    assert out.path == "models/q/q-1.1.0.yaml"
-    doc = out.document
-    assert doc["version"] == "1.1.0" and doc["servedName"] == "qwen"
-    ids = [v["id"] for v in doc["variants"]]
-    assert ids == ["sglang-tp2-h100", "sglang-tp2-h100-baseline", "sglang-tp2-h100-optimized"]
-    assert [v.get("default", False) for v in doc["variants"]] == [True, False, False], (
-        "base default kept"
-    )
-    # the base's text, comments included, is untouched apart from the version line
-    assert BASE.replace("version: 1.0.0", "version: 1.1.0").rstrip("\n") in out.text
-    assert "# a reviewer's comment that must survive" in out.text
-    assert any("servedName 'qwen'" in w for w in out.warnings)
-
-
-def test_extending_can_move_the_default_and_refuses_id_clashes():
-    moved = build_catalog_entry(
-        _pair(),
-        CatalogOptions(name="q", base_text=BASE, default_variant="sglang-tp2-h100-optimized"),
-    )
-    assert moved.errors == []
-    assert [v.get("default", False) for v in moved.document["variants"]] == [False, False, True]
-    clash = build_catalog_entry(
-        _pair(),
-        CatalogOptions(
-            name="q", base_text=BASE.replace("sglang-tp2-h100\n", "sglang-tp2-h100-baseline\n")
-        ),
-    )
-    assert any("already in 1.0.0" in e for e in clash.errors)
-    wrong = build_catalog_entry(
-        _pair(), CatalogOptions(name="q", base_text=BASE.replace("name: q", "name: z"))
-    )
-    assert any("is 'z', not 'q'" in e for e in wrong.errors)
-
-
-def test_the_same_variant_ids_republish_a_corrected_patch_version():
-    # A published 1.0.0 whose variants are the measured pair, but broken: the
-    # export re-publishes them from the runs as 1.0.1, keeping the default.
-    first = build_catalog_entry(
-        _pair(), CatalogOptions(name="q", default_variant="sglang-tp2-h100-baseline")
-    )
-    broken = first.text.replace("contextLength: ''", "contextLength: '1'")
-    out = build_catalog_entry(_pair(), CatalogOptions(name="q", base_text=broken))
-    assert out.errors == [], out.errors
-    assert out.path == "models/q/q-1.0.1.yaml"
-    assert [v.get("default", False) for v in out.document["variants"]] == [True, False], (
-        "base default kept"
-    )
-    assert out.document["variants"][0]["values"]["model"]["contextLength"] == "", (
-        "rewritten from the run"
-    )
-    assert any(
-        "replaces sglang-tp2-h100-baseline, sglang-tp2-h100-optimized of 1.0.0" in w
-        for w in out.warnings
-    )
-
-
-def test_changes_round_the_way_the_report_prints_them():
-    from app.control.catalog_export import pct_text
-
-    assert pct_text(119.85) == "+119.9%", "half up, like the report; not Python's +119.8%"
-    assert pct_text(9.99) == "+10.0%" and pct_text(-4.25) == "-4.3%" and pct_text(0.04) == "0.0%"

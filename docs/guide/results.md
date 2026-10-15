@@ -155,35 +155,46 @@ against the new production config.
 
 ### Publishing it to the model catalog
 
-**⋯ ▸ Export to model catalog** turns measured runs into an entry for
-[model-catalog](https://github.com/modelsphere/model-catalog): a
-`catalog.swiss/v1` version file with one variant per run, and a
-`metadata.yaml` for a model the catalog doesn't have yet.
+**⋯ ▸ Export to model catalog** turns measured runs into files for
+[model-catalog](https://github.com/modelsphere/model-catalog), in its
+`catalog.swiss/v2` layout: one variant file per run, `models/<name>/<id>.yaml`,
+and the model's `metadata.yaml`.
 
 - **Runs:** every run on the leaderboard is listed. The baseline and the
-  winner are ticked to start, as roles *baseline* and *optimized*; the
-  optimized variant's description states how much it gained.
-- **Entry:** the name, version and metadata are drafted from the model and
-  can be edited. The weights are named by `source.hf`, never by a path on
-  your machines.
-- **Advanced:** variant ids, the default variant, env and host-path volumes,
-  the startup budget, `gpuProduct` node labels, extending an already
-  published version, and a saved report to ship next to the entry.
+  winner are ticked to start, as roles *baseline* and *optimized*.
+- **Model:** the export looks the model up in the published catalog, by its
+  Hugging Face repo id, then by name.
+  - **A model the catalog has:** its name and metadata are kept. A variant it
+    already has gets its next version, or no file at all if nothing changed;
+    the others are added.
+  - **A new model:** the form asks for its Hugging Face repo id (`source.hf`),
+    which every site finds the weights by. A repo id read off the weights path
+    is offered as a suggestion, never filled in for you. The rest of
+    `metadata.yaml` is drafted and can be edited.
+- **Report:** a tuned variant needs the saved report that compares exactly
+  these runs. Its result goes into `metadata.yaml` as a `tuning` entry (the
+  gain over the baseline, per workload) and its description, and the
+  report ships beside it.
+- **Advanced:** variant ids, an image tag for a run whose image was named by
+  digest only, the default variant, env and host-path volumes, the startup
+  budget, and `gpuProduct` node labels.
 
-The files are checked against the catalog's schema as you go. Nothing is
-pushed: download them, put them under `models/<name>/` in model-catalog, and
-open a pull request. The provenance lines (which campaign and run measured
-each variant) are for the pull request description.
+Every file is checked against the catalog's schemas and the rules its own
+validator adds, as you go; the export can be downloaded once it passes.
+Nothing is pushed: **Download** gives a zip laid out as the catalog is.
+Unpack it at the root of a model-catalog checkout and open a pull request. The
+provenance lines (which campaign and run measured each variant) are for the
+pull request description. To run the catalog's own checks on it first:
 
-When all selected runs belong to tracks, also download the generated
-`<name>-<version>.validation.json` and commit it beside the version YAML.
-It contains each exported variant's original track, source run and role, and
-the SHA-256 of the exact YAML bytes. Catalog CI reads the deployment config
-from the YAML and uses the sidecar to submit new optimized variants to their
-original tracks with the internal validation account; baselines are skipped.
-No manual track mapping is required, and the catalog YAML schema is unchanged.
-If you edit the YAML, regenerate the pair before submitting it. Runs without
-a track still export normally, with a warning that CI routing is unavailable.
+```bash
+deploy/dev/check-catalog-export.sh <export.zip> <model-catalog checkout>
+```
+
+When a plugin groups every selected run into tracks, the zip also carries
+`<name>.validation.json`: each variant's track, source run and role, and a
+hash of each variant file's content (formatting does not change it). Catalog
+CI can use it to route new optimized variants back to the tracks they were
+measured on; the catalog's files and schema are unchanged by it.
 
 ---
 

@@ -1,17 +1,22 @@
-"""model-catalog export: measured runs as a `catalog.swiss/v1` version file.
+"""model-catalog export: measured runs as `catalog.swiss/v2` variant files.
 
 Pick the runs to publish (a campaign's baseline and its winner, or any runs
-with a benchmark result), get back the version file and, for a model the
-catalog does not have yet, its metadata.yaml. Nothing is written or pushed:
-the response carries the text, the UI downloads it, and publishing is a pull
-request someone opens against model-catalog. The builder lives in
-app/control/catalog_export; this module only turns run ids into
-LaunchConfigs and evidence.
+with a benchmark result), get back one variant file per run, the model's
+metadata.yaml (new, or the published one with this tuning result added), the
+perf report and, for runs a plugin groups into tracks, the CI routing file.
+Nothing is written or pushed: `preview` returns the text, `archive` the same
+files as a zip laid out as the catalog is, and publishing is a pull request
+someone opens against model-catalog. The builder lives in
+app/control/catalog_export; this module turns run ids into LaunchConfigs and
+evidence, and reads what the catalog already publishes.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import io
+import zipfile
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,16 +24,19 @@ from app.agent import comparison as cmp
 from app.agent import export as report_export
 from app.agent.loader import load_run
 from app.control.catalog_export import (
-    DEFAULT_CHART_VERSION,
+    CatalogExport,
+    CatalogFile,
     CatalogOptions,
     VariantSource,
     build_catalog_entry,
     slug,
     split_image,
 )
+from app.control.catalog_export.catalog_index import lookup
 from app.control.catalog_export.validation import validation_file
 from app.control.launch_config import LaunchConfig
 from app.core.auth import Principal, get_principal
+from app.core.config import get_settings
 from app.datasets.pinning import dataset_of
 from app.db.base import get_async_session
 from app.db.models import AgentReport, Campaign, Candidate, Event, Machine, Result, Run, RunStatus
@@ -136,6 +144,7 @@ async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[Vari
         id=item.id,
         description=item.description,
         gpu_product=list(item.gpu_product),
+        image_tag=item.image_tag.strip(),
     )
     # Reuse the existing plugin overlay: the public platform never imports hub tables.
     bundle = await load_run(session, run.id)
@@ -262,14 +271,7 @@ async def _report_for(
     return f"models/{name}/{name}-{card}-report.html", html, errors
 
 
-@router.post("/preview", response_model=CatalogExportOut)
-async def preview_catalog_export(
-    body: CatalogExportRequest,
-    _: Principal = Depends(get_principal),
-    session: AsyncSession = Depends(get_async_session),
-):
-    """The catalog entry for the given runs, validated against the catalog's
-    schema. Nothing is saved."""
+async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogExport:
     sources: list[VariantSource] = []
     model_names: list[str] = []
     for item in body.variants:
@@ -279,16 +281,28 @@ async def preview_catalog_export(
     await _attach_comparison(session, sources)
 
     name = body.name.strip() or slug(next((n for n in model_names if n), ""))
+    existing, note = (
+        await lookup(get_settings().catalog_index_url, name, body.hf.strip())
+        if body.use_catalog
+        else (None, "")
+    )
+    name = existing.name if existing is not None else name
+    report_path = report_html = ""
+    report_errors: list[str] = []
+    if body.report_id is not None:
+        report_path, report_html, report_errors = await _report_for(
+            session, body.report_id, sources, name
+        )
     opts = CatalogOptions(
         name=name,
-        version=body.version.strip() or "1.0.0",
         served_name=body.served_name.strip(),
-        chart_version=body.chart_version.strip() or DEFAULT_CHART_VERSION,
+        chart_version=body.chart_version.strip(),
         default_variant=body.default_variant.strip(),
         include_env=body.include_env,
         include_volumes=body.include_volumes,
         startup_minutes=body.startup_minutes,
-        with_metadata=body.with_metadata,
+        existing=existing,
+        report_file=report_path.rsplit("/", 1)[-1],
         hf=body.hf.strip(),
         hf_revision=body.hf_revision.strip(),
         display_name=body.display_name.strip(),
@@ -299,31 +313,59 @@ async def preview_catalog_export(
         homepage=body.homepage.strip(),
         model_label=next((n for n in model_names if n), ""),
         gpu_product=[p.strip() for p in body.gpu_product if p.strip()],
-        base_text=body.base_entry,
     )
     try:
         export = build_catalog_entry(sources, opts)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    report_path = report_html = ""
-    if body.report_id is not None:
-        report_path, report_html, report_errors = await _report_for(
-            session, body.report_id, sources, export.document["name"]
-        )
-        export.errors += report_errors
-    validation_path, validation_text = validation_file(export, sources)
+    if note:
+        export.warnings.insert(0, note)
+    export.errors += report_errors
+    if report_html:
+        export.files.append(CatalogFile(report_path, "report", report_html))
+    sidecar = validation_file(export, sources)
+    if sidecar is not None:
+        export.files.append(sidecar)
+    return export
+
+
+@router.post("/preview", response_model=CatalogExportOut)
+async def preview_catalog_export(
+    body: CatalogExportRequest,
+    _: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """The catalog files for the given runs, validated against the catalog's
+    schemas and rules. Nothing is saved."""
+    export = await _export(body, session)
     meta = export.metadata or {}
     return CatalogExportOut(
         **export.payload(),
-        report_path=report_path,
-        report_html=report_html,
-        validation_path=validation_path,
-        validation_text=validation_text,
-        name=export.document["name"],
-        version=export.document["version"],
         hf=(meta.get("source") or {}).get("hf", ""),
         display_name=meta.get("displayName", ""),
         description=meta.get("description", ""),
         family=meta.get("family", ""),
         tags=list(meta.get("tags") or []),
+    )
+
+
+@router.post("/archive")
+async def archive_catalog_export(
+    body: CatalogExportRequest,
+    _: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """The same files as a zip, laid out as the catalog is: unpack it at the
+    root of a model-catalog checkout. Refused while the export has errors."""
+    export = await _export(body, session)
+    if not export.valid:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(export.errors))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in export.files:
+            zf.writestr(f.path, f.text)
+    return Response(
+        buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{export.name}-catalog.zip"'},
     )

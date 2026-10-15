@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Export to model catalog writes the catalog's v2 layout**
+  (`catalog.swiss/v2`): one variant file per run, `models/<name>/<id>.yaml`,
+  each with its own version, and the model's `metadata.yaml` with a `tuning`
+  entry (the gain over the baseline, per workload, and the report). Model
+  catalog moved to it and no longer takes new v1 version files.
+  - The export reads the published catalog (`catalogIndexUrl`, the catalog's
+    `index-v2.json`): a model it already has keeps its name and metadata, a
+    variant it already has gets its next version (or no file when nothing
+    changed). Unreachable, the model is treated as new, with a warning.
+  - Checked against the catalog's current schemas and the rules its validator
+    adds; variants ask for the catalog's minimum chart (`sglang >=0.8.0`,
+    `vllm >=0.5.0`).
+  - **Download** gives one zip laid out as the catalog is
+    (`POST /api/catalog-export/archive`), once the export passes.
+  - `deploy/dev/check-catalog-export.sh` runs the catalog's own
+    `validate:schema` and `validate:helm` on an export.
+  - API: the preview returns `files` and `variants`; `version`, `base_entry`
+    and `with_metadata` are gone; a variant takes `image_tag`.
+
+### Fixed
+
+- Catalog export: a run whose image was named by digest only exported no
+  image, so the chart's default engine would have deployed; it now asks for
+  the tag. `source.hf` is no longer written from a guess off the weights path:
+  a new model needs it given, with the guess offered. A tuned variant without
+  its baseline or report is refused instead of published untuned.
+- The CI routing file of a track export (`<name>.validation.json`) labels a
+  variant without a role `other` rather than `optimized`, and hashes each
+  variant file's content instead of its bytes, so the catalog's formatting does
+  not break it.
+
 ## [0.3.0] - 2026-10-15
 
 ### Added

@@ -485,27 +485,31 @@ export interface RunDetail extends Run {
   }[]
 }
 
-/** POST /catalog-export/preview: measured runs as a model-catalog entry. */
+/** POST /catalog-export/preview: measured runs as model-catalog files
+ *  (catalog.swiss/v2: one file per variant, and the model's metadata.yaml).
+ *  POST /catalog-export/archive returns the same files as a zip. */
 export interface CatalogExportPreview {
-  path: string
-  text: string
-  document: { name: string; version: string; variants: { id: string }[] } & Record<string, unknown>
-  metadata_path: string
-  metadata_text: string
-  metadata: Record<string, unknown> | null
+  name: string
+  /** The catalog already has this model: its metadata is updated, not created. */
+  existing: boolean
+  variants: {
+    id: string
+    version: string
+    role: string
+    /** new | updated (the next version of a published variant) | unchanged (no file). */
+    status: string
+    path: string
+  }[]
+  metadata: Record<string, unknown>
+  /** kind: variant | metadata | report | validation */
+  files: { path: string; kind: string; text: string }[]
   warnings: string[]
   errors: string[]
   valid: boolean
-  /** Where each variant came from: for the pull request description, never the file. */
+  /** Where each variant came from: for the pull request description, never a file. */
   provenance: string[]
-  /** The report to commit next to the entry, when report_id was given. */
-  report_path: string
-  report_html: string
-  /** CI routing sidecar, bound to the exact version YAML by SHA-256. */
-  validation_path: string
-  validation_text: string
-  name: string
-  version: string
+  /** A source.hf read off the weights path, to confirm; never written. */
+  hf_suggestion: string
   hf: string
   /** The metadata the server drafted (or was given), for the form to adopt. */
   display_name: string

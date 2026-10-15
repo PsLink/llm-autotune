@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     # empty = the form asks for it.
     llmbench_victorialogs_url: str = ""
 
+    # The model catalog's published index (catalog.swiss/v2). The catalog
+    # export reads it to tell a model the catalog already has from a new one,
+    # and to raise a published variant's version. Empty = treat every model as
+    # new.
+    catalog_index_url: str = "https://modelsphere.github.io/model-catalog/index-v2.json"
+
     # The window a drafted campaign runs in when its author names none
     # (POST /campaigns/draft). Empty = no clock: the draft starts when started.
     default_daily_start: str = ""
