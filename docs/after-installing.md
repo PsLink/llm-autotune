@@ -218,8 +218,9 @@ VICTORIALOGS_URL=http://victorialogs.logging:9428 deploy/quickstart.sh
 ```
 
 This turns on LLMBench's dataset collector and its datasets volume, and sets
-the address the dataset form starts from (`llmbench.victoriaLogsUrl`). The
-script remembers the address for later runs.
+the address the dataset form starts from (`llmbench.victoriaLogsUrl`; without
+it, the form starts from `http://victorialogs.logging:9428`). The script
+remembers the address for later runs.
 
 The datasets volume is shared by LLMBench's backend, workers and collector.
 On a cluster with one node the node's disk is enough; with more, set a

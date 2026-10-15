@@ -157,12 +157,16 @@ dataset collector from a VictoriaLogs store of the gateway's request logs.
 Turn the collector on in LLMBench's values (`datasets.enabled` and
 `datasetBuilder.enabled`; the datasets volume is shared by LLMBench's
 backend, workers and collector, so a multi-node cluster needs ReadWriteMany
-storage), and give AutoTune the store's address as LLMBench's pods reach it,
-which the dataset form starts from:
+storage). AutoTune's dataset form starts from the store's address as
+LLMBench's pods reach it. The default, `http://victorialogs.logging:9428`, is
+where the bodylog-victorialogs chart
+([modelsphere/helm-charts](https://github.com/modelsphere/helm-charts)) serves
+it when installed into the `logging` namespace, as its README does. Set your
+own if yours is elsewhere:
 
 ```yaml
 llmbench:
-  victoriaLogsUrl: http://victorialogs.logging:9428
+  victoriaLogsUrl: http://victorialogs.my-namespace:9428
 ```
 
 Without a benchmark platform, runs launch and then have nothing to measure
@@ -206,6 +210,14 @@ writes them and the API serves them, so the claim needs a `ReadWriteMany`
 storage class. On a cluster without one, set `runLogs.enabled=false`. The UI
 still shows logs: the end of every engine and policy log is stored in the
 database, and a running container's log is read from the cluster.
+
+The install checks the class the claim would get. When it only makes
+single-node volumes (local-path, hostpath, a cloud block disk such as EBS or a
+GCE persistent disk), when the cluster has no default class, or when the named
+class does not exist, the install notes say so: the claim would never bind,
+and the API and worker would stay Pending. `helm install --wait` prints no
+notes; it times out instead, with the API and worker Pending and the
+`<release>-runlogs` claim unbound.
 
 While a container runs, the worker saves the end of its log every two minutes,
 each save replacing the last, so a pod that is evicted or lost before its run

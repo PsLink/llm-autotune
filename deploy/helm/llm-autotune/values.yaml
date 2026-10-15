@@ -149,9 +149,11 @@ llmbench:
   benchmarkSlug: autotune-screen-v1
   # The VictoriaLogs store of the gateway's request logs that replay datasets
   # are collected from (Automatic Tuning > Datasets), as LLMBench's pods reach
-  # it, e.g. http://victorialogs.logging:9428. Empty = the dataset form asks.
+  # it. The default is where the bodylog-victorialogs chart
+  # (github.com/modelsphere/helm-charts) serves it when installed into the
+  # `logging` namespace, as its README does. Empty = the dataset form asks.
   # LLMBench needs its collector on: datasets.enabled and datasetBuilder.enabled.
-  victoriaLogsUrl: ""
+  victoriaLogsUrl: "http://victorialogs.logging:9428"
 
 # The GPU cluster runs land on.
 gpuCluster:
