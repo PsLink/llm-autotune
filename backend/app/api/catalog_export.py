@@ -21,9 +21,11 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent import auto_report
 from app.agent import comparison as cmp
 from app.agent import export as report_export
 from app.agent.loader import load_run
+from app.agent.publish import publishable
 from app.control.catalog_export import (
     CatalogExport,
     CatalogFile,
@@ -247,6 +249,21 @@ async def _attach_comparison(session: AsyncSession, sources: list[VariantSource]
         }
 
 
+def _public(report: AgentReport) -> AgentReport:
+    """A copy of a saved report whose embedded comparison says nothing about
+    this site, for a file published outside the platform."""
+    return AgentReport(
+        id=report.id,
+        title=report.title,
+        lang=report.lang,
+        markdown=report.markdown,
+        comparison=publishable(report.comparison or {}),
+        labels=list(report.labels or []),
+        scenario_labels=dict(report.scenario_labels or {}),
+        assets=list(report.assets or []),
+    )
+
+
 async def _report_for(
     session: AsyncSession, report_id: int, sources: list[VariantSource], name: str
 ) -> tuple[str, str, list[str]]:
@@ -278,11 +295,75 @@ async def _report_for(
         .all()
     )
     try:
-        html = report_export.render_html(report, list(rows) or [report])
+        public = [_public(r) for r in (list(rows) or [report])]
+        first = next((r for r in public if r.id == report.id), public[0])
+        html = report_export.render_html(first, public)
     except report_export.RendererMissing as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     card = next((s.config.gpu_type for s in sources if s.config.gpu_type), "").lower() or "gpu"
     return f"models/{name}/{name}-{card}-report.html", html, errors
+
+
+async def _report_auto(
+    session: AsyncSession, sources: list[VariantSource], name: str
+) -> tuple[str, str, str]:
+    """The report a tuning result ships with, when the caller named none: the
+    newest saved report comparing exactly these runs, else one the platform
+    writes from the same comparison (rendered, not saved). Returns its path,
+    HTML and where it came from; empty when there is nothing to report on."""
+    base = next((s for s in sources if s.role == "baseline"), None)
+    tuned = [s for s in sources if s.role == "optimized"]
+    if base is None or not tuned:
+        return "", "", ""
+    base_id = int(base.origin["run_id"])
+    tuned_ids = [int(s.origin["run_id"]) for s in tuned]
+    saved = (
+        (
+            await session.execute(
+                select(AgentReport)
+                .where(AgentReport.baseline_run_id == base_id, AgentReport.translation_of.is_(None))
+                .order_by(AgentReport.id.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    match = next(
+        (r for r in saved if sorted(int(i) for i in r.attempt_run_ids or []) == sorted(tuned_ids)),
+        None,
+    )
+    if match is not None:
+        path, html, _ = await _report_for(session, match.id, sources, name)
+        return path, html, f"saved:{match.id}"
+    base_bundle = await load_run(session, base_id)
+    bundles = [await load_run(session, i) for i in tuned_ids]
+    if base_bundle is None or any(b is None for b in bundles):
+        return "", "", ""
+    doc = cmp.build_comparison(
+        base_bundle, bundles, reasons=cmp.comparability(base_bundle, bundles)
+    )
+    frozen = publishable(doc.model_dump(mode="json"))
+    reports = [
+        AgentReport(
+            title=auto_report.title(doc, lang),
+            lang=lang,
+            markdown=auto_report.markdown(doc, lang),
+            comparison=frozen,
+            labels=[],
+            scenario_labels={},
+            assets=[],
+            baseline_run_id=base_id,
+            attempt_run_ids=tuned_ids,
+            comparable=doc.comparable,
+        )
+        for lang in ("en", "zh")
+    ]
+    try:
+        html = report_export.render_html(reports[0], reports)
+    except report_export.RendererMissing as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    card = next((s.config.gpu_type for s in sources if s.config.gpu_type), "").lower() or "gpu"
+    return f"models/{name}/{name}-{card}-report.html", html, "generated"
 
 
 async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogExport:
@@ -301,12 +382,15 @@ async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogE
         else (None, "")
     )
     name = existing.name if existing is not None else name
-    report_path = report_html = ""
+    report_path = report_html = report_source = ""
     report_errors: list[str] = []
     if body.report_id is not None:
         report_path, report_html, report_errors = await _report_for(
             session, body.report_id, sources, name
         )
+        report_source = f"saved:{body.report_id}"
+    else:
+        report_path, report_html, report_source = await _report_auto(session, sources, name)
     opts = CatalogOptions(
         name=name,
         served_name=body.served_name.strip(),
@@ -346,6 +430,7 @@ async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogE
     export.errors += report_errors
     if report_html:
         export.files.append(CatalogFile(report_path, "report", report_html))
+        export.report_source = report_source
     sidecar = validation_file(export, sources)
     if sidecar is not None:
         export.files.append(sidecar)

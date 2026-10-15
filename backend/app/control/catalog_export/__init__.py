@@ -247,6 +247,8 @@ class CatalogExport:
     existing: bool = False
     # A source.hf read off the weights path, offered to confirm, never written.
     hf_suggestion: str = ""
+    # Where the perf report came from: a saved one, or written by the platform.
+    report_source: str = ""
 
     @property
     def valid(self) -> bool:
@@ -277,6 +279,7 @@ class CatalogExport:
             "valid": self.valid,
             "provenance": list(self.provenance),
             "hf_suggestion": self.hf_suggestion,
+            "report_source": self.report_source,
         }
 
 

@@ -528,6 +528,8 @@ export interface CatalogExportPreview {
   provenance: string[]
   /** A source.hf read off the weights path, to confirm; never written. */
   hf_suggestion: string
+  /** Where the perf report came from: "saved:<report id>", or "generated" from the runs. */
+  report_source: string
   hf: string
   /** The metadata the server drafted (or was given), for the form to adopt. */
   display_name: string

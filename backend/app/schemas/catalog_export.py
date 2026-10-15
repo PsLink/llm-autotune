@@ -116,6 +116,9 @@ class CatalogExportOut(BaseModel):
     provenance: list[str] = Field(default_factory=list)
     # A source.hf read off the weights path, to confirm; never written.
     hf_suggestion: str = ""
+    # Where the perf report came from: "saved:<report id>", or "generated" by
+    # the platform from the measured runs.
+    report_source: str = ""
     hf: str = ""
     display_name: str = ""
     description: str = ""

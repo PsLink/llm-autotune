@@ -794,12 +794,20 @@ async def test_preview_exports_a_baseline_run_and_a_tuned_run(stack):
         "sglang-tp2-h800-baseline",
         "sglang-tp2-h800-optimized",
     ]
-    assert [f["kind"] for f in out["files"]] == ["variant", "variant", "metadata"]
-    assert any("needs its perf report" in e for e in out["errors"]), "no report was picked"
+    assert [f["kind"] for f in out["files"]] == ["variant", "variant", "metadata", "report"]
+    assert out["errors"] == [], "no report was picked, so the platform wrote one"
+    assert out["report_source"] == "generated"
+    report = out["files"][3]
+    assert report["path"] == "models/qwen3.5-35b-a3b/qwen3.5-35b-a3b-h800-report.html"
+    meta = yaml.safe_load(out["files"][2]["text"])
+    assert meta["tuning"][0]["report"] == "qwen3.5-35b-a3b-h800-report.html"
+    assert "Written by the platform from the measured runs" in report["text"]
     assert out["hf"] == HF
     assert "campaign 9, run 101" in out["provenance"][0]
     assert out["provenance"][1].startswith("tuned: ")
-    assert not any("run 101" in f["text"] for f in out["files"]), "platform ids stay out"
+    for f in out["files"]:  # the report too: its embedded comparison is scrubbed
+        for leak in ("run 101", '"run_id": 101', "qwen3.5 h800", "/models/Qwen", "/api/agent"):
+            assert leak not in f["text"], (f["path"], leak)
     tuned = yaml.safe_load(out["files"][1]["text"])
     assert "+20% on the tuning benchmark vs the baseline variant" in tuned["description"]
 
@@ -901,4 +909,38 @@ async def test_an_env_var_settled_once_applies_to_every_later_export(stack):
     assert gone.status_code == 204
     back = (await http.post("/api/catalog-export/preview", json=body)).json()
     assert env_rows(back)["SOMETHING_NEW"] == ("unknown", "kept")
+
+
+async def test_a_saved_report_on_the_same_runs_is_used_before_writing_one(stack):
+    from app.db.models import AgentReport
+
+    http, factory = stack
+    await _seed(factory)
+    async with factory() as s:
+        s.add(AgentReport(id=7, title="Hand-written", lang="en", baseline_run_id=101,
+                          attempt_run_ids=[102], markdown="# Hand-written", comparison={}))
+        s.add(AgentReport(id=8, title="Other runs", lang="en", baseline_run_id=101,
+                          attempt_run_ids=[103], markdown="# Other", comparison={}))
+        await s.commit()
+    out = (await http.post("/api/catalog-export/preview",
+                           json={"variants": PAIR, "hf": HF, "use_catalog": False})).json()
+    assert out["report_source"] == "saved:7"
+    assert "Hand-written" in out["files"][3]["text"]
+
+
+async def test_the_written_report_draws_only_blocks_its_comparison_has(stack):
+    from app.agent import auto_report, blocks
+    from app.agent import comparison as cmp
+    from app.agent.loader import load_run
+
+    _, factory = stack
+    await _seed(factory)
+    async with factory() as s:
+        base, tuned = await load_run(s, 101), await load_run(s, 102)
+        doc = cmp.build_comparison(base, [tuned], reasons=cmp.comparability(base, [tuned]))
+    for lang in ("en", "zh"):
+        md = auto_report.markdown(doc, lang)
+        assert blocks.problems(md, doc) == [], lang
+        assert "```command\nconfig: 1\n```" in md and "```table\ntype: setup\n```" in md
+    assert auto_report.title(doc, "zh").endswith("的推理优化:实验评估")
 

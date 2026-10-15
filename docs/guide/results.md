@@ -171,13 +171,18 @@ and the model's `metadata.yaml`.
     which every site finds the weights by. A repo id read off the weights path
     is offered as a suggestion, never filled in for you. The rest of
     `metadata.yaml` is drafted and can be edited.
-- **Report:** a tuned variant needs the saved report that compares exactly
-  these runs. Its result goes into `metadata.yaml` as a `tuning` entry (the
-  gain over the baseline, per workload) and its description, and the
-  report ships beside it.
+- **Report:** a tuned variant ships with a perf report, and its result goes
+  into `metadata.yaml` as a `tuning` entry (the gain over the baseline, per
+  workload). The export uses the newest saved report that compares exactly
+  these runs; when there is none, the platform writes one from the same
+  comparison, in English and Chinese: the charts, tables and serving commands
+  a written report has, and sentences stating the measured changes. Under
+  **Advanced**, a saved report can be picked instead. A shipped report keeps
+  the measurements and leaves out where they were taken: run and campaign
+  names, machines, host paths and links into the platform.
 - **Advanced:** variant ids, an image tag for a run whose image was named by
   digest only, the default variant, env and host-path volumes, the startup
-  budget, and `gpuProduct` node labels.
+  budget, `gpuProduct` node labels, and a saved report to ship.
 - **Env and mounts:** every env var and mount the run had is listed with what
   the export did with it. The serving recipe is kept (engine and runtime
   settings such as `SGLANG_*`, `VLLM_*`, `TORCHINDUCTOR_*`); this site's setup

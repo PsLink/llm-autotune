@@ -219,6 +219,12 @@ function useSuggestion() {
   void load()
 }
 
+function reportSourceText(source: string) {
+  return source.startsWith('saved:')
+    ? t('catalogExport.reportSaved', { id: source.slice(6) })
+    : t('catalogExport.reportGenerated')
+}
+
 function statusText(v: CatalogExportPreview['variants'][number]) {
   return t(`catalogExport.status.${v.status}`, { version: v.version })
 }
@@ -283,10 +289,6 @@ async function download() {
           @click="useSuggestion">{{ t('catalogExport.useSuggestion') }}</el-button>
         <div class="muted tiny">{{ t('catalogExport.hfHint') }}</div>
       </el-form-item>
-      <el-form-item :label="t('catalogExport.reportId')">
-        <el-input-number v-model="reportId" :min="1" size="small" :value-on-clear="null" />
-        <span class="muted tiny hint">{{ t('catalogExport.reportIdHint') }}</span>
-      </el-form-item>
       <template v-if="isNew">
         <el-form-item label="displayName">
           <el-input v-model="displayName" maxlength="128" />
@@ -336,6 +338,11 @@ async function download() {
           <el-form-item label="gpuProduct">
             <el-input v-model="gpuProduct" class="mono" :placeholder="t('catalogExport.gpuProductHint')" />
           </el-form-item>
+          <el-form-item :label="t('catalogExport.reportId')">
+            <el-input-number v-model="reportId" :min="1" size="small" :value-on-clear="null"
+              :placeholder="t('catalogExport.auto')" />
+            <span class="muted tiny hint">{{ t('catalogExport.reportIdHint') }}</span>
+          </el-form-item>
         </el-form>
       </el-collapse-item>
     </el-collapse>
@@ -355,6 +362,7 @@ async function download() {
       <ul class="caveats variants">
         <li v-for="v in preview.variants" :key="v.id">
           <span class="mono">{{ v.id }}</span> · {{ statusText(v) }}</li>
+        <li v-if="preview.report_source">{{ reportSourceText(preview.report_source) }}</li>
       </ul>
 
       <template v-if="inputs.length">
