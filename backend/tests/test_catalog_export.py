@@ -182,7 +182,9 @@ def test_nothing_site_owned_or_chart_owned_is_published():
         {"name": "PYTORCH_ALLOC_CONF", "value": "expandable_segments:True"},
     ], "the driver's defaults ride along; CUDA_VISIBLE_DEVICES is the platform's"
     assert [v["name"] for v in values["volumes"]] == ["dot-cache", "dshm"], "no host paths"
-    assert any("volumes not exported" in w for w in out.warnings)
+    moe = next(i for i in out.variants[0].inputs if i.name == "/moe-config")
+    assert (moe.category, moe.action) == ("site", "left out"), "nothing reads it"
+    assert any("left out mount /moe-config" in w for w in out.warnings)
     assert not any("/models/" in f.text for f in out.files)
 
 
@@ -209,7 +211,7 @@ def test_a_config_without_extra_env_still_exports_the_env_it_ran_with():
     ], "the config's own value wins over the default"
 
 
-def test_a_volume_an_engine_flag_reads_from_is_kept():
+def test_a_draft_model_a_flag_reads_is_kept_where_sites_keep_weights():
     cfg = _config(
         engine_args={
             "tp": 2,
@@ -226,16 +228,87 @@ def test_a_volume_an_engine_flag_reads_from_is_kept():
     values = _docs(out)[0]["values"]
     assert values["volumes"][0] == {
         "name": "draft-model",
-        "hostPath": {"path": "/mnt/disk0/models/EAGLE3-x", "type": "Directory"},
-    }
+        "hostPath": {"path": "/data/models/EAGLE3-x", "type": "Directory"},
+    }, "not this site's disk: where every site keeps weights"
     assert values["volumeMounts"][0] == {
         "name": "draft-model",
         "mountPath": "/spec-model",
         "readOnly": True,
     }
     assert [v["name"] for v in values["volumes"]] == ["draft-model", "dot-cache", "dshm"]
-    assert any("an engine flag reads from" in w for w in out.warnings)
-    assert any("volumes not exported" in w and "/root/moe-config" in w for w in out.warnings)
+    draft = next(i for i in out.variants[0].inputs if i.name == "/spec-model")
+    assert (draft.category, draft.action) == ("model", "moved")
+    assert any("/data/models/EAGLE3-x" in w for w in out.warnings)
+
+
+def _inputs(out, kind="env"):
+    return {i.name: (i.category, i.action) for i in out.variants[0].inputs if i.kind == kind}
+
+
+def test_env_is_split_into_the_recipe_and_this_sites_setup():
+    env = {
+        "SGLANG_ENABLE_JIT_DEEPGEMM": "0",
+        "NCCL_SOCKET_IFNAME": "bond0",
+        "MOONCAKE_MASTER": "etcd://198.51.100.13:2379",
+        "LD_LIBRARY_PATH": "/usr/local/nvidia/lib64",
+        "MY_ENDPOINT": "http://store.example:8080",
+        "HF_TOKEN": "hf_x",
+        "CUDA_VISIBLE_DEVICES": "0,1",
+        "SOMETHING_NEW": "1",
+    }
+    out = build_catalog_entry([VariantSource(_config(extra_env=env))], _opts())
+    got = _inputs(out)
+    assert got["SGLANG_ENABLE_JIT_DEEPGEMM"] == ("recipe", "kept")
+    assert got["PYTORCH_ALLOC_CONF"] == ("recipe", "kept"), "the driver's default it ran with"
+    for site in ("NCCL_SOCKET_IFNAME", "MOONCAKE_MASTER", "LD_LIBRARY_PATH", "MY_ENDPOINT"):
+        assert got[site] == ("site", "left out"), site
+    assert got["HF_TOKEN"] == ("secret", "left out")
+    assert got["CUDA_VISIBLE_DEVICES"] == ("platform", "left out")
+    assert got["SOMETHING_NEW"] == ("unknown", "kept")
+    names = [e["name"] for e in _docs(out)[0]["values"]["env"]]
+    assert names == ["NVIDIA_DISABLE_REQUIRE", "PYTORCH_ALLOC_CONF",
+                     "SGLANG_ENABLE_JIT_DEEPGEMM", "SOMETHING_NEW"]
+    assert any("SOMETHING_NEW kept as measured, but no rule knows it" in w for w in out.warnings)
+    assert any("left out env NCCL_SOCKET_IFNAME" in w for w in out.warnings)
+
+    settled = build_catalog_entry(
+        [VariantSource(_config(extra_env=env))],
+        _opts(env_categories={"SOMETHING_NEW": "site", "NCCL_SOCKET_IFNAME": "recipe"}),
+    )
+    got = _inputs(settled)
+    assert got["SOMETHING_NEW"] == ("site", "left out") and got["NCCL_SOCKET_IFNAME"] == (
+        "recipe", "kept"), "a person's call wins over the rules"
+
+
+def test_a_mount_an_env_var_reads_is_kept_only_with_that_env_var():
+    cfg = _config(
+        extra_env={"SGLANG_CONFIG": "/cfg/engine.json",
+                   "MOONCAKE_CONFIG_PATH": "/root/mc-config/mooncake.json"},
+        extra_volumes={"/etc/sglang": "/cfg:ro", "/etc/mooncake": "/root/mc-config"},
+    )
+    out = build_catalog_entry([VariantSource(cfg)], _opts())
+    mounts = _inputs(out, "mount")
+    assert mounts["/cfg"] == ("config", "kept"), "the recipe's env var reads it"
+    assert mounts["/root/mc-config"] == ("site", "left out"), "only a site env var reads it"
+    env = _inputs(out)
+    assert env["SGLANG_CONFIG"] == ("recipe", "kept"), "its path is one the entry provides"
+    assert env["MOONCAKE_CONFIG_PATH"] == ("site", "left out")
+    values = _docs(out)[0]["values"]
+    assert {"name": "cfg", "mountPath": "/cfg", "readOnly": True} in values["volumeMounts"]
+
+
+def test_a_cache_mount_becomes_an_empty_directory():
+    cfg = _config(extra_volumes={"/data/triton-cache": "/root/.triton",
+                                 "/data/hf": "/root/.cache/huggingface"})
+    out = build_catalog_entry([VariantSource(cfg)], _opts())
+    mounts = _inputs(out, "mount")
+    assert mounts["/root/.triton"] == ("scratch", "emptyDir")
+    assert mounts["/root/.cache/huggingface"] == ("scratch", "emptyDir")
+    values = _docs(out)[0]["values"]
+    triton = next(v for v in values["volumes"] if v["name"] == "triton")
+    assert triton == {"name": "triton", "emptyDir": {"sizeLimit": "10Gi"}}
+    assert not any("hostPath" in v for v in values["volumes"]), "no host path published"
+    assert out.errors == []
 
 
 def test_the_serving_contract_is_added_and_a_weights_file_pins_the_mount():
@@ -792,3 +865,40 @@ async def test_preview_refuses_what_it_cannot_publish(stack, variants, code):
         "/api/catalog-export/preview", json={"variants": variants, "use_catalog": False}
     )
     assert res.status_code == code, res.text
+
+
+async def test_an_env_var_settled_once_applies_to_every_later_export(stack):
+    http, factory = stack
+    await _seed(factory)
+    async with factory() as s:
+        campaign = await s.get(Campaign, 9)
+        campaign.extra_env = {"SOMETHING_NEW": "1"}
+        await s.commit()
+    body = {"variants": PAIR[:1], "hf": HF, "use_catalog": False}
+
+    def env_rows(out):
+        return {i["name"]: (i["category"], i["action"])
+                for i in out["variants"][0]["inputs"] if i["kind"] == "env"}
+
+    first = (await http.post("/api/catalog-export/preview", json=body)).json()
+    assert env_rows(first)["SOMETHING_NEW"] == ("unknown", "kept")
+    once = await http.post("/api/catalog-export/preview",
+                           json={**body, "env_categories": {"SOMETHING_NEW": "site"}})
+    assert env_rows(once.json())["SOMETHING_NEW"] == ("site", "left out"), "this export only"
+
+    res = await http.put("/api/catalog-export/env-categories/SOMETHING_NEW",
+                         json={"category": "site"})
+    assert res.status_code == 200 and res.json()["set_by"] == "admin"
+    later = (await http.post("/api/catalog-export/preview", json=body)).json()
+    assert env_rows(later)["SOMETHING_NEW"] == ("site", "left out"), "settled for good"
+    listed = (await http.get("/api/catalog-export/env-categories")).json()
+    assert listed == [{"name": "SOMETHING_NEW", "category": "site", "set_by": "admin"}]
+    assert (await http.put("/api/catalog-export/env-categories/bad-name",
+                           json={"category": "site"})).status_code == 422
+    assert (await http.put("/api/catalog-export/env-categories/X",
+                           json={"category": "weird"})).status_code == 422
+    gone = await http.delete("/api/catalog-export/env-categories/SOMETHING_NEW")
+    assert gone.status_code == 204
+    back = (await http.post("/api/catalog-export/preview", json=body)).json()
+    assert env_rows(back)["SOMETHING_NEW"] == ("unknown", "kept")
+

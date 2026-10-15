@@ -485,6 +485,22 @@ export interface RunDetail extends Run {
   }[]
 }
 
+/** One env var or mount of a measured run, sorted into the serving recipe or
+ *  this site's setup by the export. */
+export interface CatalogInput {
+  kind: 'env' | 'mount'
+  /** The env var, or the mount's path in the container. */
+  name: string
+  /** The env value, or the host path. */
+  value: string
+  /** env: recipe | site | secret | platform | unknown;
+   *  mount: weights | model | config | scratch | site */
+  category: string
+  /** kept | left out | emptyDir | moved */
+  action: string
+  reason: string
+}
+
 /** POST /catalog-export/preview: measured runs as model-catalog files
  *  (catalog.swiss/v2: one file per variant, and the model's metadata.yaml).
  *  POST /catalog-export/archive returns the same files as a zip. */
@@ -499,6 +515,8 @@ export interface CatalogExportPreview {
     /** new | updated (the next version of a published variant) | unchanged (no file). */
     status: string
     path: string
+    /** Each env var and mount the run had, and what the export did with it. */
+    inputs: CatalogInput[]
   }[]
   metadata: Record<string, unknown>
   /** kind: variant | metadata | report | validation */

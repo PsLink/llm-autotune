@@ -14,7 +14,7 @@
  *  Plugins open it too, with their own runs (`candidates`).
  */
 import { computed, ref, watch } from 'vue'
-import { api, type CatalogExportPreview } from '../api/client'
+import { api, type CatalogExportPreview, type CatalogInput } from '../api/client'
 import { apiErrorText } from '../utils/apiError'
 import { copyText } from '../utils/clipboard'
 import { useI18n } from '../i18n'
@@ -69,6 +69,10 @@ const gpuProduct = ref('')
 /** A saved report comparing exactly these runs; a tuning result needs one. */
 const reportId = ref<number | null>(null)
 const advanced = ref<string[]>([])
+/** Env var -> category, for this export: a call on a name the rules got wrong
+ *  or do not know. "Remember" saves it for every export. */
+const envCategories = ref<Record<string, string>>({})
+const ENV_CATEGORIES = ['recipe', 'site', 'secret', 'platform']
 
 const loading = ref(false)
 const downloading = ref(false)
@@ -95,6 +99,7 @@ watch(
     reportId.value = null
     startupMinutes.value = null
     defaultVariant.value = ''
+    envCategories.value = {}
     advanced.value = []
     preview.value = null
     error.value = ''
@@ -140,6 +145,7 @@ function body() {
     startup_minutes: startupMinutes.value || null,
     gpu_product: list(gpuProduct.value),
     report_id: reportId.value || null,
+    env_categories: envCategories.value,
   }
 }
 
@@ -174,6 +180,39 @@ async function load() {
 }
 
 const variantIds = computed(() => (preview.value?.variants ?? []).map((v) => v.id))
+
+/** Every env var and mount once: the variants of one export usually share them. */
+const inputs = computed(() => {
+  const seen = new Map<string, CatalogInput>()
+  for (const v of preview.value?.variants ?? []) {
+    for (const i of v.inputs) {
+      if (i.category === 'platform') continue
+      seen.set(`${i.kind}:${i.name}`, i)
+    }
+  }
+  return [...seen.values()].sort((a, b) =>
+    Number(b.category === 'unknown') - Number(a.category === 'unknown')
+    || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
+})
+const unknownCount = computed(() => inputs.value.filter((i) => i.category === 'unknown').length)
+
+function setCategory(name: string, category: string) {
+  envCategories.value = { ...envCategories.value, [name]: category }
+  void load()
+}
+
+const remembered = ref<Record<string, boolean>>({})
+
+async function remember(name: string) {
+  try {
+    await api.put(`/catalog-export/env-categories/${encodeURIComponent(name)}`, {
+      category: envCategories.value[name],
+    })
+    remembered.value = { ...remembered.value, [name]: true }
+  } catch (e) {
+    error.value = apiErrorText(e, t('catalogExport.failed'))
+  }
+}
 
 function useSuggestion() {
   hf.value = preview.value?.hf_suggestion ?? ''
@@ -317,6 +356,43 @@ async function download() {
         <li v-for="v in preview.variants" :key="v.id">
           <span class="mono">{{ v.id }}</span> · {{ statusText(v) }}</li>
       </ul>
+
+      <template v-if="inputs.length">
+        <h4>{{ t('catalogExport.inputs') }}
+          <span v-if="unknownCount" class="muted tiny">
+            {{ t('catalogExport.unknownN', { n: unknownCount }) }}</span></h4>
+        <el-table :data="inputs" size="small" max-height="260" class="inputs">
+          <el-table-column :label="t('catalogExport.inputName')" min-width="200">
+            <template #default="{ row }">
+              <span class="mono">{{ row.name }}</span>
+              <div class="muted tiny mono ellipsis" :title="row.value">
+                {{ row.kind === 'env' ? row.value : `← ${row.value}` }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('catalogExport.category')" width="150">
+            <template #default="{ row }">
+              <el-select v-if="row.kind === 'env'" :model-value="envCategories[row.name] ?? row.category"
+                size="small" @change="(c: string) => setCategory(row.name, c)">
+                <el-option v-for="c in ENV_CATEGORIES" :key="c" :value="c"
+                  :label="t(`catalogExport.categories.${c}`)" />
+                <el-option v-if="row.category === 'unknown' && !envCategories[row.name]" value="unknown"
+                  :label="t('catalogExport.categories.unknown')" disabled />
+              </el-select>
+              <span v-else>{{ t(`catalogExport.categories.${row.category}`) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('catalogExport.inputAction')" min-width="220">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.action === 'left out' ? 'info'
+                : row.category === 'unknown' ? 'warning' : 'success'">
+                {{ t(`catalogExport.actions.${row.action.replace(' ', '_')}`) }}</el-tag>
+              <span class="muted tiny"> {{ row.reason }}</span>
+              <el-button v-if="row.kind === 'env' && envCategories[row.name] && !remembered[row.name]"
+                size="small" link @click="remember(row.name)">{{ t('catalogExport.remember') }}</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </template>
       <template v-if="preview.warnings.length">
         <h4>{{ t('catalogExport.warnings') }}</h4>
         <ul class="caveats"><li v-for="(w, i) in preview.warnings" :key="i">{{ w }}</li></ul>
@@ -370,6 +446,8 @@ h4 { margin: 14px 0 6px; font-size: 13px; }
 .caveats { margin: 0; padding-left: 18px; font-size: 12.5px; }
 .caveats li { margin: 2px 0; }
 .variants { margin-bottom: 6px; }
+.inputs { margin-bottom: 8px; }
+.ellipsis { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files { margin-top: 10px; }
 .file-actions { display: flex; justify-content: space-between; align-items: center; }
 .yaml {

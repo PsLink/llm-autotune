@@ -14,6 +14,7 @@ evidence, and reads what the catalog already publishes.
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -39,13 +40,26 @@ from app.core.auth import Principal, get_principal
 from app.core.config import get_settings
 from app.datasets.pinning import dataset_of
 from app.db.base import get_async_session
-from app.db.models import AgentReport, Campaign, Candidate, Event, Machine, Result, Run, RunStatus
+from app.db.models import (
+    AgentReport,
+    Campaign,
+    Candidate,
+    CatalogEnvCategory,
+    Event,
+    Machine,
+    Result,
+    Run,
+    RunStatus,
+    User,
+)
 from app.hardware import normalize_gpu_type
 from app.objective import direction, target_metric
 from app.schemas.catalog_export import (
     CatalogExportOut,
     CatalogExportRequest,
     CatalogVariantIn,
+    EnvCategoryIn,
+    EnvCategoryOut,
 )
 
 router = APIRouter(prefix="/catalog-export", tags=["catalog-export"])
@@ -313,6 +327,15 @@ async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogE
         homepage=body.homepage.strip(),
         model_label=next((n for n in model_names if n), ""),
         gpu_product=[p.strip() for p in body.gpu_product if p.strip()],
+        # What people settled for names the rules do not know, then this
+        # export's own calls.
+        env_categories={
+            **{
+                row.name: row.category
+                for row in (await session.execute(select(CatalogEnvCategory))).scalars()
+            },
+            **body.env_categories,
+        },
     )
     try:
         export = build_catalog_entry(sources, opts)
@@ -369,3 +392,64 @@ async def archive_catalog_export(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{export.name}-catalog.zip"'},
     )
+
+
+@router.get("/env-categories", response_model=list[EnvCategoryOut])
+async def list_env_categories(
+    _: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Env vars people settled for every export: part of the recipe, or a
+    site's setup."""
+    rows = (
+        (await session.execute(select(CatalogEnvCategory).order_by(CatalogEnvCategory.name)))
+        .scalars()
+        .all()
+    )
+    users = {u.id: u.username for u in (await session.execute(select(User))).scalars()}
+    return [
+        EnvCategoryOut(name=r.name, category=r.category, set_by=users.get(r.set_by_id, ""))
+        for r in rows
+    ]
+
+
+@router.put("/env-categories/{name}", response_model=EnvCategoryOut)
+async def set_env_category(
+    name: str,
+    body: EnvCategoryIn,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Settle what an env var is, for every later export."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name!r} is not an env var name"
+        )
+    row = await session.get(CatalogEnvCategory, name)
+    if row is None:
+        row = CatalogEnvCategory(name=name)
+        session.add(row)
+    row.category = body.category
+    row.set_by_id = principal.user.id
+    session.add(
+        Event(
+            actor=principal.actor,
+            kind="catalog_env_category_set",
+            payload={"name": name, "category": body.category},
+        )
+    )
+    await session.commit()
+    return EnvCategoryOut(name=name, category=body.category, set_by=principal.user.username)
+
+
+@router.delete("/env-categories/{name}", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_env_category(
+    name: str,
+    _: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Back to the rules for this name."""
+    row = await session.get(CatalogEnvCategory, name)
+    if row is not None:
+        await session.delete(row)
+        await session.commit()

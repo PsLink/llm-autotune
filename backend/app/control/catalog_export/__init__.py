@@ -55,6 +55,8 @@ from app.control.engines.base import MODEL_MOUNT
 from app.control.engines.flags import negated_flag, render_flag
 from app.control.launch_config import LaunchConfig
 
+from .portability import ENV_ACTIONS, Input, classify_env, plan_mounts
+
 API_VERSION = "catalog.swiss/v2"
 SCHEMA_DIR = Path(__file__).parent / "schema"
 # The oldest chart release the catalog accepts a new or changed variant on, per
@@ -89,11 +91,6 @@ _CONTEXT_KEYS = ("context_length", "max_model_len")
 SERVING_CONTRACT: dict[str, tuple[str, ...]] = {
     "sglang": ("enable_cache_report", "stream_response_default_include_usage"),
 }
-
-# Env the platform sets per launch, or that is plainly a credential: never
-# published in a public catalog.
-_PLATFORM_ENV = frozenset({"CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES"})
-_SECRET_ENV = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|CREDENTIAL", re.I)
 
 # nvidia.com/gpu.product values, as the catalog's own entries spell them. The
 # platform keeps only the normalized card name ("H100"), so this is the one
@@ -206,6 +203,9 @@ class CatalogOptions:
     model_label: str = ""
     # Applied to every variant that has none of its own.
     gpu_product: list[str] = field(default_factory=list)
+    # Env var name -> recipe | site | secret | platform: what a person settled
+    # for a name the rules do not know (portability.py). Always wins.
+    env_categories: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -227,6 +227,8 @@ class ExportedVariant:
     status: str
     path: str
     document: dict[str, Any]
+    # Each env var and mount the run had, and what the export did with it.
+    inputs: list[Input] = field(default_factory=list)
 
 
 @dataclass
@@ -264,6 +266,7 @@ class CatalogExport:
                     "role": v.role,
                     "status": v.status,
                     "path": v.path,
+                    "inputs": [i.payload() for i in v.inputs],
                 }
                 for v in self.variants
             ],
@@ -476,67 +479,11 @@ def _describe(src: VariantSource, gpus: int, reference: VariantSource | None) ->
     return text[:512]
 
 
-def _env_items(env: dict[str, str], warnings: list[str], vid: str) -> list[dict[str, str]]:
-    out = []
-    for name, value in env.items():
-        if name in _PLATFORM_ENV:
-            continue
-        if _SECRET_ENV.search(name):
-            warnings.append(f"{vid}: env {name} looks like a credential and was left out")
-            continue
-        out.append({"name": name, "value": str(value)})
-    return out
-
-
 def runtime_env() -> dict[str, str]:
     """Env every launch driver sets under a config's own extra_env."""
     from app.control.launch import k8s, ssh_docker
 
     return {**ssh_docker.DEFAULT_ENV, **k8s.DEFAULT_ENV}
-
-
-# Engine flags that read a directory the config mounts, and the volume name the
-# catalog's own entries give it.
-_PATH_FLAG_VOLUMES = {"speculative_draft_model_path": "draft-model"}
-
-
-def _referenced_volumes(volumes: dict[str, str], engine_args: dict[str, Any]) -> dict[str, str]:
-    """The host volumes some engine flag's value points into."""
-    values = [str(v) for v in engine_args.values() if isinstance(v, str) and v.startswith("/")]
-    needed = {}
-    for host, container in volumes.items():
-        path = str(container).partition(":")[0].rstrip("/")
-        if path and any(v == path or v.startswith(path + "/") for v in values):
-            needed[host] = container
-    return needed
-
-
-def _volume_names(volumes: dict[str, str], cfg: LaunchConfig) -> dict[str, str]:
-    names = {}
-    for host, container in volumes.items():
-        path = str(container).partition(":")[0].rstrip("/")
-        for flag, name in _PATH_FLAG_VOLUMES.items():
-            value = str((cfg.engine_args or {}).get(flag) or "")
-            if value == path or value.startswith(path + "/"):
-                names[host] = name
-    return names
-
-
-def _volumes(
-    volumes: dict[str, str], vid: str, names: dict[str, str] | None = None
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    vols, mounts = [], []
-    for index, (host, container) in enumerate(volumes.items()):
-        container, _, mode = str(container).partition(":")
-        name = (names or {}).get(host) or (
-            _id_slug(Path(container).name or f"vol-{index}")[:50] or f"vol-{index}"
-        )
-        vols.append({"name": name, "hostPath": {"path": host, "type": "Directory"}})
-        mount: dict[str, Any] = {"name": name, "mountPath": container}
-        if mode == "ro" or name == "draft-model":
-            mount["readOnly"] = True
-        mounts.append(mount)
-    return vols, mounts
 
 
 def startup_minutes(src: VariantSource, opts: CatalogOptions) -> int:
@@ -556,6 +503,7 @@ def _variant(
     reference: VariantSource | None,
     warnings: list[str],
     errors: list[str],
+    inputs: list[Input],
 ) -> dict[str, Any]:
     cfg = src.config
     nodes = max(1, int(src.nodes or 1))
@@ -648,53 +596,66 @@ def _variant(
     if nodes > 1:
         values["lws"] = {"enabled": True, "size": nodes}
     values["extraArgs"] = args
-    if opts.include_env:
-        # The env the run actually had: the launch driver's defaults under the
-        # config's own. A config measured without extra_env still ran with the
-        # defaults, and an entry that drops them is not what was measured.
-        env = _env_items({**runtime_env(), **cfg.extra_env}, warnings, vid)
-        if env:
-            values["env"] = env
+    # The env the run actually had: the launch driver's defaults under the
+    # config's own. A config measured without extra_env still ran with the
+    # defaults, and an entry that drops them is not what was measured.
+    env = {**runtime_env(), **cfg.extra_env}
+    # A mount an env var points into is kept only when that env var itself
+    # could be: one named for this site's setup takes its files with it.
+    readers = {
+        k: v
+        for k, v in env.items()
+        if classify_env(k, "", [], opts.env_categories)[0] in ("recipe", "unknown")
+    }
+    plan = plan_mounts(
+        dict(cfg.extra_volumes),
+        dict(cfg.engine_args),
+        readers,
+        MODEL_MOUNT,
+        keep_all=opts.include_volumes,
+    )
+    provided = [MODEL_MOUNT, "/dev/shm", "/root/.cache", *plan.provided]
+    kept_env = []
+    for name, value in env.items():
+        category, reason = classify_env(name, str(value), provided, opts.env_categories)
+        action = ENV_ACTIONS[category] if opts.include_env else "left out"
+        if action == "kept":
+            kept_env.append({"name": name, "value": str(value)})
+        inputs.append(Input("env", name, str(value), category, action, reason))
+    if kept_env:
+        values["env"] = kept_env
+    inputs.extend(plan.inputs)
+    for item in inputs:
+        if item.category == "platform" or (
+            item.kind == "mount" and item.reason == "the chart provides it"
+        ):
+            continue
+        if item.category in ("site", "secret") and item.action == "left out":
+            warnings.append(f"{vid}: left out {item.kind} {item.name} ({item.reason})")
+        elif item.category == "unknown":
+            warnings.append(
+                f"{vid}: env {item.name} kept as measured, but no rule knows it: say whether"
+                " it is part of the recipe or this site's"
+            )
+        elif item.action in ("moved", "emptyDir") or item.category == "config":
+            warnings.append(f"{vid}: {item.kind} {item.name}: {item.reason}")
+    if opts.include_volumes and cfg.extra_volumes:
+        warnings.append(
+            f"{vid}: host-path volumes are site facts in a public catalog: "
+            + ", ".join(cfg.extra_volumes)
+        )
 
     shm = "32Gi" if gpus >= 4 else "16Gi"
     volumes: list[dict[str, Any]] = [
+        *plan.volumes,
         {"name": "dot-cache", "emptyDir": {"sizeLimit": "10Gi"}},
         {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": shm}},
     ]
     mounts: list[dict[str, Any]] = [
+        *plan.mounts,
         {"name": "dot-cache", "mountPath": "/root/.cache"},
         {"name": "dshm", "mountPath": "/dev/shm"},
     ]
-    if cfg.extra_volumes:
-        if opts.include_volumes:
-            extra_vols, extra_mounts = _volumes(dict(cfg.extra_volumes), vid)
-            volumes = extra_vols + volumes
-            mounts = extra_mounts + mounts
-            warnings.append(
-                f"{vid}: host-path volumes are site facts in a public catalog: "
-                + ", ".join(cfg.extra_volumes)
-            )
-        else:
-            # A volume an engine flag points into (a draft model) is part of the
-            # config: without it the flag names an empty path and the engine
-            # exits at startup. The catalog's own kimi-k3 entry mounts its draft
-            # the same way. Everything else stays site-owned.
-            needed = _referenced_volumes(dict(cfg.extra_volumes), dict(cfg.engine_args))
-            if needed:
-                extra_vols, extra_mounts = _volumes(needed, vid, names=_volume_names(needed, cfg))
-                volumes = extra_vols + volumes
-                mounts = extra_mounts + mounts
-                warnings.append(
-                    f"{vid}: kept host volume(s) an engine flag reads from: "
-                    + ", ".join(f"{h}:{c}" for h, c in needed.items())
-                    + " -- the host path is this site's; a deployer must have the files there"
-                )
-            rest = {h: c for h, c in cfg.extra_volumes.items() if h not in needed}
-            if rest:
-                warnings.append(
-                    f"{vid}: volumes not exported (host paths are site-owned): "
-                    + ", ".join(f"{h}:{c}" for h, c in rest.items())
-                )
     values["volumes"] = volumes
     values["volumeMounts"] = mounts
 
@@ -762,7 +723,11 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
         )
 
     reference = next((s for s in sources if s.role == "baseline"), None)
-    bodies = [_variant(s, opts, reference, warnings, errors) for s in sources]
+    inputs: list[list[Input]] = [[] for _ in sources]
+    bodies = [
+        _variant(s, opts, reference, warnings, errors, ins)
+        for s, ins in zip(sources, inputs, strict=True)
+    ]
     for body, src in zip(bodies, sources, strict=True):
         warnings += judge(body["id"], src)
     seen: dict[str, int] = {}
@@ -773,7 +738,7 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
             body["id"] = f"{base[:60]}-{seen[base]}"
 
     exported: list[ExportedVariant] = []
-    for body, src in zip(bodies, sources, strict=True):
+    for body, src, ins in zip(bodies, sources, inputs, strict=True):
         doc: dict[str, Any] = {
             "apiVersion": API_VERSION,
             "kind": "Variant",
@@ -814,6 +779,7 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
                 status=status,
                 path=f"models/{name}/{doc['id']}.yaml",
                 document=doc,
+                inputs=ins,
             )
         )
 

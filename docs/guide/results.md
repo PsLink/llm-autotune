@@ -178,6 +178,15 @@ and the model's `metadata.yaml`.
 - **Advanced:** variant ids, an image tag for a run whose image was named by
   digest only, the default variant, env and host-path volumes, the startup
   budget, and `gpuProduct` node labels.
+- **Env and mounts:** every env var and mount the run had is listed with what
+  the export did with it. The serving recipe is kept (engine and runtime
+  settings such as `SGLANG_*`, `VLLM_*`, `TORCHINDUCTOR_*`); this site's setup
+  is left out (network interfaces, store addresses, proxies, library paths,
+  any value that is an address or a path no mount provides). A second model a
+  flag reads, such as a draft, is kept at `/data/models/<name>`, where sites
+  keep weights; a cache mount becomes an empty directory; a mount nothing
+  reads is left out. A name no rule knows is kept and flagged: say what it is,
+  for this export or, with **Remember**, for every export.
 
 Every file is checked against the catalog's schemas and the rules its own
 validator adds, as you go; the export can be downloaded once it passes.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -56,6 +56,9 @@ class CatalogExportRequest(BaseModel):
     report_id: int | None = None
     # Look the model up in the published catalog (catalog_index_url).
     use_catalog: bool = True
+    # Env var name -> recipe | site | secret | platform, for this export only;
+    # PUT /catalog-export/env-categories/{name} settles one for every export.
+    env_categories: dict[str, str] = Field(default_factory=dict)
 
 
 class CatalogFileOut(BaseModel):
@@ -64,12 +67,36 @@ class CatalogFileOut(BaseModel):
     text: str
 
 
+class CatalogInputOut(BaseModel):
+    """One env var or mount of the measured run, and what the export did."""
+
+    kind: str  # env | mount
+    name: str  # the env var, or the mount's path in the container
+    value: str  # the env value, or the host path
+    category: (
+        str  # recipe | site | secret | platform | unknown | weights | model | config | scratch
+    )
+    action: str  # kept | left out | emptyDir | moved
+    reason: str
+
+
 class CatalogVariantOut(BaseModel):
     id: str
     version: str
     role: str
     status: str  # new | updated | unchanged
     path: str
+    inputs: list[CatalogInputOut] = Field(default_factory=list)
+
+
+class EnvCategoryIn(BaseModel):
+    category: Literal["recipe", "site", "secret", "platform"]
+
+
+class EnvCategoryOut(BaseModel):
+    name: str
+    category: str
+    set_by: str = ""
 
 
 class CatalogExportOut(BaseModel):

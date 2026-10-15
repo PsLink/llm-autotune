@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `validate:schema` and `validate:helm` on an export.
   - API: the preview returns `files` and `variants`; `version`, `base_entry`
     and `with_metadata` are gone; a variant takes `image_tag`.
+- **Catalog export sorts env vars and mounts into the recipe and the site's
+  setup** instead of copying them as measured. Engine and runtime settings
+  are kept; network interfaces, store addresses, proxies, library paths, and
+  values that are addresses or paths no mount provides are left out. A draft
+  model a flag reads is published at `/data/models/<name>`; a mount an env var
+  reads is kept with it; cache mounts become empty directories; mounts nothing
+  reads are left out. The export lists every env var and mount with what it
+  did and why. A name no rule knows is kept and flagged, and can be settled for
+  one export (`env_categories`) or for all of them
+  (`PUT /api/catalog-export/env-categories/{name}`, migration
+  `012_catalog_env_categories`).
 
 ### Fixed
 
