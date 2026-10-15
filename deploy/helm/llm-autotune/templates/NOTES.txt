@@ -1,3 +1,26 @@
+{{- $runLogs := include "llm-autotune.runLogsProblem" . -}}
+{{- if $runLogs }}
+{{- $why := splitList " " $runLogs }}
+WARNING: the API and worker will stay Pending.
+
+runLogs keeps complete engine logs as files on a volume the worker and the API
+share, so its claim, {{ include "llm-autotune.fullname" . }}-runlogs, needs ReadWriteMany storage.
+{{- if eq (index $why 0) "no-default" }}
+This cluster has no default storage class.
+{{- else if eq (index $why 0) "missing" }}
+There is no storage class named {{ index $why 1 }}.
+{{- else }}
+The class it gets, {{ index $why 1 }} ({{ index $why 2 }}), only makes single-node volumes.
+{{- end }}
+Either:
+
+  - name a shared-filesystem class (NFS, CephFS, EFS, Filestore, Azure Files):
+      helm upgrade {{ .Release.Name }} <chart> --reuse-values --set runLogs.storageClass=<class>
+  - or keep logs in the database only:
+      helm upgrade {{ .Release.Name }} <chart> --reuse-values --set runLogs.enabled=false
+    The UI still shows the end of every log, and a running container's log.
+
+{{ end -}}
 {{ include "llm-autotune.fullname" . }} is installed.
 
 {{ if .Values.ingress.enabled -}}
