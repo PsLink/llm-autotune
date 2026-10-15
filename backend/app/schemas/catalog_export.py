@@ -87,6 +87,9 @@ class CatalogVariantOut(BaseModel):
     status: str  # new | updated | unchanged
     path: str
     inputs: list[CatalogInputOut] = Field(default_factory=list)
+    # A tuned variant's result: recorded | no_report | no_baseline; "" otherwise.
+    tuning: str = ""
+    uplift: float | None = None
 
 
 class EnvCategoryIn(BaseModel):
@@ -106,10 +109,15 @@ class CatalogExportOut(BaseModel):
     name: str
     # The catalog already has this model: its metadata is updated, not created.
     existing: bool = False
+    # found | new | unreachable: what the catalog's index said about the model.
+    catalog: str = "new"
     variants: list[CatalogVariantOut] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     files: list[CatalogFileOut] = Field(default_factory=list)
+    # What someone should look at before publishing.
     warnings: list[str] = Field(default_factory=list)
+    # What the export did that needs no action.
+    details: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     valid: bool
     # Where each variant came from, for the pull request description.

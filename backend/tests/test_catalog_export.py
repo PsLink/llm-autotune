@@ -156,14 +156,15 @@ def test_a_tuned_variant_exports_without_its_report_and_says_what_is_missing():
     no_report = build_catalog_entry(_pair(), _opts(report_file=""))
     assert no_report.errors == [], "a missing report never blocks the export"
     assert "tuning" not in no_report.metadata
-    assert any("no tuning entry, as no saved report" in w for w in no_report.warnings)
+    assert no_report.variants[1].tuning == "no_report" and no_report.variants[1].uplift == 25.0
+    assert no_report.warnings == [], "the variant's own status says it; nothing to read twice"
     alone = build_catalog_entry(_pair()[1:], _opts())
     assert alone.errors == []
-    assert any("no tuning entry, as the baseline" in w for w in alone.warnings)
+    assert alone.variants[0].tuning == "no_baseline"
     named = build_catalog_entry(
         [VariantSource(_config(), id="sglang-tp2-h100-optimized")], _opts(report_file="")
     )
-    assert any("its id says optimized" in w for w in named.warnings)
+    assert any("the id says optimized" in w for w in named.warnings)
 
 
 def test_nothing_site_owned_or_chart_owned_is_published():
@@ -187,7 +188,7 @@ def test_nothing_site_owned_or_chart_owned_is_published():
     assert [v["name"] for v in values["volumes"]] == ["dot-cache", "dshm"], "no host paths"
     moe = next(i for i in out.variants[0].inputs if i.name == "/moe-config")
     assert (moe.category, moe.action) == ("site", "left out"), "nothing reads it"
-    assert any("left out mount /moe-config" in w for w in out.warnings)
+    assert moe.reason == "unused" and not any("moe-config" in w for w in out.warnings)
     assert not any("/models/" in f.text for f in out.files)
 
 
@@ -241,7 +242,7 @@ def test_a_draft_model_a_flag_reads_is_kept_where_sites_keep_weights():
     assert [v["name"] for v in values["volumes"]] == ["draft-model", "dot-cache", "dshm"]
     draft = next(i for i in out.variants[0].inputs if i.name == "/spec-model")
     assert (draft.category, draft.action) == ("model", "moved")
-    assert any("/data/models/EAGLE3-x" in w for w in out.warnings)
+    assert draft.reason == "draft model, at /data/models/EAGLE3-x"
 
 
 def _inputs(out, kind="env"):
@@ -271,8 +272,7 @@ def test_env_is_split_into_the_recipe_and_this_sites_setup():
     names = [e["name"] for e in _docs(out)[0]["values"]["env"]]
     assert names == ["NVIDIA_DISABLE_REQUIRE", "PYTORCH_ALLOC_CONF",
                      "SGLANG_ENABLE_JIT_DEEPGEMM", "SOMETHING_NEW"]
-    assert any("SOMETHING_NEW kept as measured, but no rule knows it" in w for w in out.warnings)
-    assert any("left out env NCCL_SOCKET_IFNAME" in w for w in out.warnings)
+    assert out.warnings == [], "env decisions live in the inputs, not in warnings"
 
     settled = build_catalog_entry(
         [VariantSource(_config(extra_env=env))],
@@ -320,7 +320,7 @@ def test_the_serving_contract_is_added_and_a_weights_file_pins_the_mount():
     values = _docs(out)[0]["values"]
     assert "--enable-cache-report" in values["extraArgs"]
     assert "--stream-response-default-include-usage" in values["extraArgs"]
-    assert any("serving-contract" in w for w in out.warnings)
+    assert any("which every catalog entry serves with" in d for d in out.details)
     assert values["model"]["mountPath"] == "/model", "--chat-template reads from the weights"
     plain = build_catalog_entry(
         [VariantSource(_config(engine_args={"tp": 2, "enable_cache_report": False}))], _opts()
@@ -449,7 +449,7 @@ def test_a_published_model_keeps_its_name_its_metadata_and_its_default():
     out = build_catalog_entry(_pair(), _opts(name="anything", hf="", existing=_published()))
     assert out.errors == [], out.errors
     assert out.existing and out.name == "qwen3.5-35b-a3b"
-    assert any("exported under that name" in w for w in out.warnings)
+    assert any("the catalog has this model as" in d for d in out.details)
     meta = out.metadata
     assert meta["source"] == {"hf": HF}, "no new repo id is asked for"
     assert meta["defaultVariant"] == "old-optimized", "the published default stays"
@@ -538,7 +538,7 @@ async def test_the_catalog_is_read_from_its_index():
 
     offline, note = await lookup("https://site.example/index-v2.json", "q", HF,
                                  transport=httpx.MockTransport(down))
-    assert offline is None and "treated as new" in note
+    assert offline is None and "could not read the catalog's index" in note
     assert await lookup("", "q", HF) == (None, "")
 
 
@@ -571,7 +571,7 @@ def test_no_routing_file_without_a_track_for_every_run_or_with_errors():
     sources[0].origin = {"track_slug": "t", "run_id": 100}
     out = build_catalog_entry(sources, _opts())
     assert validation_file(out, sources) is None
-    assert any("must belong to a track" in w for w in out.warnings)
+    assert any("not every run belongs to a track" in d for d in out.details)
     out.errors.append("invalid")
     assert validation_file(out, sources) is None
 
@@ -630,8 +630,8 @@ def test_unknown_cards_and_dev_tags_are_flagged_not_guessed():
     out = build_catalog_entry([VariantSource(cfg)], _opts())
     v = _docs(out)[0]
     assert "gpuProduct" not in v["requires"]
-    assert any("no gpuProduct" in w for w in out.warnings)
-    assert any("does not look like a release" in w for w in out.warnings)
+    assert any("no node label known for H20" in w for w in out.warnings)
+    assert any("isn't a release tag and may move" in w for w in out.warnings)
     pinned = build_catalog_entry(
         [VariantSource(cfg, image_digest="sha256:" + "b" * 64)],
         _opts(gpu_product=["NVIDIA-H20"]),
@@ -799,7 +799,7 @@ async def test_preview_exports_a_baseline_run_and_a_tuned_run(stack):
     ]
     assert [f["kind"] for f in out["files"]] == ["variant", "variant", "metadata"]
     assert out["errors"] == [] and out["report_source"] == ""
-    assert any("no tuning entry, as no saved report" in w for w in out["warnings"])
+    assert out["variants"][1]["tuning"] == "no_report" and out["warnings"] == []
     assert out["hf"] == HF
     assert "campaign 9, run 101" in out["provenance"][0]
     assert out["provenance"][1].startswith("tuned: ")

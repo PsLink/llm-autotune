@@ -508,6 +508,8 @@ export interface CatalogExportPreview {
   name: string
   /** The catalog already has this model: its metadata is updated, not created. */
   existing: boolean
+  /** found | new | unreachable: what the catalog's index said about the model. */
+  catalog: string
   variants: {
     id: string
     version: string
@@ -517,11 +519,18 @@ export interface CatalogExportPreview {
     path: string
     /** Each env var and mount the run had, and what the export did with it. */
     inputs: CatalogInput[]
+    /** A tuned variant's result: recorded | no_report | no_baseline; '' otherwise. */
+    tuning: string
+    /** Its gain over the baseline, in percent, when measured. */
+    uplift: number | null
   }[]
   metadata: Record<string, unknown>
   /** kind: variant | metadata | report | validation */
   files: { path: string; kind: string; text: string }[]
+  /** What someone should look at before publishing. */
   warnings: string[]
+  /** What the export did that needs no action. */
+  details: string[]
   errors: string[]
   valid: boolean
   /** Where each variant came from: for the pull request description, never a file. */

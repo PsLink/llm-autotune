@@ -170,7 +170,7 @@ def plan_mounts(
         if keep_all:
             add(name, {"hostPath": {"path": host, "type": "Directory"}}, mode == "ro")
             plan.inputs.append(
-                Input("mount", container, host, "site", "kept", "every host mount was asked for")
+                Input("mount", container, host, "site", "kept", "host mounts included")
             )
         elif container in ("/dev/shm", "/root/.cache") or _under(container, weights_mount):
             plan.inputs.append(
@@ -180,7 +180,9 @@ def plan_mounts(
                     host,
                     "weights" if _under(container, weights_mount) else "scratch",
                     "left out",
-                    "the chart provides it",
+                    "the chart provides it"
+                    if not _under(container, weights_mount)
+                    else "the model weights",
                 )
             )
         elif any(k in MODEL_FLAGS for k in readers) or ("speculative_config" in readers):
@@ -193,8 +195,7 @@ def plan_mounts(
                     host,
                     "model",
                     "moved",
-                    f"a second model's weights ({', '.join(readers)}): published at {path},"
-                    " where each site keeps model weights",
+                    f"draft model, at {path}",
                 )
             )
         elif readers or read_by_env:
@@ -207,7 +208,7 @@ def plan_mounts(
                     host,
                     "config",
                     "kept",
-                    f"{who} reads it; a deployer needs the files at {host}",
+                    f"read by {who}",
                 )
             )
         elif _SCRATCH.search(container):
@@ -219,15 +220,11 @@ def plan_mounts(
                     host,
                     "scratch",
                     "emptyDir",
-                    "a cache: an empty directory serves the same",
+                    "cache",
                 )
             )
         else:
-            plan.inputs.append(
-                Input(
-                    "mount", container, host, "site", "left out", "nothing in the config reads it"
-                )
-            )
+            plan.inputs.append(Input("mount", container, host, "site", "left out", "unused"))
     return plan
 
 
@@ -238,21 +235,21 @@ def classify_env(
     entry's own mounts provide."""
     given = (overrides or {}).get(name)
     if given in ENV_CATEGORIES:
-        return given, "set by hand"
+        return given, "set by you"
     if name in PLATFORM_ENV:
-        return "platform", "the platform sets it per launch"
+        return "platform", "set per run"
     if SECRET_ENV.search(name):
-        return "secret", "looks like a credential"
+        return "secret", "a credential"
     if name in SITE_ENV or SITE_ENV_PATTERN.search(name):
-        return "site", "names this site's network, storage or installation"
+        return "site", "specific to this cluster"
     if _ADDRESS.search(value):
-        return "site", "its value is an address"
+        return "site", "an address"
     paths = _paths([value])
     if paths and not all(any(_under(p, root) for root in provided) for p in paths):
-        return "site", "its value is a path no mount of the entry provides"
+        return "site", "a path on this machine"
     if RECIPE_ENV_PATTERN.search(name):
-        return "recipe", "an engine or runtime setting"
-    return "unknown", "no rule knows it; kept as measured"
+        return "recipe", "engine setting"
+    return "unknown", "not recognized"
 
 
 ENV_ACTIONS = {

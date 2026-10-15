@@ -396,7 +396,8 @@ async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogE
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if note:
-        export.warnings.insert(0, note)
+        export.catalog = "unreachable"
+        export.details.insert(0, note)
     export.errors += report_errors
     if report_html:
         export.files.append(CatalogFile(report_path, "report", report_html))
