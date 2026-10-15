@@ -340,6 +340,9 @@ function download(path: string, text: string, type = 'application/yaml') {
       <el-button v-if="preview?.report_html"
         @click="download(preview.report_path, preview.report_html, 'text/html')">
         {{ t('catalogExport.downloadReport') }}</el-button>
+      <el-button v-if="preview?.validation_text"
+        @click="download(preview.validation_path, preview.validation_text, 'application/json')">
+        {{ t('catalogExport.downloadValidation') }}</el-button>
       <el-button type="primary" :disabled="!preview || loading"
         @click="download(preview!.path, preview!.text)">
         {{ t('catalogExport.download') }}</el-button>

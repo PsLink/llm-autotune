@@ -26,6 +26,7 @@ from app.control.catalog_export import (
     slug,
     split_image,
 )
+from app.control.catalog_export.validation import validation_file
 from app.control.launch_config import LaunchConfig
 from app.core.auth import Principal, get_principal
 from app.datasets.pinning import dataset_of
@@ -136,6 +137,11 @@ async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[Vari
         description=item.description,
         gpu_product=list(item.gpu_product),
     )
+    # Reuse the existing plugin overlay: the public platform never imports hub tables.
+    bundle = await load_run(session, run.id)
+    group = bundle.overlay.group if bundle and bundle.overlay else None
+    if group is not None and group.kind == "track" and group.slug:
+        source.origin["track_slug"] = group.slug
     return source, campaign.served_model_name
 
 
@@ -305,11 +311,14 @@ async def preview_catalog_export(
             session, body.report_id, sources, export.document["name"]
         )
         export.errors += report_errors
+    validation_path, validation_text = validation_file(export, sources)
     meta = export.metadata or {}
     return CatalogExportOut(
         **export.payload(),
         report_path=report_path,
         report_html=report_html,
+        validation_path=validation_path,
+        validation_text=validation_text,
         name=export.document["name"],
         version=export.document["version"],
         hf=(meta.get("source") or {}).get("hf", ""),

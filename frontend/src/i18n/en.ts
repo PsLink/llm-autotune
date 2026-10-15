@@ -367,13 +367,14 @@ export default {
     copied: 'Copied',
     provenance: 'Where the variants came from (for the pull request description, not the file)',
     next: 'Next: put the files under models/<name>/ in model-catalog and open a pull request. '
+      + 'For track exports, download the validation.json too and commit it beside the version YAML. '
       + 'Do not commit index.json: CI rebuilds it and rejects pull requests that change it.',
     download: 'Download version file',
     downloadMetadata: 'Download metadata.yaml',
     downloadReport: 'Download report',
+    downloadValidation: 'Download validation.json',
   },
   baselines: {
     tuneFromThis: 'Tune from this',
   },
 }
-
