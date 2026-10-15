@@ -157,12 +157,16 @@ dataset collector from a VictoriaLogs store of the gateway's request logs.
 Turn the collector on in LLMBench's values (`datasets.enabled` and
 `datasetBuilder.enabled`; the datasets volume is shared by LLMBench's
 backend, workers and collector, so a multi-node cluster needs ReadWriteMany
-storage), and give AutoTune the store's address as LLMBench's pods reach it,
-which the dataset form starts from:
+storage). AutoTune's dataset form starts from the store's address as
+LLMBench's pods reach it. The default, `http://victorialogs.logging:9428`, is
+where the bodylog-victorialogs chart
+([modelsphere/helm-charts](https://github.com/modelsphere/helm-charts)) serves
+it when installed into the `logging` namespace, as its README does. Set your
+own if yours is elsewhere:
 
 ```yaml
 llmbench:
-  victoriaLogsUrl: http://victorialogs.logging:9428
+  victoriaLogsUrl: http://victorialogs.my-namespace:9428
 ```
 
 Without a benchmark platform, runs launch and then have nothing to measure
