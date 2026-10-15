@@ -7,15 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **The dataset form's VictoriaLogs address defaults to
-  `http://victorialogs.logging:9428`** (chart value
-  `llmbench.victoriaLogsUrl`): where the bodylog-victorialogs chart in
-  [modelsphere/helm-charts](https://github.com/modelsphere/helm-charts) serves
-  it from the namespace its README installs into. The quickstart keeps that
-  default unless `VICTORIALOGS_URL` is given; before, it wrote an empty
-  address over it.
+## [0.3.0] - 2026-10-15
 
 ### Added
 
@@ -132,6 +124,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CatalogExportDialog`, and the status, time and filter helpers.
 ### Changed
 
+- **The quickstart installs LLMBench 0.3.0**, whose service-owned collection
+  profiles and frozen-dataset import the **Datasets** page needs.
+- **The dataset form's VictoriaLogs address defaults to
+  `http://victorialogs.logging:9428`** (chart value
+  `llmbench.victoriaLogsUrl`): where the bodylog-victorialogs chart in
+  [modelsphere/helm-charts](https://github.com/modelsphere/helm-charts) serves
+  it from the namespace its README installs into. The quickstart keeps that
+  default unless `VICTORIALOGS_URL` is given; before, it wrote an empty
+  address over it.
 - The chart's install notes warn when the `runLogs` claim cannot bind: the
   storage class it would get only makes single-node volumes (local-path,
   hostpath, cloud block disks), the cluster has no default class, or the named
@@ -734,7 +735,8 @@ Released with LLMBench 0.2.0, which the install script now installs.
   [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies), checked out under `policies/` as a git
   submodule: clone with `--recurse-submodules`.
 
-[Unreleased]: https://github.com/modelsphere/llm-autotune/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/modelsphere/llm-autotune/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/modelsphere/llm-autotune/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/modelsphere/llm-autotune/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/modelsphere/llm-autotune/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/modelsphere/llm-autotune/compare/v0.1.2...v0.2.0
