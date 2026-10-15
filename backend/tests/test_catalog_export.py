@@ -152,15 +152,18 @@ def test_the_metadata_records_the_tuning_result_and_preselects_it():
     assert list(meta)[:2] == ["apiVersion", "name"] and list(meta)[-1] == "source"
 
 
-def test_a_tuning_result_needs_its_baseline_and_its_report():
+def test_a_tuned_variant_exports_without_its_report_and_says_what_is_missing():
     no_report = build_catalog_entry(_pair(), _opts(report_file=""))
-    assert any("needs its perf report" in e for e in no_report.errors)
+    assert no_report.errors == [], "a missing report never blocks the export"
+    assert "tuning" not in no_report.metadata
+    assert any("no tuning entry, as no saved report" in w for w in no_report.warnings)
     alone = build_catalog_entry(_pair()[1:], _opts())
-    assert any("needs the baseline" in e for e in alone.errors)
-    # The catalog's own rule: an id named optimized must have a tuning entry.
-    assert any("named optimized needs a tuning entry" in e for e in alone.errors)
-    baseline_only = build_catalog_entry(_pair()[:1], _opts(report_file=""))
-    assert baseline_only.errors == [], "a baseline alone needs no report"
+    assert alone.errors == []
+    assert any("no tuning entry, as the baseline" in w for w in alone.warnings)
+    named = build_catalog_entry(
+        [VariantSource(_config(), id="sglang-tp2-h100-optimized")], _opts(report_file="")
+    )
+    assert any("its id says optimized" in w for w in named.warnings)
 
 
 def test_nothing_site_owned_or_chart_owned_is_published():
@@ -794,14 +797,9 @@ async def test_preview_exports_a_baseline_run_and_a_tuned_run(stack):
         "sglang-tp2-h800-baseline",
         "sglang-tp2-h800-optimized",
     ]
-    assert [f["kind"] for f in out["files"]] == ["variant", "variant", "metadata", "report"]
-    assert out["errors"] == [], "no report was picked, so the platform wrote one"
-    assert out["report_source"] == "generated"
-    report = out["files"][3]
-    assert report["path"] == "models/qwen3.5-35b-a3b/qwen3.5-35b-a3b-h800-report.html"
-    meta = yaml.safe_load(out["files"][2]["text"])
-    assert meta["tuning"][0]["report"] == "qwen3.5-35b-a3b-h800-report.html"
-    assert "Written by the platform from the measured runs" in report["text"]
+    assert [f["kind"] for f in out["files"]] == ["variant", "variant", "metadata"]
+    assert out["errors"] == [] and out["report_source"] == ""
+    assert any("no tuning entry, as no saved report" in w for w in out["warnings"])
     assert out["hf"] == HF
     assert "campaign 9, run 101" in out["provenance"][0]
     assert out["provenance"][1].startswith("tuned: ")
@@ -925,22 +923,8 @@ async def test_a_saved_report_on_the_same_runs_is_used_before_writing_one(stack)
     out = (await http.post("/api/catalog-export/preview",
                            json={"variants": PAIR, "hf": HF, "use_catalog": False})).json()
     assert out["report_source"] == "saved:7"
-    assert "Hand-written" in out["files"][3]["text"]
-
-
-async def test_the_written_report_draws_only_blocks_its_comparison_has(stack):
-    from app.agent import auto_report, blocks
-    from app.agent import comparison as cmp
-    from app.agent.loader import load_run
-
-    _, factory = stack
-    await _seed(factory)
-    async with factory() as s:
-        base, tuned = await load_run(s, 101), await load_run(s, 102)
-        doc = cmp.build_comparison(base, [tuned], reasons=cmp.comparability(base, [tuned]))
-    for lang in ("en", "zh"):
-        md = auto_report.markdown(doc, lang)
-        assert blocks.problems(md, doc) == [], lang
-        assert "```command\nconfig: 1\n```" in md and "```table\ntype: setup\n```" in md
-    assert auto_report.title(doc, "zh").endswith("的推理优化:实验评估")
-
+    report = out["files"][3]
+    assert report["path"] == "models/qwen3.5-35b-a3b/qwen3.5-35b-a3b-h800-report.html"
+    assert "Hand-written" in report["text"]
+    meta = yaml.safe_load(out["files"][2]["text"])
+    assert meta["tuning"][0]["report"] == "qwen3.5-35b-a3b-h800-report.html"

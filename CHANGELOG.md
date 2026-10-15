@@ -27,12 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `validate:schema` and `validate:helm` on an export.
   - API: the preview returns `files` and `variants`; `version`, `base_entry`
     and `with_metadata` are gone; a variant takes `image_tag`.
-- **Catalog export writes the perf report a tuned variant needs** when no
-  saved report compares the exported runs: the platform's own report, from the
-  same comparison, in English and Chinese, with every chart, table and serving
-  command a written report has (`app/agent/auto_report.py`). A saved report on
-  exactly these runs is used first; the report id is now an optional choice
-  under Advanced. The response says which (`report_source`).
+- **Catalog export ships the saved report on the exported runs** with a tuned
+  variant (the newest one comparing exactly these runs, or the one picked under
+  Advanced), and writes its `tuning` entry. Without a report the export still
+  goes through, with no tuning entry and a warning (`report_source` says which
+  report shipped).
 - **Catalog export sorts env vars and mounts into the recipe and the site's
   setup** instead of copying them as measured. Engine and runtime settings
   are kept; network interfaces, store addresses, proxies, library paths, and
@@ -56,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image, so the chart's default engine would have deployed; it now asks for
   the tag. `source.hf` is no longer written from a guess off the weights path:
   a new model needs it given, with the guess offered. A tuned variant without
-  its baseline or report is refused instead of published untuned.
+  its baseline or report says that the catalog will ask for its tuning entry.
 - The CI routing file of a track export (`<name>.validation.json`) labels a
   variant without a role `other` rather than `optimized`, and hashes each
   variant file's content instead of its bytes, so the catalog's formatting does

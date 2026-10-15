@@ -220,9 +220,7 @@ function useSuggestion() {
 }
 
 function reportSourceText(source: string) {
-  return source.startsWith('saved:')
-    ? t('catalogExport.reportSaved', { id: source.slice(6) })
-    : t('catalogExport.reportGenerated')
+  return t('catalogExport.reportSaved', { id: source.replace(/^saved:/, '') })
 }
 
 function statusText(v: CatalogExportPreview['variants'][number]) {

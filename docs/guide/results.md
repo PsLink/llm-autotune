@@ -171,15 +171,15 @@ and the model's `metadata.yaml`.
     which every site finds the weights by. A repo id read off the weights path
     is offered as a suggestion, never filled in for you. The rest of
     `metadata.yaml` is drafted and can be edited.
-- **Report:** a tuned variant ships with a perf report, and its result goes
-  into `metadata.yaml` as a `tuning` entry (the gain over the baseline, per
-  workload). The export uses the newest saved report that compares exactly
-  these runs; when there is none, the platform writes one from the same
-  comparison, in English and Chinese: the charts, tables and serving commands
-  a written report has, and sentences stating the measured changes. Under
-  **Advanced**, a saved report can be picked instead. A shipped report keeps
-  the measurements and leaves out where they were taken: run and campaign
-  names, machines, host paths and links into the platform.
+- **Report:** a tuned variant's result goes into `metadata.yaml` as a
+  `tuning` entry (the gain over the baseline, per workload), which the catalog
+  wants with the perf report beside it. The export ships the newest saved
+  report that compares exactly these runs, or the one picked under
+  **Advanced**. Without a report it still exports, with no `tuning` entry and
+  a warning: the catalog's check asks for one before the pull request passes.
+  A shipped report keeps the measurements and leaves out where they were
+  taken: run and campaign names, machines, host paths and links into the
+  platform.
 - **Advanced:** variant ids, an image tag for a run whose image was named by
   digest only, the default variant, env and host-path volumes, the startup
   budget, `gpuProduct` node labels, and a saved report to ship.

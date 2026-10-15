@@ -247,7 +247,7 @@ class CatalogExport:
     existing: bool = False
     # A source.hf read off the weights path, offered to confirm, never written.
     hf_suggestion: str = ""
-    # Where the perf report came from: a saved one, or written by the platform.
+    # Where the perf report came from: "saved:<report id>"; "" when none ships.
     report_source: str = ""
 
     @property
@@ -882,17 +882,18 @@ def _metadata(
             errors.append(f"default variant {default!r} is not a variant of {name}")
         meta["defaultVariant"] = default
 
-    tuning = _tuning(sources, exported, opts, errors)
+    tuning = _tuning(sources, exported, opts, warnings)
     if tuning:
         recorded = [t for t in meta.get("tuning") or [] if t not in tuning]
         meta["tuning"] = recorded + tuning
     named = re.compile(r"(^|-)optimi[sz]ed(-|$)")
     covered = {str(t.get("optimized", "")).split("@")[0] for t in meta.get("tuning") or []}
     for v in exported:
-        if named.search(v.id) and v.id not in covered:
-            errors.append(
-                f"{v.id}: an id named optimized needs a tuning entry, which needs a"
-                " baseline and a report in the same export"
+        # An optimized variant was already warned about by _tuning.
+        if named.search(v.id) and v.id not in covered and v.role != "optimized":
+            warnings.append(
+                f"{v.id}: its id says optimized, which the catalog's check takes as tuned: it"
+                " asks for a tuning entry before the pull request passes"
             )
     if "source" in meta:
         errors += [f"metadata: {e}" for e in validate(meta, "metadata.v2")]
@@ -922,10 +923,12 @@ def _tuning(
     sources: list[VariantSource],
     exported: list[ExportedVariant],
     opts: CatalogOptions,
-    errors: list[str],
+    warnings: list[str],
 ) -> list[dict[str, Any]]:
     """One entry per optimized variant: what it gained over the baseline
-    exported with it, on the benchmark and on each workload, and the report."""
+    exported with it, on the benchmark and on each workload, and the report.
+    Without a baseline or a report there is no entry, only a warning: the
+    catalog's own check asks for one before the pull request passes."""
     pairs = list(zip(exported, sources, strict=True))
     base = next(((v, s) for v, s in pairs if v.role == "baseline"), None)
     out = []
@@ -933,10 +936,17 @@ def _tuning(
         if v.role != "optimized":
             continue
         if base is None:
-            errors.append(f"{v.id}: a tuning result needs the baseline it was measured against")
+            warnings.append(
+                f"{v.id}: no tuning entry, as the baseline it was measured against is not in"
+                " this export; the catalog's check asks for one before the pull request passes"
+            )
             continue
         if not opts.report_file:
-            errors.append(f"{v.id}: a tuning result needs its perf report: pick the report")
+            warnings.append(
+                f"{v.id}: no tuning entry, as no saved report compares these runs; the"
+                " catalog's check asks for one (with its report) before the pull request"
+                " passes: save a report on these runs, or pick one under Advanced"
+            )
             continue
         entry: dict[str, Any] = {
             "baseline": f"{base[0].id}@{base[0].version}",
