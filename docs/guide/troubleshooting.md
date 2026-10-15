@@ -107,7 +107,9 @@ one. Run the install again with `VICTORIALOGS_URL`
 
 **The model list is empty, or "Could not read the log store".** LLMBench
 cannot reach the VictoriaLogs address from its pods, or the store has no
-requests from the last day. Check the address under **Advanced**.
+requests from the last day. Check the address under **Advanced**: unless the
+install set one, it is `http://victorialogs.logging:9428`, where the
+bodylog-victorialogs chart serves it from the `logging` namespace.
 
 **No request matches.** The model is matched exactly, as clients send it,
 and a node must be one that served that model. Clear **Nodes** to check

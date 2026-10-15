@@ -549,8 +549,11 @@ llmbench:
   url: http://llm-bench-backend.$BENCH_NS:8000
   webUrl: "$LLMBENCH_URL"
   apiKey: "$SERVICE_API_KEY"
-  victoriaLogsUrl: "${VICTORIALOGS_URL:-}"
 EOF
+    # Unset keeps the chart's default address.
+    if [ -n "${VICTORIALOGS_URL:-}" ]; then
+      printf '  victoriaLogsUrl: "%s"\n' "$VICTORIALOGS_URL"
+    fi
     if [ "$MODE" = demo ]; then
       printf 'mockModel:\n  image: "%s"\n' "$mock_image"
     else

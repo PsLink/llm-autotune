@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The dataset form's VictoriaLogs address defaults to
+  `http://victorialogs.logging:9428`** (chart value
+  `llmbench.victoriaLogsUrl`): where the bodylog-victorialogs chart in
+  [modelsphere/helm-charts](https://github.com/modelsphere/helm-charts) serves
+  it from the namespace its README installs into. The quickstart keeps that
+  default unless `VICTORIALOGS_URL` is given; before, it wrote an empty
+  address over it.
+
 ### Added
 
 - **Export to model catalog** on a campaign's page (**⋯** menu): measured
