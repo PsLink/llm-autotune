@@ -91,7 +91,7 @@ TAGS = [
     {"name": "runs", "description": "Individual benchmarked deployments."},
     {
         "name": "catalog-export",
-        "description": "Measured runs as a model-catalog entry (catalog.swiss/v1), to publish "
+        "description": "Measured runs as model-catalog files (catalog.swiss/v2), to publish "
         "by pull request.",
     },
     {"name": "auth", "description": "Login and the current user."},

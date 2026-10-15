@@ -1,17 +1,21 @@
-"""model-catalog export: measured configs → one `catalog.swiss/v1` version file.
+"""model-catalog export: measured configs → `catalog.swiss/v2` variant files.
 
 The public model catalog (github.com/modelsphere/model-catalog) describes how
-a model should be served, and nothing about where. One version file per model
-version, `models/<name>/<name>-<version>.yaml`, holding the variants it can be
-served as. This module turns N measured LaunchConfigs (a baseline and the
-config a campaign tuned from it, or several tuned configs) into that file, one
-variant per config, plus a `metadata.yaml` for a model the catalog does not
-have yet.
+a model should be served, and nothing about where. Each way of serving a model
+is one variant file, `models/<name>/<id>.yaml`, edited in place with its own
+`version` raised on every change; `models/<name>/metadata.yaml` says what the
+model is, which variant to preselect, and what tuning measured. This module
+turns N measured LaunchConfigs (a baseline and the config a campaign tuned from
+it, or several tuned configs) into one variant file per config, and the
+model's metadata.yaml: a new one for a model the catalog does not have, or the
+published one with this export's tuning result added.
 
-A published version is immutable, so there is no file to edit line by line:
-we write a NEW document, dump it whole, and validate it against the catalog's
-own schema (vendored under schema/ from model-catalog; re-copy when the
-catalog changes it).
+What the catalog already holds is read from its published index
+(catalog_index.py): an exported id it already has becomes the next version of
+that variant, or no file at all when nothing changed. Every document is
+validated against the catalog's own schemas (vendored under schema/, with the
+minimum chart versions in schema/pins.json; re-copy when the catalog changes
+them) and the rules its validator adds on top.
 
 What is deliberately left out, because the catalog forbids or cannot use it:
 - `model.localPath`, host paths, namespaces, scheduling, replicas: site- and
@@ -28,14 +32,15 @@ What is deliberately left out, because the catalog forbids or cannot use it:
   platform only keeps the normalized card name, so it is written only when the
   caller supplies the labels.
 
-Evidence (which run measured what, and by how much the optimized config won)
-cannot live in the closed schema, so it rides in the variant `description` and
-in a YAML comment header. Comments do not reach index.json, but they are in
-the file a reviewer reads in the pull request.
+Evidence (by how much the optimized config won, on which workloads) goes in
+metadata.yaml's `tuning` entry and the variant `description`; which run
+measured what is for the pull request description (`provenance`), never a
+file.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
@@ -50,9 +55,20 @@ from app.control.engines.base import MODEL_MOUNT
 from app.control.engines.flags import negated_flag, render_flag
 from app.control.launch_config import LaunchConfig
 
-API_VERSION = "catalog.swiss/v1"
+API_VERSION = "catalog.swiss/v2"
 SCHEMA_DIR = Path(__file__).parent / "schema"
-DEFAULT_CHART_VERSION = "0.7.1"
+# The oldest chart release the catalog accepts a new or changed variant on, per
+# engine. A variant asks for that or newer, so a chart fix reaches it without a
+# new variant version.
+CHART_MINIMUMS: dict[str, str] = json.loads((SCHEMA_DIR / "pins.json").read_text())[
+    "minimumChartVersions"
+]
+
+
+def chart_range(engine: str) -> str:
+    return f">={CHART_MINIMUMS.get(engine, '0.0.0')}"
+
+
 # Where the sglang chart mounts the weights when an entry does not say
 # (values.yaml: model.mountPath). Every path a flag reads must live under it or
 # under one of the entry's own volumeMounts.
@@ -146,20 +162,38 @@ class VariantSource:
     load_seconds: float | None = None
     # sha256 manifest digest of the engine image the run pulled, when known.
     image_digest: str = ""
+    # The tag to publish when the run's image was named by digest alone: the
+    # catalog needs a tag, and the platform cannot invent one.
+    image_tag: str = ""
+
+
+@dataclass
+class CatalogModel:
+    """What the catalog already publishes for a model, from its index."""
+
+    name: str
+    metadata: dict[str, Any]
+    # metadata.yaml as published, for the comments it carries; "" when only
+    # the index's copy of its fields could be read.
+    metadata_text: str = ""
+    # id → {"version": "1.0.2", "document": the variant file, when it could be read}
+    variants: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
 class CatalogOptions:
     name: str
-    version: str = "1.0.0"
     served_name: str = ""  # "" → derived from the configs' served_model_name
-    chart_version: str = DEFAULT_CHART_VERSION
-    default_variant: str = ""  # an id; "" → the optimized one, else the first
+    chart_version: str = ""  # "" → the engine's minimum, as a range (>=0.8.0)
+    default_variant: str = ""  # an id; "" → the published default, else the optimized one
     include_env: bool = True
     include_volumes: bool = False
     startup_minutes: int | None = None  # None → the floor, raised by a measured load
-    # metadata.yaml — written when `hf` is known (a new model needs one)
-    with_metadata: bool = True
+    # The model as the catalog publishes it; None for a model new to it.
+    existing: CatalogModel | None = None
+    # The perf report's file name, beside metadata.yaml: a tuning entry needs one.
+    report_file: str = ""
+    # For a model new to the catalog: its metadata.yaml.
     hf: str = ""
     hf_revision: str = ""
     display_name: str = ""
@@ -172,45 +206,74 @@ class CatalogOptions:
     model_label: str = ""
     # Applied to every variant that has none of its own.
     gpu_product: list[str] = field(default_factory=list)
-    # An already-published version of this model (its YAML text). When given,
-    # the export is that version extended: its variants kept byte-for-byte and
-    # still the default, the new ones appended, the version bumped.
-    base_text: str = ""
+
+
+@dataclass
+class CatalogFile:
+    path: str  # models/<name>/...
+    kind: str  # variant | metadata | report | validation
+    text: str
+
+
+@dataclass
+class ExportedVariant:
+    """One source's variant: where it stands against the published catalog."""
+
+    id: str
+    version: str
+    role: str
+    # new: not in the catalog; updated: a new version of a published variant;
+    # unchanged: identical to the published version, so no file is written.
+    status: str
+    path: str
+    document: dict[str, Any]
 
 
 @dataclass
 class CatalogExport:
-    path: str
-    text: str
-    document: dict[str, Any]
-    metadata_path: str = ""
-    metadata_text: str = ""
-    metadata: dict[str, Any] | None = None
+    name: str
+    variants: list[ExportedVariant] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    files: list[CatalogFile] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     # Where each variant came from (campaign / run ids, measured numbers).
-    # Platform ids have no place in a public, immutable file, so this is for
-    # the pull request description, not the entry.
+    # Platform ids have no place in a public file, so this is for the pull
+    # request description.
     provenance: list[str] = field(default_factory=list)
-    # Final ids, in source order (excludes variants carried over from base_entry).
-    source_variant_ids: list[str] = field(default_factory=list)
+    # True when the catalog already has this model.
+    existing: bool = False
+    # A source.hf read off the weights path, offered to confirm, never written.
+    hf_suggestion: str = ""
 
     @property
     def valid(self) -> bool:
         return not self.errors
 
+    def file(self, kind: str) -> CatalogFile | None:
+        return next((f for f in self.files if f.kind == kind), None)
+
     def payload(self) -> dict[str, Any]:
         return {
-            "path": self.path,
-            "text": self.text,
-            "document": self.document,
-            "metadata_path": self.metadata_path,
-            "metadata_text": self.metadata_text,
+            "name": self.name,
+            "existing": self.existing,
+            "variants": [
+                {
+                    "id": v.id,
+                    "version": v.version,
+                    "role": v.role,
+                    "status": v.status,
+                    "path": v.path,
+                }
+                for v in self.variants
+            ],
             "metadata": self.metadata,
+            "files": [{"path": f.path, "kind": f.kind, "text": f.text} for f in self.files],
             "warnings": list(self.warnings),
             "errors": list(self.errors),
             "valid": self.valid,
             "provenance": list(self.provenance),
+            "hf_suggestion": self.hf_suggestion,
         }
 
 
@@ -492,6 +555,7 @@ def _variant(
     opts: CatalogOptions,
     reference: VariantSource | None,
     warnings: list[str],
+    errors: list[str],
 ) -> dict[str, Any]:
     cfg = src.config
     nodes = max(1, int(src.nodes or 1))
@@ -504,9 +568,13 @@ def _variant(
     variant: dict[str, Any] = {"id": vid}
     variant["description"] = _describe(src, gpus, reference)
     variant["engine"] = cfg.engine
-    variant["chart"] = {"name": cfg.engine, "version": opts.chart_version}
+    variant["chart"] = {
+        "name": cfg.engine,
+        "version": opts.chart_version or chart_range(cfg.engine),
+    }
 
     repository, tag, digest = split_image(cfg.image)
+    tag = tag or src.image_tag.strip()
     digest = digest or src.image_digest
     if repository and tag:
         variant["image"] = {"repository": repository, "tag": tag}
@@ -523,9 +591,11 @@ def _variant(
                 )
             )
     else:
-        warnings.append(
-            f"{vid}: image {cfg.image!r} has no tag, so no image was written"
-            " (the chart's default applies)"
+        # Without an image the chart's default engine would deploy, which is
+        # not what was measured.
+        errors.append(
+            f"{vid}: image {cfg.image!r} has no tag, and the catalog names an image by"
+            " repository and tag: give the tag this build is published under"
         )
 
     requires: dict[str, Any] = {"gpus": gpus}
@@ -658,17 +728,24 @@ def _variant(
 
 
 def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> CatalogExport:
-    """The version file (and metadata.yaml) for these configs, validated."""
+    """The variant files and metadata.yaml for these configs, validated."""
     warnings: list[str] = []
     errors: list[str] = []
     if not sources:
         raise ValueError("at least one config is needed")
 
-    name = opts.name if NAME_RE.match(opts.name or "") else slug(opts.name)
-    if not name:
-        raise ValueError(f"catalog name {opts.name!r} has nothing usable in it")
-    if name != opts.name:
-        warnings.append(f"catalog name {opts.name!r} normalized to {name!r}")
+    existing = opts.existing
+    if existing is not None:
+        # The catalog's own name wins: a second spelling would be a second model.
+        name = existing.name
+        if opts.name and slug(opts.name) != name:
+            warnings.append(f"the catalog has this model as {name!r}; exported under that name")
+    else:
+        name = opts.name if NAME_RE.match(opts.name or "") else slug(opts.name)
+        if not name:
+            raise ValueError(f"catalog name {opts.name!r} has nothing usable in it")
+        if name != opts.name:
+            warnings.append(f"catalog name {opts.name!r} normalized to {name!r}")
 
     for src in sources:
         if src.config.engine not in ENGINES:
@@ -681,104 +758,245 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
     if len(others) > 1:
         warnings.append(
             f"the configs serve different names ({', '.join(sorted(others))});"
-            f" one entry has one servedName, {served!r} was used"
+            f" every variant is served as {served!r}"
         )
 
     reference = next((s for s in sources if s.role == "baseline"), None)
-    variants = [_variant(s, opts, reference, warnings) for s in sources]
-    for variant, src in zip(variants, sources, strict=True):
-        warnings += judge(variant["id"], src)
-
+    bodies = [_variant(s, opts, reference, warnings, errors) for s in sources]
+    for body, src in zip(bodies, sources, strict=True):
+        warnings += judge(body["id"], src)
     seen: dict[str, int] = {}
-    for variant in variants:
-        base = variant["id"]
+    for body in bodies:
+        base = body["id"]
         seen[base] = seen.get(base, 0) + 1
         if seen[base] > 1:
-            variant["id"] = f"{base[:60]}-{seen[base]}"
+            body["id"] = f"{base[:60]}-{seen[base]}"
 
-    if opts.base_text.strip():
-        export = _extend(opts, name, served, sources, variants, warnings, errors)
-        export.source_variant_ids = [v["id"] for v in variants]
-        return export
+    exported: list[ExportedVariant] = []
+    for body, src in zip(bodies, sources, strict=True):
+        doc: dict[str, Any] = {
+            "apiVersion": API_VERSION,
+            "kind": "Variant",
+            "model": name,
+            "id": body["id"],
+            "version": "1.0.0",
+        }
+        if served and served != name:
+            doc["servedName"] = served
+        doc.update({k: v for k, v in body.items() if k != "id"})
+        status = "new"
+        published = (existing.variants if existing else {}).get(doc["id"])
+        if published is not None:
+            was = str(published.get("version") or "1.0.0")
+            old = published.get("document")
+            if old is not None and _same_variant(old, doc):
+                doc["version"] = was
+                status = "unchanged"
+                warnings.append(f"{doc['id']}: the same as the published {was}; no file is written")
+            else:
+                doc["version"] = bump_minor(was)
+                status = "updated"
+                warnings.append(
+                    f"{doc['id']}: replaces the published {was} with {doc['version']}"
+                    + (
+                        ""
+                        if old is not None
+                        else " (the published file could not be read to compare)"
+                    )
+                )
+        errors += [f"{doc['id']}: {e}" for e in validate(doc, "variant")]
+        errors += [f"{doc['id']}: {e}" for e in variant_problems(doc)]
+        exported.append(
+            ExportedVariant(
+                id=doc["id"],
+                version=doc["version"],
+                role=src.role,
+                status=status,
+                path=f"models/{name}/{doc['id']}.yaml",
+                document=doc,
+            )
+        )
 
-    default_id = opts.default_variant
-    if not default_id:
-        optimized = [v for v, s in zip(variants, sources, strict=True) if s.role == "optimized"]
-        default_id = (optimized[0] if optimized else variants[0])["id"]
-    if default_id not in {v["id"] for v in variants}:
-        errors.append(f"default variant {default_id!r} is not one of the exported variants")
-    variants = _mark_default(variants, default_id)
-
-    document: dict[str, Any] = {"apiVersion": API_VERSION, "name": name, "version": opts.version}
-    if served and served != name:
-        document["servedName"] = served
-    document["variants"] = variants
-
-    path = f"models/{name}/{name}-{opts.version}.yaml"
-    text = HEADER + dump(document)
-    errors += validate(document, "version")
-    errors += cross_check(document)
-
-    export = CatalogExport(
-        path=path,
-        text=text,
-        document=document,
+    meta, suggestion = _metadata(name, sources, exported, opts, warnings, errors)
+    files = [
+        CatalogFile(v.path, "variant", HEADER + dump(v.document))
+        for v in exported
+        if v.status != "unchanged"
+    ]
+    if existing is not None and existing.metadata_text and "#" in existing.metadata_text:
+        warnings.append("metadata.yaml is rewritten from its fields: its comments are not kept")
+    files.append(CatalogFile(f"models/{name}/metadata.yaml", "metadata", dump(meta)))
+    return CatalogExport(
+        name=name,
+        variants=exported,
+        metadata=meta,
+        files=files,
         warnings=warnings,
         errors=errors,
         provenance=provenance(sources),
-        source_variant_ids=[v["id"] for v in variants],
+        existing=existing is not None,
+        hf_suggestion=suggestion,
     )
 
-    if opts.with_metadata:
-        hf = opts.hf or next((guess_hf(s.config.model_path) for s in sources), "")
-        if not hf:
-            warnings.append(
-                "no Hugging Face repo id (source.hf) given or guessable from the model path;"
-                " metadata.yaml was not generated — needed only if the model is new to the catalog"
+
+def _same_variant(old: dict[str, Any], new: dict[str, Any]) -> bool:
+    """The same file but for its version: re-exporting it needs no new one."""
+    strip = ("version",)
+    return {k: v for k, v in old.items() if k not in strip} == {
+        k: v for k, v in new.items() if k not in strip
+    }
+
+
+def _metadata(
+    name: str,
+    sources: list[VariantSource],
+    exported: list[ExportedVariant],
+    opts: CatalogOptions,
+    warnings: list[str],
+    errors: list[str],
+) -> tuple[dict[str, Any], str]:
+    """metadata.yaml: the published one with this export's results added, or
+    a new one. Returns it and a source.hf suggestion (never written)."""
+    existing = opts.existing
+    suggestion = ""
+    if existing is not None:
+        meta = copy.deepcopy(existing.metadata)
+        if meta.get("apiVersion") != API_VERSION:
+            errors.append(
+                f"the catalog still describes {name} in the v1 format: it moves to v2"
+                " (model-catalog's hack/migrate-v2.js) before v2 variants can be added"
             )
-        else:
-            if not opts.hf:
-                warnings.append(f"source.hf {hf!r} was guessed from the model path; confirm it")
-            draft = suggest_metadata(sources, opts.model_label or name)
-            display = opts.display_name or draft["display_name"]
-            description = opts.description or draft["description"]
-            family = opts.family or draft["family"]
-            tags = opts.tags or draft["tags"]
-            meta: dict[str, Any] = {"apiVersion": API_VERSION, "name": name}
-            if display:
-                meta["displayName"] = display[:128]
-            if description:
-                meta["description"] = description[:2048]
-            if opts.homepage:
-                meta["homepage"] = opts.homepage
-            if opts.license:
-                meta["license"] = opts.license
-            if family:
-                meta["family"] = _id_slug(family)
-            if tags:
-                meta["tags"] = list(dict.fromkeys(_id_slug(t) for t in tags if _id_slug(t)))
+    else:
+        hf = opts.hf.strip()
+        draft = suggest_metadata(sources, opts.model_label or name)
+        meta = {"apiVersion": API_VERSION, "name": name}
+        display = opts.display_name or draft["display_name"]
+        description = opts.description or draft["description"]
+        family = opts.family or draft["family"]
+        tags = opts.tags or draft["tags"]
+        if display:
+            meta["displayName"] = display[:128]
+        if description:
+            meta["description"] = description[:2048]
+        if opts.homepage:
+            meta["homepage"] = opts.homepage
+        if opts.license:
+            meta["license"] = opts.license
+        if family:
+            meta["family"] = _id_slug(family)
+        if tags:
+            meta["tags"] = list(dict.fromkeys(_id_slug(t) for t in tags if _id_slug(t)))
+        if hf:
             meta["source"] = {"hf": hf}
             if opts.hf_revision:
                 meta["source"]["revision"] = opts.hf_revision
-            export.metadata = meta
-            export.metadata_path = f"models/{name}/metadata.yaml"
-            export.metadata_text = dump(meta)
-            export.errors += [f"metadata: {e}" for e in validate(meta, "metadata")]
-    return export
+        else:
+            # Each site finds the weights from this id, so it is asked for,
+            # never read off our own weights path.
+            suggestion = next(
+                (g for g in (guess_hf(s.config.model_path) for s in sources) if g), ""
+            )
+            errors.append(
+                "source.hf: the model is new to the catalog, and every site finds its"
+                " weights by its Hugging Face repo id: give it"
+                + (f" (the weights path suggests {suggestion})" if suggestion else "")
+            )
+
+    ids = {v.id for v in exported} | set(existing.variants if existing else {})
+    default = (
+        opts.default_variant
+        or meta.get("defaultVariant")
+        or next((v.id for v in exported if v.role == "optimized"), "")
+    )
+    if default:
+        if default not in ids:
+            errors.append(f"default variant {default!r} is not a variant of {name}")
+        meta["defaultVariant"] = default
+
+    tuning = _tuning(sources, exported, opts, errors)
+    if tuning:
+        recorded = [t for t in meta.get("tuning") or [] if t not in tuning]
+        meta["tuning"] = recorded + tuning
+    named = re.compile(r"(^|-)optimi[sz]ed(-|$)")
+    covered = {str(t.get("optimized", "")).split("@")[0] for t in meta.get("tuning") or []}
+    for v in exported:
+        if named.search(v.id) and v.id not in covered:
+            errors.append(
+                f"{v.id}: an id named optimized needs a tuning entry, which needs a"
+                " baseline and a report in the same export"
+            )
+    if "source" in meta:
+        errors += [f"metadata: {e}" for e in validate(meta, "metadata.v2")]
+    # Key order as the catalog's own files have it.
+    order = (
+        "apiVersion",
+        "name",
+        "displayName",
+        "description",
+        "homepage",
+        "license",
+        "family",
+        "series",
+        "quantization",
+        "tags",
+        "deprecated",
+        "defaultVariant",
+        "tuning",
+        "source",
+    )
+    return {k: meta[k] for k in order if k in meta} | {
+        k: v for k, v in meta.items() if k not in order
+    }, suggestion
 
 
-def _mark_default(variants: list[dict[str, Any]], default_id: str) -> list[dict[str, Any]]:
-    """`default` sits right after `id`, as in the catalog's examples."""
-    return [
-        {
-            "id": v["id"],
-            "default": True,
-            **{k: x for k, x in v.items() if k not in ("id", "default")},
+def _tuning(
+    sources: list[VariantSource],
+    exported: list[ExportedVariant],
+    opts: CatalogOptions,
+    errors: list[str],
+) -> list[dict[str, Any]]:
+    """One entry per optimized variant: what it gained over the baseline
+    exported with it, on the benchmark and on each workload, and the report."""
+    pairs = list(zip(exported, sources, strict=True))
+    base = next(((v, s) for v, s in pairs if v.role == "baseline"), None)
+    out = []
+    for v, src in pairs:
+        if v.role != "optimized":
+            continue
+        if base is None:
+            errors.append(f"{v.id}: a tuning result needs the baseline it was measured against")
+            continue
+        if not opts.report_file:
+            errors.append(f"{v.id}: a tuning result needs its perf report: pick the report")
+            continue
+        entry: dict[str, Any] = {
+            "baseline": f"{base[0].id}@{base[0].version}",
+            "optimized": f"{v.id}@{v.version}",
         }
-        if v["id"] == default_id
-        else {k: x for k, x in v.items() if k != "default"}
-        for v in variants
-    ]
+        gain = gain_pct(src, base[1])
+        if gain is not None:
+            entry["uplift"] = round_pct(gain)
+        workloads: list[dict[str, Any]] = []
+        for sc in (src.evidence or {}).get("scenarios") or []:
+            label = str(sc.get("label") or sc.get("key") or "")[:64]
+            if label and sc.get("pct") is not None and label not in {w["name"] for w in workloads}:
+                workloads.append({"name": label, "uplift": round_pct(float(sc["pct"]))})
+        if workloads:
+            entry["workloads"] = workloads
+        entry["report"] = opts.report_file
+        out.append(entry)
+    return out
+
+
+def round_pct(pct: float) -> float:
+    """Half up to one decimal, as pct_text prints it."""
+    rounded = math.floor(abs(pct) * 10 + 0.5 + 1e-6) / 10
+    return rounded if pct >= 0 else -rounded
+
+
+def bump_minor(version: str) -> str:
+    major, minor, _ = _version_tuple(version)
+    return f"{major}.{minor + 1}.0"
 
 
 def pct_text(pct: float) -> str:
@@ -824,133 +1042,6 @@ def _version_tuple(v: str) -> tuple[int, int, int]:
         return (0, 0, 0)
     major, minor, patch = (int(x) for x in v.split("-", 1)[0].split("."))
     return (major, minor, patch)
-
-
-def _extend(
-    opts: CatalogOptions,
-    name: str,
-    served: str,
-    sources: list[VariantSource],
-    variants: list[dict[str, Any]],
-    warnings: list[str],
-    errors: list[str],
-) -> CatalogExport:
-    """A new version of an entry the catalog already has: the published
-    version's text kept as it is -- its variants, its comments, its default --
-    with the new variants appended after it and the version bumped.
-
-    Published versions are immutable and other people's variants are theirs,
-    so nothing in the base is rewritten; the only line that changes is
-    `version:`. The new variants never become the default unless the caller
-    names one of them."""
-    base_text = opts.base_text.strip("\n") + "\n"
-    try:
-        base = yaml.safe_load(base_text)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"the existing version is not valid YAML: {exc}") from exc
-    if not isinstance(base, dict) or not isinstance(base.get("variants"), list):
-        raise ValueError("the existing version has no variants list")
-    if base.get("name") != name:
-        errors.append(f"the existing version is {base.get('name')!r}, not {name!r}")
-    if list(base)[-1] != "variants":
-        raise ValueError("the existing version must end with its variants: block to be extended")
-
-    base_version = str(base.get("version") or "")
-    base_ids = {v.get("id") for v in base["variants"]}
-    new_ids = {v["id"] for v in variants}
-    # Same ids as published variants: a corrected re-publication of THOSE
-    # variants (a patch release). All-new ids: more variants (a minor release).
-    # A mix is ambiguous and refused.
-    replacing = new_ids <= base_ids
-    if new_ids & base_ids and not replacing:
-        errors.append(
-            f"variant ids {', '.join(sorted(new_ids & base_ids))} are already in {base_version} "
-            "but "
-            f"{', '.join(sorted(new_ids - base_ids))} are not: replace published variants or add "
-            "new ones, not both -- pass explicit ids"
-        )
-    major, minor, patch = _version_tuple(base_version)
-    bumped = f"{major}.{minor}.{patch + 1}" if replacing else f"{major}.{minor + 1}.0"
-    version = opts.version
-    if _version_tuple(version) <= _version_tuple(base_version):
-        version = bumped
-        warnings.append(
-            f"version {opts.version!r} is not above the existing {base_version}; using {version}"
-        )
-
-    base_served = base.get("servedName") or base.get("name")
-    if served and served != base_served:
-        warnings.append(
-            f"the measured runs served {served!r}; the entry keeps its servedName {base_served!r}"
-        )
-
-    base_default = next((v.get("id") for v in base["variants"] if v.get("default") is True), None)
-    wanted = opts.default_variant or base_default or ""
-    if wanted and wanted not in new_ids | base_ids:
-        errors.append(f"default variant {wanted!r} is in neither the existing nor the new variants")
-
-    if replacing:
-        # Rewritten variant by variant from the measured runs; the rest of the
-        # document (other variants, top-level keys) is the published one.
-        fresh = {v["id"]: v for v in variants}
-        merged = [fresh.get(v.get("id"), v) for v in base["variants"]]
-        document = {**base, "version": version, "variants": _mark_default(merged, wanted)}
-        comments = [
-            line
-            for line in base_text.splitlines()
-            if line.lstrip().startswith("#") and line != HEADER.strip()
-        ]
-        if comments:
-            warnings.append(
-                f"{len(comments)} comment line(s) of {base_version} are not carried into {version}"
-            )
-        warnings.append(
-            f"replaces {', '.join(sorted(new_ids))} of {base_version} with what was measured"
-        )
-        text = (HEADER if base_text.startswith(HEADER.strip()) else "") + dump(document)
-        errors += validate(document, "version")
-        errors += cross_check(document)
-        return CatalogExport(
-            path=f"models/{name}/{name}-{version}.yaml",
-            text=text,
-            document=document,
-            warnings=warnings,
-            errors=errors,
-            provenance=provenance(sources),
-        )
-
-    if wanted in new_ids:
-        # The caller moved the default to a new variant: the base's marker goes.
-        base_text = re.sub(r"(?m)^    default: true\n", "", base_text)
-        variants = _mark_default(variants, wanted)
-    else:
-        variants = _mark_default(variants, "")
-
-    charts = {str((v.get("chart") or {}).get("version")) for v in base["variants"]}
-    if charts and opts.chart_version not in charts:
-        warnings.append(
-            f"the existing variants use chart {', '.join(sorted(charts))}; "
-            f"the new ones use {opts.chart_version}"
-        )
-
-    text = re.sub(r"(?m)^version: .*$", f"version: {version}", base_text, count=1)
-    block = dump({"variants": variants}).split("\n", 1)[1]
-    text = (
-        text.rstrip("\n")
-        + f"\n\n  # Added in {version}: measured, and where marked tuned, by LLM AutoTune.\n"
-        + block
-    )
-    document = yaml.safe_load(text)
-    errors += validate(document, "version")
-    errors += cross_check(document)
-    return CatalogExport(
-        path=f"models/{name}/{name}-{version}.yaml",
-        text=text,
-        document=document,
-        warnings=warnings,
-        errors=errors,
-        provenance=provenance(sources),
-    )
 
 
 HEADER = "# Serving configs measured, and where marked tuned, by LLM AutoTune.\n"
@@ -1081,11 +1172,20 @@ def schema(kind: str) -> dict[str, Any]:
     return _SCHEMAS[kind]
 
 
+def _registry():
+    """Every vendored schema by its $id: the v2 schemas refer to each other."""
+    from referencing import Registry, Resource
+
+    docs = [json.loads(p.read_text()) for p in sorted(SCHEMA_DIR.glob("*.schema.json"))]
+    return Registry().with_resources((d["$id"], Resource.from_contents(d)) for d in docs)
+
+
 def validate(document: dict[str, Any], kind: str) -> list[str]:
-    """Schema errors, as `path: message` lines. Empty means it validates."""
+    """Schema errors (kind: variant | metadata.v2), as `path: message` lines.
+    Empty means it validates."""
     from jsonschema import Draft202012Validator
 
-    validator = Draft202012Validator(schema(kind))
+    validator = Draft202012Validator(schema(kind), registry=_registry())
     out = []
     for error in sorted(validator.iter_errors(document), key=lambda e: list(e.absolute_path)):
         where = "/".join(str(p) for p in error.absolute_path) or "(root)"
@@ -1093,35 +1193,35 @@ def validate(document: dict[str, Any], kind: str) -> list[str]:
     return out
 
 
-def cross_check(document: dict[str, Any]) -> list[str]:
-    """The rules model-catalog's validate.sh adds on top of the schema, plus
-    the layer ownership swiss enforces when it loads an entry."""
+def variant_problems(variant: dict[str, Any]) -> list[str]:
+    """The rules model-catalog's validator adds on top of the schema for one
+    variant file, plus the layer ownership swiss enforces when it loads one."""
     out = []
-    variants = document.get("variants") or []
-    ids = [v.get("id") for v in variants]
-    dupes = sorted({i for i in ids if ids.count(i) > 1})
-    if dupes:
-        out.append(f"duplicate variant ids: {', '.join(dupes)}")
-    defaults = sum(1 for v in variants if v.get("default") is True)
-    if defaults > 1:
-        out.append(f"{defaults} variants marked default, at most one allowed")
-    for v in variants:
-        values = v.get("values") or {}
-        lws = values.get("lws") or {}
-        if lws.get("enabled") and lws.get("size") != (v.get("requires") or {}).get("nodes"):
-            out.append(f"{v.get('id')}: lws.size != requires.nodes")
-        foreign = sorted(_FOREIGN_VALUE_KEYS & set(values))
-        if foreign:
-            out.append(f"{v.get('id')}: values writes site/deploy-owned keys: {', '.join(foreign)}")
-        model = values.get("model") or {}
-        for key in ("localPath", "gpus"):
-            if key in model:
-                out.append(f"{v.get('id')}: values.model.{key} is not the catalog's to set")
-        for arg in unmounted_paths(v):
-            out.append(
-                f"{v.get('id')}: {arg} reads a path no mount provides (weights at "
-                f"{model.get('mountPath') or CHART_MODEL_MOUNT}); the engine would not find it"
-            )
+    values = variant.get("values") or {}
+    requires = variant.get("requires") or {}
+    lws = values.get("lws") or {}
+    if lws.get("enabled") and lws.get("size") != requires.get("nodes"):
+        out.append(
+            f"values.lws.size {lws.get('size')} is not requires.nodes {requires.get('nodes')}"
+        )
+    chart = (variant.get("chart") or {}).get("name")
+    if chart and chart != variant.get("engine"):
+        out.append(f"chart.name {chart} is not its engine, {variant.get('engine')}")
+    topology = requires.get("topology")
+    if topology in ("lws", "pd") and (values.get(topology) or {}).get("enabled") is not True:
+        out.append(f"requires.topology {topology} needs values.{topology}.enabled: true")
+    foreign = sorted(_FOREIGN_VALUE_KEYS & set(values))
+    if foreign:
+        out.append(f"values writes site/deploy-owned keys: {', '.join(foreign)}")
+    model = values.get("model") or {}
+    for key in ("localPath", "gpus"):
+        if key in model:
+            out.append(f"values.model.{key} is not the catalog's to set")
+    for arg in unmounted_paths(variant):
+        out.append(
+            f"{arg} reads a path no mount provides (weights at "
+            f"{model.get('mountPath') or CHART_MODEL_MOUNT}); the engine would not find it"
+        )
     return out
 
 

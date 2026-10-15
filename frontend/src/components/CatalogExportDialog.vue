@@ -1,13 +1,15 @@
 <script setup lang="ts">
-/** Measured runs as a model-catalog version file (catalog.swiss/v1).
+/** Measured runs as model-catalog files (catalog.swiss/v2).
  *
  *  Tick the runs to publish (the campaign's baseline and its winner are
- *  ticked to start), give each a role, name the entry, and the platform
- *  renders `models/<name>/<name>-<version>.yaml`, one variant per run, plus a
- *  metadata.yaml for a model new to the catalog. The server drafts the
- *  metadata; the form adopts the draft so every field can be edited. The file
- *  is validated against the catalog's schema server-side. Nothing is pushed:
- *  download the files and open the pull request against model-catalog.
+ *  ticked to start) and give each a role. The server looks the model up in the
+ *  published catalog: for a model it already has, each run becomes a new
+ *  variant or the next version of a published one, and metadata.yaml gains
+ *  this tuning result; for a new model, the form asks for what its
+ *  metadata.yaml needs (the Hugging Face repo id first) and drafts the rest.
+ *  Every file is checked against the catalog's schemas and rules
+ *  server-side. Nothing is pushed: download the zip, unpack it at the root of
+ *  a model-catalog checkout and open the pull request.
  *
  *  Plugins open it too, with their own runs (`candidates`).
  */
@@ -29,6 +31,8 @@ interface Row extends CatalogCandidate {
   role: string
   /** Variant id override; empty = derived (<engine>-<parallelism>-<card>-<role>). */
   id: string
+  /** The image tag to publish when the run's image was named by digest alone. */
+  imageTag: string
 }
 
 const props = defineProps<{
@@ -48,7 +52,6 @@ const open = computed({
 
 const rows = ref<Row[]>([])
 const name = ref('')
-const version = ref('1.0.0')
 const hf = ref('')
 const displayName = ref('')
 const description = ref('')
@@ -59,22 +62,19 @@ const homepage = ref('')
 const defaultVariant = ref('')
 const includeEnv = ref(true)
 const includeVolumes = ref(false)
-const withMetadata = ref(true)
 /** null = automatic: 90 minutes, raised to 3x the measured load when longer. */
 const startupMinutes = ref<number | null>(null)
 /** Empty = the node label of the card each config was measured on. */
 const gpuProduct = ref('')
-/** The model's latest published version, pasted: the export extends it
- *  (its variants and default kept, the new ones appended, version bumped). */
-const baseEntry = ref('')
-/** A saved report to ship next to the entry; it must compare these runs. */
+/** A saved report comparing exactly these runs; a tuning result needs one. */
 const reportId = ref<number | null>(null)
 const advanced = ref<string[]>([])
 
 const loading = ref(false)
+const downloading = ref(false)
 const error = ref('')
 const preview = ref<CatalogExportPreview | null>(null)
-const tab = ref<'version' | 'metadata'>('version')
+const tab = ref('')
 
 watch(
   () => props.modelValue,
@@ -86,26 +86,27 @@ watch(
       picked: initial.has(c.run_id),
       role: initial.get(c.run_id) ?? '',
       id: '',
+      imageTag: '',
     }))
     for (const field of [name, hf, displayName, description, family, tags, license, homepage]) {
       field.value = ''
     }
-    version.value = '1.0.0'
     gpuProduct.value = ''
-    baseEntry.value = ''
     reportId.value = null
     startupMinutes.value = null
     defaultVariant.value = ''
     advanced.value = []
     preview.value = null
     error.value = ''
-    tab.value = 'version'
+    tab.value = ''
     void load()
   },
 )
 
 const picked = computed(() => rows.value.filter((r) => r.picked))
 const ready = computed(() => picked.value.length > 0)
+/** The form's metadata fields matter only for a model new to the catalog. */
+const isNew = computed(() => !preview.value?.existing)
 
 /** A freshly ticked row gets a role: the baseline if none is picked yet,
  *  otherwise another optimized config. */
@@ -116,16 +117,16 @@ function onTick(row: Row) {
 }
 
 function body() {
-  // The baseline first, then the rest in list order: the order the variants
-  // appear in the file.
+  // The baseline first, then the rest in list order.
   const order = [...picked.value].sort(
     (a, b) => Number(b.role === 'baseline') - Number(a.role === 'baseline'),
   )
   const list = (text: string) => text.split(',').map((s) => s.trim()).filter(Boolean)
   return {
-    variants: order.map((r) => ({ run_id: r.run_id, role: r.role, label: r.label, id: r.id.trim() })),
+    variants: order.map((r) => ({
+      run_id: r.run_id, role: r.role, label: r.label, id: r.id.trim(), image_tag: r.imageTag.trim(),
+    })),
     name: name.value,
-    version: version.value,
     hf: hf.value,
     display_name: displayName.value,
     description: description.value,
@@ -136,10 +137,8 @@ function body() {
     default_variant: defaultVariant.value,
     include_env: includeEnv.value,
     include_volumes: includeVolumes.value,
-    with_metadata: withMetadata.value,
     startup_minutes: startupMinutes.value || null,
     gpu_product: list(gpuProduct.value),
-    base_entry: baseEntry.value,
     report_id: reportId.value || null,
   }
 }
@@ -154,10 +153,10 @@ async function load() {
   try {
     const { data } = await api.post<CatalogExportPreview>('/catalog-export/preview', body())
     preview.value = data
-    // Adopt what the server derived, so the form shows what the file says and
-    // every drafted field can be edited.
+    // Adopt what the server derived, so the form shows what the files say and
+    // every drafted field can be edited. source.hf is never adopted: it is
+    // only suggested, and confirmed by the person.
     if (!name.value) name.value = data.name
-    if (!hf.value) hf.value = data.hf
     if (!displayName.value) displayName.value = data.display_name
     if (!description.value) description.value = data.description
     if (!family.value) family.value = data.family
@@ -165,6 +164,7 @@ async function load() {
     if (defaultVariant.value && !variantIds.value.includes(defaultVariant.value)) {
       defaultVariant.value = ''
     }
+    if (!data.files.some((f) => f.path === tab.value)) tab.value = data.files[0]?.path ?? ''
   } catch (e) {
     error.value = apiErrorText(e, t('catalogExport.failed'))
     preview.value = null
@@ -173,16 +173,33 @@ async function load() {
   }
 }
 
-const variantIds = computed(() => (preview.value?.document?.variants ?? []).map((v) => v.id))
+const variantIds = computed(() => (preview.value?.variants ?? []).map((v) => v.id))
 
-function download(path: string, text: string, type = 'application/yaml') {
-  const blob = new Blob([text], { type })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = path.split('/').pop() || 'entry.yaml'
-  a.click()
-  URL.revokeObjectURL(url)
+function useSuggestion() {
+  hf.value = preview.value?.hf_suggestion ?? ''
+  void load()
+}
+
+function statusText(v: CatalogExportPreview['variants'][number]) {
+  return t(`catalogExport.status.${v.status}`, { version: v.version })
+}
+
+async function download() {
+  downloading.value = true
+  error.value = ''
+  try {
+    const { data } = await api.post('/catalog-export/archive', body(), { responseType: 'blob' })
+    const url = URL.createObjectURL(data as Blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${preview.value?.name || 'model'}-catalog.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    error.value = apiErrorText(e, t('catalogExport.failed'))
+  } finally {
+    downloading.value = false
+  }
 }
 </script>
 
@@ -214,22 +231,24 @@ function download(path: string, text: string, type = 'application/yaml') {
       </el-table-column>
     </el-table>
 
-    <h4>{{ t('catalogExport.entry') }}</h4>
+    <h4>{{ t('catalogExport.model') }}</h4>
+    <el-alert v-if="preview?.existing" type="info" :closable="false" class="note"
+      :title="t('catalogExport.existing', { name: preview.name })" />
     <el-form label-width="150px" size="small" class="form">
       <el-form-item :label="t('catalogExport.name')">
-        <el-input v-model="name" :placeholder="modelName" class="mono" />
+        <el-input v-model="name" :placeholder="modelName" class="mono" :disabled="!isNew" />
       </el-form-item>
-      <el-form-item :label="t('catalogExport.version')">
-        <el-input v-model="version" class="mono short" />
-        <span class="muted tiny hint">{{ t('catalogExport.versionHint') }}</span>
+      <el-form-item v-if="isNew" label="source.hf" required>
+        <el-input v-model="hf" class="mono" :placeholder="preview?.hf_suggestion || 'org/name'" />
+        <el-button v-if="preview?.hf_suggestion && !hf" size="small" link class="hint"
+          @click="useSuggestion">{{ t('catalogExport.useSuggestion') }}</el-button>
+        <div class="muted tiny">{{ t('catalogExport.hfHint') }}</div>
       </el-form-item>
-      <el-form-item :label="t('catalogExport.metadata')">
-        <el-checkbox v-model="withMetadata">{{ t('catalogExport.withMetadata') }}</el-checkbox>
+      <el-form-item :label="t('catalogExport.reportId')">
+        <el-input-number v-model="reportId" :min="1" size="small" :value-on-clear="null" />
+        <span class="muted tiny hint">{{ t('catalogExport.reportIdHint') }}</span>
       </el-form-item>
-      <template v-if="withMetadata">
-        <el-form-item label="source.hf">
-          <el-input v-model="hf" placeholder="org/name" class="mono" />
-        </el-form-item>
+      <template v-if="isNew">
         <el-form-item label="displayName">
           <el-input v-model="displayName" maxlength="128" />
         </el-form-item>
@@ -257,6 +276,8 @@ function download(path: string, text: string, type = 'application/yaml') {
                 <span class="muted tiny id-label">{{ row.label }}</span>
                 <el-input v-model="row.id" size="small" class="mono"
                   :placeholder="t('catalogExport.auto')" />
+                <el-input v-model="row.imageTag" size="small" class="mono tag-input"
+                  :placeholder="t('catalogExport.imageTag')" />
               </div>
             </div>
           </el-form-item>
@@ -276,15 +297,6 @@ function download(path: string, text: string, type = 'application/yaml') {
           <el-form-item label="gpuProduct">
             <el-input v-model="gpuProduct" class="mono" :placeholder="t('catalogExport.gpuProductHint')" />
           </el-form-item>
-          <el-form-item :label="t('catalogExport.baseEntry')">
-            <el-input v-model="baseEntry" type="textarea" :rows="3" class="mono"
-              :placeholder="t('catalogExport.baseEntryHint')" />
-          </el-form-item>
-          <el-form-item :label="t('catalogExport.reportId')">
-            <el-input-number v-model="reportId" :min="1" size="small" :value-on-clear="null"
-              :placeholder="t('catalogExport.auto')" />
-            <span class="muted tiny hint">{{ t('catalogExport.reportIdHint') }}</span>
-          </el-form-item>
         </el-form>
       </el-collapse-item>
     </el-collapse>
@@ -300,26 +312,26 @@ function download(path: string, text: string, type = 'application/yaml') {
       </el-alert>
       <el-alert v-else type="success" :closable="false" class="note"
         :title="t('catalogExport.valid')" />
+
+      <ul class="caveats variants">
+        <li v-for="v in preview.variants" :key="v.id">
+          <span class="mono">{{ v.id }}</span> · {{ statusText(v) }}</li>
+      </ul>
       <template v-if="preview.warnings.length">
         <h4>{{ t('catalogExport.warnings') }}</h4>
         <ul class="caveats"><li v-for="(w, i) in preview.warnings" :key="i">{{ w }}</li></ul>
       </template>
 
       <el-tabs v-model="tab" class="files">
-        <el-tab-pane :label="preview.path" name="version">
+        <el-tab-pane v-for="f in preview.files" :key="f.path" :name="f.path"
+          :label="f.path.split('/').pop()">
           <div class="file-actions">
-            <el-button size="small" link @click="copyText(preview!.text, t('catalogExport.copied'))">
+            <span class="muted tiny mono">{{ f.path }}</span>
+            <el-button size="small" link @click="copyText(f.text, t('catalogExport.copied'))">
               {{ t('common.copy') }}</el-button>
           </div>
-          <pre class="yaml">{{ preview.text }}</pre>
-        </el-tab-pane>
-        <el-tab-pane v-if="preview.metadata_text" :label="preview.metadata_path" name="metadata">
-          <div class="file-actions">
-            <el-button size="small" link
-              @click="copyText(preview!.metadata_text, t('catalogExport.copied'))">
-              {{ t('common.copy') }}</el-button>
-          </div>
-          <pre class="yaml">{{ preview.metadata_text }}</pre>
+          <pre v-if="f.kind !== 'report'" class="yaml">{{ f.text }}</pre>
+          <p v-else class="muted tiny">{{ t('catalogExport.reportFile') }}</p>
         </el-tab-pane>
       </el-tabs>
       <template v-if="preview.provenance?.length">
@@ -334,17 +346,8 @@ function download(path: string, text: string, type = 'application/yaml') {
 
     <template #footer>
       <el-button @click="open = false">{{ t('common.close') }}</el-button>
-      <el-button v-if="preview?.metadata_text"
-        @click="download(preview.metadata_path, preview.metadata_text)">
-        {{ t('catalogExport.downloadMetadata') }}</el-button>
-      <el-button v-if="preview?.report_html"
-        @click="download(preview.report_path, preview.report_html, 'text/html')">
-        {{ t('catalogExport.downloadReport') }}</el-button>
-      <el-button v-if="preview?.validation_text"
-        @click="download(preview.validation_path, preview.validation_text, 'application/json')">
-        {{ t('catalogExport.downloadValidation') }}</el-button>
-      <el-button type="primary" :disabled="!preview || loading"
-        @click="download(preview!.path, preview!.text)">
+      <el-button type="primary" :loading="downloading"
+        :disabled="!preview || loading || !preview.valid" @click="download">
         {{ t('catalogExport.download') }}</el-button>
     </template>
   </el-dialog>
@@ -362,11 +365,13 @@ h4 { margin: 14px 0 6px; font-size: 13px; }
 .ids { display: flex; flex-direction: column; gap: 4px; width: 100%; }
 .id-row { display: flex; align-items: center; gap: 8px; }
 .id-label { min-width: 160px; }
+.tag-input { max-width: 160px; }
 .note { margin: 10px 0 8px; }
 .caveats { margin: 0; padding-left: 18px; font-size: 12.5px; }
 .caveats li { margin: 2px 0; }
+.variants { margin-bottom: 6px; }
 .files { margin-top: 10px; }
-.file-actions { display: flex; justify-content: flex-end; }
+.file-actions { display: flex; justify-content: space-between; align-items: center; }
 .yaml {
   max-height: 380px; overflow: auto; font-size: 12px; line-height: 1.45;
   background: var(--el-fill-color-light); padding: 10px; border-radius: 6px; margin: 0;
