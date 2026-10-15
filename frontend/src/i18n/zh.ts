@@ -361,10 +361,12 @@ const zh: typeof en = {
     copied: '已复制',
     provenance: '各 variant 的来源（写进 pull request 描述，不进文件）',
     next: '下一步：把文件放到 model-catalog 的 models/<name>/ 下，然后提 pull request。'
+      + '从 track 导出时，请同时下载 validation.json，与版本 YAML 一起提交。'
       + '不要提交 index.json：CI 会重新生成，并拒绝修改了它的 pull request。',
     download: '下载 version 文件',
     downloadMetadata: '下载 metadata.yaml',
     downloadReport: '下载报告',
+    downloadValidation: '下载 validation.json',
   },
   baselines: {
     tuneFromThis: '以此为基础调优',

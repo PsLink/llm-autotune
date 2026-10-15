@@ -175,6 +175,16 @@ pushed: download them, put them under `models/<name>/` in model-catalog, and
 open a pull request. The provenance lines (which campaign and run measured
 each variant) are for the pull request description.
 
+When all selected runs belong to tracks, also download the generated
+`<name>-<version>.validation.json` and commit it beside the version YAML.
+It contains each exported variant's original track, source run and role, and
+the SHA-256 of the exact YAML bytes. Catalog CI reads the deployment config
+from the YAML and uses the sidecar to submit new optimized variants to their
+original tracks with the internal validation account; baselines are skipped.
+No manual track mapping is required, and the catalog YAML schema is unchanged.
+If you edit the YAML, regenerate the pair before submitting it. Runs without
+a track still export normally, with a warning that CI routing is unavailable.
+
 ---
 
 ← [Running a campaign](running-campaigns.md) · [User guide](README.md) · Next: [Baselines](baselines.md) →

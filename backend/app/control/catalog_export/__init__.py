@@ -192,6 +192,8 @@ class CatalogExport:
     # Platform ids have no place in a public, immutable file, so this is for
     # the pull request description, not the entry.
     provenance: list[str] = field(default_factory=list)
+    # Final ids, in source order (excludes variants carried over from base_entry).
+    source_variant_ids: list[str] = field(default_factory=list)
 
     @property
     def valid(self) -> bool:
@@ -695,7 +697,9 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
             variant["id"] = f"{base[:60]}-{seen[base]}"
 
     if opts.base_text.strip():
-        return _extend(opts, name, served, sources, variants, warnings, errors)
+        export = _extend(opts, name, served, sources, variants, warnings, errors)
+        export.source_variant_ids = [v["id"] for v in variants]
+        return export
 
     default_id = opts.default_variant
     if not default_id:
@@ -722,6 +726,7 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
         warnings=warnings,
         errors=errors,
         provenance=provenance(sources),
+        source_variant_ids=[v["id"] for v in variants],
     )
 
     if opts.with_metadata:

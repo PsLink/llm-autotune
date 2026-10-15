@@ -71,6 +71,8 @@ class CatalogExportOut(BaseModel):
     # The report file to commit next to the entry, when report_id was given.
     report_path: str = ""
     report_html: str = ""
+    validation_path: str = ""
+    validation_text: str = ""
     # What the form should show when the caller left fields empty.
     name: str
     version: str

@@ -1,6 +1,8 @@
 """model-catalog export: measured configs become one catalog.swiss/v1 version
 file that the catalog's own schema accepts, carrying nothing site-owned."""
 
+import hashlib
+import json
 from itertools import count
 
 import httpx
@@ -18,6 +20,7 @@ from app.control.catalog_export import (
     split_image,
     validate,
 )
+from app.control.catalog_export.validation import validation_file
 from app.control.launch_config import LaunchConfig
 from app.core.auth import create_token
 from app.db.base import Base, get_async_session
@@ -357,6 +360,62 @@ async def test_preview_exports_a_baseline_run_and_a_tuned_run(stack):
         "+20% on the tuning benchmark vs the baseline variant"
         in out["document"]["variants"][1]["description"]
     )
+    assert out["validation_text"] == "", "campaign-only exports cannot invent a track"
+
+
+async def test_preview_exports_validation_from_plugin_track_overlay(stack, monkeypatch):
+    from app import plugins
+    from app.agent.overlay import RunOverlay
+    from app.schemas.agent import RunGroup
+
+    monkeypatch.setattr(plugins, "run_overlay", lambda session, run, campaign: RunOverlay(
+        group=RunGroup(kind="track", slug="original-track")
+    ))
+    http, factory = stack
+    await _seed(factory)
+    res = await http.post("/api/catalog-export/preview", json={"variants": [
+        {"run_id": 101, "role": "baseline", "id": "my-baseline"},
+        {"run_id": 102, "role": "optimized", "id": "my-winner"},
+    ]})
+    assert res.status_code == 200, res.text
+    out = res.json()
+    manifest = json.loads(out["validation_text"])
+    assert out["validation_path"] == out["path"].replace(".yaml", ".validation.json")
+    assert manifest["catalog_file"] == out["path"].rsplit("/", 1)[-1]
+    assert manifest["catalog_sha256"] == hashlib.sha256(out["text"].encode()).hexdigest()
+    assert manifest["variants"] == [
+        {"variant_id": "my-baseline", "track_slug": "original-track",
+         "source_run_id": 101, "role": "baseline"},
+        {"variant_id": "my-winner", "track_slug": "original-track",
+         "source_run_id": 102, "role": "optimized"},
+    ]
+    assert "original-track" not in out["text"]
+
+
+def test_validation_uses_final_ids_and_only_new_sources_when_extending():
+    sources = _pair()
+    for i, source in enumerate(sources):
+        source.origin = {"track_slug": f"track-{i}", "run_id": 100 + i}
+        source.id = "same-id"
+    export = build_catalog_entry(sources, CatalogOptions(name="q"))
+    _, text = validation_file(export, sources)
+    assert [v["variant_id"] for v in json.loads(text)["variants"]] == ["same-id", "same-id-2"]
+    sources[0].id = "new-id"
+    extended = build_catalog_entry([sources[0]], CatalogOptions(name="q", base_text=export.text))
+    path, text = validation_file(extended, [sources[0]])
+    assert path.endswith("q-1.1.0.validation.json")
+    assert [v["variant_id"] for v in json.loads(text)["variants"]] == ["new-id"]
+    assert len(extended.document["variants"]) == 3
+
+
+def test_validation_is_unavailable_for_invalid_or_partially_unassociated_exports():
+    sources = _pair()
+    sources[0].origin = {"track_slug": "original-track", "run_id": 100}
+    export = build_catalog_entry(sources, CatalogOptions(name="q"))
+    assert validation_file(export, sources) == ("", "")
+    assert any("original track" in w for w in export.warnings)
+    export.errors.append("invalid")
+    assert validation_file(export, sources) == ("", "")
 
 
 @pytest.mark.parametrize(

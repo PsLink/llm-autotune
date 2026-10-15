@@ -501,6 +501,9 @@ export interface CatalogExportPreview {
   /** The report to commit next to the entry, when report_id was given. */
   report_path: string
   report_html: string
+  /** CI routing sidecar, bound to the exact version YAML by SHA-256. */
+  validation_path: string
+  validation_text: string
   name: string
   version: string
   hf: string
