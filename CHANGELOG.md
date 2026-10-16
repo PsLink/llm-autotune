@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Account and API keys in the user menu open again.** Clicking them did
+  nothing: the menu's links cancel their own click so the menu can navigate,
+  and Element Plus's dropdown ignores a cancelled click. The links navigate
+  themselves now (a middle or Ctrl/Cmd-click still opens a new tab).
 - **The API keys page is translated**; it was English only. The account page's
   link to it no longer sits indented, and the help icons no longer warn in the
   browser console.
