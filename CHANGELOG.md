@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Check an API key from the API keys page**: the page shows the one call
+  that tells you who a key acts as (`GET /api/auth/me` with `X-API-Key`), ready
+  to copy, and a field to try a key from the page. The new-key dialog shows the
+  same call with the new key. `/api/auth/me` now answers for an API key as well
+  as a signed-in browser.
+- **Plugin slots on the Reports page**: `reports.actions` (header buttons) and
+  `reports.sections` (above the list), so a plugin can write reports from there.
+
+### Fixed
+
+- **The API keys page is translated**; it was English only. The account page's
+  link to it no longer sits indented, and the help icons no longer warn in the
+  browser console.
+- **The dev server's API proxy matches `/api/` only**, as nginx does: `/api`
+  also caught the `/api-keys` page, which then loaded as an API 404.
+
 ### Changed
 
 - **Export to model catalog writes the catalog's v2 layout**

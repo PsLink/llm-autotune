@@ -72,8 +72,10 @@ export default defineConfig({
     proxy: {
       // Overridable because "localhost" means the vite process's host: on a
       // laptop that is the dev API, inside the dev compose container it must
-      // be the api service (deploy/docker-compose.dev.yml sets it).
-      '/api': {
+      // be the api service (deploy/docker-compose.dev.yml sets it). `/api/`
+      // with its slash, as nginx has it: a bare `/api` prefix also sent the
+      // /api-keys page to the API.
+      '/api/': {
         target: process.env.VITE_API_PROXY || 'http://localhost:28100',
         changeOrigin: true,
       },
