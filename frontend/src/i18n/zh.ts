@@ -20,7 +20,8 @@ const zh: typeof en = {
     title: '评测报告',
     subtitle: '根据已完成的运行写出的性能报告：一个 baseline、为它选定的若干优化尝试，'
       + '以及平台当时算出的对比数据快照。',
-    empty: '还没有报告。Agent 通过 agent API 保存（POST /api/agent/v1/reports），'
+    empty: '还没有报告',
+    how: '报告通过 agent API 保存（POST /api/agent/v1/reports），由 agent 或生成报告的插件提交；'
       + '见 docs/api/agent-api.md。',
     baseline: 'Baseline 运行',
     attempts: '优化尝试',

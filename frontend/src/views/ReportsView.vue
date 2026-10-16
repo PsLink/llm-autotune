@@ -4,6 +4,7 @@
  *  from here; both get `reload` to refresh the list. */
 import { onMounted, ref } from 'vue'
 import { api, type AgentReport } from '../api/client'
+import InfoHint from '../components/InfoHint.vue'
 import PluginSlot from '../components/PluginSlot.vue'
 import { useI18n } from '../i18n'
 import { useFirstLoad } from '../utils/load'
@@ -26,7 +27,9 @@ onMounted(first.run)
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">{{ t('reports.title') }}</h1>
+        <h1 class="page-title">{{ t('reports.title') }}
+          <InfoHint :width="380">{{ t('reports.how') }}</InfoHint>
+        </h1>
         <span class="muted">{{ t('reports.subtitle') }}</span>
       </div>
       <div class="actions"><PluginSlot name="reports.actions" :props="{ reload: load }" /></div>

@@ -14,8 +14,9 @@ export default {
     title: 'Reports',
     subtitle: 'Performance reports written from finished runs: one baseline, the attempts '
       + 'chosen for it, and the platform\'s own comparison frozen alongside.',
-    empty: 'No reports yet. Agents save them through the agent API '
-      + '(POST /api/agent/v1/reports); see docs/api/agent-api.md.',
+    empty: 'No reports yet',
+    how: 'A report is saved through the agent API (POST /api/agent/v1/reports), by an agent '
+      + 'or by a plugin that writes reports; see docs/api/agent-api.md.',
     baseline: 'Baseline run',
     attempts: 'Attempts',
     campaign: 'Campaign',
