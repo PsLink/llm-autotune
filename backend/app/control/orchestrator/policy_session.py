@@ -26,7 +26,12 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.control.launch.base import DeploymentHandle, WorkloadSpec, WorkloadState
+from app.control.launch.base import (
+    DeploymentHandle,
+    LaunchDeferred,
+    WorkloadSpec,
+    WorkloadState,
+)
 from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
 from app.control.orchestrator.container_logs import clip
 from app.control.orchestrator.lifecycle import as_utc, now
@@ -449,6 +454,24 @@ class PolicySessionEngine:
                 "reserved machine vanished before launch", failure_class="launch",
             )
             return
+
+        # A cold policy image pulls in the background first: the session stays
+        # pending (and mints no key) until the image is on the machine.
+        try:
+            self.sup._driver_for(self.sup._machine_info(target)).ensure_image(
+                self.sup._machine_info(target), policy.image
+            )
+        except LaunchDeferred as exc:
+            # The policy has not started, so its message line is free to say why.
+            session.policy_message = str(exc)[:2000]
+            return
+        except RuntimeError as exc:
+            self._terminate(
+                db, session, PolicySessionStatus.FAILED, str(exc)[:2000],
+                failure_class="launch",
+            )
+            return
+        session.policy_message = ""
 
         token, prefix, key_hash = apikeys.mint()
         # The key rides the MAIN transaction, alongside the session row it points

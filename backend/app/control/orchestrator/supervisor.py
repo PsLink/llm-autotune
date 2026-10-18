@@ -24,6 +24,7 @@ from app.control.baseline import resolve_baseline
 from app.control.launch import (
     DeploymentDriver,
     DeploymentState,
+    LaunchDeferred,
     LaunchSpec,
     MachineInfo,
     NodeAssignment,
@@ -1732,6 +1733,11 @@ class Supervisor:
         if run.status == RunStatus.PENDING.value:
             try:
                 handle, launch_commands = driver.launch_nodes(spec)
+            except LaunchDeferred as exc:
+                # On its way (an image still pulling onto the machine): the run
+                # keeps its cards and says why; the next tick tries again.
+                self._note_placement(session, run, str(exc))
+                return
             except RuntimeError as exc:
                 # e.g. port already in use, docker run rejected — classify from
                 # the error text so the search sees a meaningful failure class.

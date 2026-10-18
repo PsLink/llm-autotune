@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A machine reached over ssh no longer fails a run on an image it has not
+  pulled yet.** `docker run` pulled it inside the launch command's 180 s, and a
+  multi-GB image did not make it. The pull now runs in the background on the
+  machine (one per image); the run stays pending with "pulling <image> onto
+  <host>" as its reason and launches once the image is there. A pull that fails,
+  or runs past `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` (45), fails the run with the pull's own
+  output. Policy sessions wait the same way before they start.
+
 - Catalog export: a run whose image was named by digest only exported no
   image, so the chart's default engine would have deployed; it now asks for
   the tag. `source.hf` is no longer written from a guess off the weights path:

@@ -19,6 +19,7 @@ restarts. Container names deliberately do NOT start with "sglang"/"vllm" so
 production cleanup scripts never mistake autotune containers for theirs.
 """
 
+import hashlib
 import json
 import logging
 import shlex
@@ -32,6 +33,7 @@ from app.control.launch.base import (
     DeploymentDriver,
     DeploymentHandle,
     DeploymentState,
+    LaunchDeferred,
     LaunchSpec,
     WorkloadSpec,
     WorkloadState,
@@ -328,6 +330,50 @@ class SshDockerDriver(DeploymentDriver):
     def _q(parts: list[str]) -> str:
         return " ".join(shlex.quote(part) for part in parts)
 
+    def ensure_image(self, machine, image: str) -> None:
+        """Make sure `image` is on the machine before `docker run` needs it.
+
+        A cold multi-GB image does not pull inside the 180 s a launch command
+        gets, and the tick cannot wait the minutes it takes. So the pull runs
+        detached on the machine, one per image, and the launch is deferred
+        (LaunchDeferred) until it is there. A pull that died, or ran past
+        `image_pull_timeout_minutes`, fails the launch with its own output.
+        """
+        if not image:
+            return
+        base = f"{REMOTE_BASE}/pull-{hashlib.sha1(image.encode()).hexdigest()[:12]}"
+        q = shlex.quote(image)
+        script = (
+            f"if docker image inspect {q} >/dev/null 2>&1; then echo present; exit 0; fi; "
+            f"if [ -f {base}.pid ] && kill -0 \"$(cat {base}.pid)\" 2>/dev/null; then "
+            f"echo pulling $(( $(date +%s) - $(stat -c %Y {base}.pid) )); exit 0; fi; "
+            f"if [ -f {base}.pid ]; then echo failed; rm -f {base}.pid; tail -c 1500 {base}.log; "
+            f"exit 0; fi; "
+            f"mkdir -p {REMOTE_BASE} && "
+            f"(nohup docker pull {q} > {base}.log 2>&1 & echo $! > {base}.pid) && echo started"
+        )
+        out = (self._ssh(machine, script, timeout=60).stdout or "").strip()
+        state, _, rest = out.partition("\n")
+        word, _, seconds = state.partition(" ")
+        if word == "started":
+            raise LaunchDeferred(f"pulling {image} onto {machine.host}")
+        if word == "pulling":
+            limit = get_settings().image_pull_timeout_minutes * 60
+            waited = int(seconds) if seconds.isdigit() else 0
+            if waited > limit:
+                self._ssh(machine, f"kill \"$(cat {base}.pid)\" 2>/dev/null; rm -f {base}.pid")
+                raise RuntimeError(
+                    f"image_pull: {image} did not finish pulling onto {machine.host} "
+                    f"in {limit // 60} min"
+                )
+            raise LaunchDeferred(
+                f"pulling {image} onto {machine.host} ({waited // 60} min so far)"
+            )
+        if word == "failed":
+            raise RuntimeError(
+                f"image_pull: pulling {image} onto {machine.host} failed: {rest.strip()[-1500:]}"
+            )
+
     # -- DeploymentDriver ----------------------------------------------------
 
     def launch(self, spec: LaunchSpec) -> tuple[DeploymentHandle, str]:
@@ -350,6 +396,7 @@ class SshDockerDriver(DeploymentDriver):
         self._dump_remote_logs(spec.machine, spec.container_name)
         self._ssh(spec.machine, f"docker rm -f {spec.container_name} 2>/dev/null || true")
 
+        self.ensure_image(spec.machine, spec.image)
         docker_cmd = render_docker_command(spec)
         cache_dir = f"{REMOTE_BASE}/run-{spec.run_id}/cache"
         launch_command = self._q(docker_cmd)
@@ -630,6 +677,7 @@ class SshDockerDriver(DeploymentDriver):
         self._dump_remote_logs(spec.machine, spec.name)
         self._ssh(spec.machine, f"docker rm -f {spec.name} 2>/dev/null || true")
 
+        self.ensure_image(spec.machine, spec.image)
         launch_command = self._q(render_workload_command(spec))
         result = self._ssh(spec.machine, launch_command, timeout=180)
         if result.returncode != 0:
