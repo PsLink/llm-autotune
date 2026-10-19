@@ -95,6 +95,17 @@ def policy_volumes(campaign, policy) -> dict[str, str]:
     return volumes
 
 
+def redact_secrets(command: str, token: str, secrets: dict[str, str]) -> str:
+    """A launch command fit for the UI and the audit trail: the session token
+    and every secret env value replaced. Longest first, so a secret that
+    contains another is never half-redacted."""
+    out = command.replace(token, "atk_[redacted]") if token else command
+    for name, value in sorted(secrets.items(), key=lambda item: -len(item[1])):
+        if value:
+            out = out.replace(value, f"[{name} redacted]")
+    return out
+
+
 def policy_log_path(run_log_dir: str, session_id: int) -> str:
     """Where a policy container's captured stdout+stderr lives — one file per
     session, so the capture (worker) and the reader (API) agree without a DB
@@ -492,6 +503,7 @@ class PolicySessionEngine:
         )
 
         volumes = policy_volumes(campaign, policy)
+        secrets = policy.secret_env_values()
         spec = WorkloadSpec(
             name=session.container_name,
             machine=self.sup._machine_info(target),
@@ -503,6 +515,7 @@ class PolicySessionEngine:
                 # before it exits. The policy's own env can still set it.
                 "PYTHONUNBUFFERED": "1",
                 **(policy.env or {}),
+                **secrets,
                 "AUTOTUNE_API_URL": settings.public_api_url,
                 "AUTOTUNE_API_KEY": token,
                 "AUTOTUNE_SESSION_ID": str(session.id),
@@ -533,7 +546,7 @@ class PolicySessionEngine:
         # The exact command minus the credential: this lands in the UI and the
         # audit trail, and a session token in an event payload outlives the
         # session it was scoped to.
-        session.launch_command = launch_command.replace(token, "atk_[redacted]")
+        session.launch_command = redact_secrets(launch_command, token, secrets)
         session.started_at = now()
         session.status = PolicySessionStatus.STARTING.value
         target.state = MachineState.RESERVED.value

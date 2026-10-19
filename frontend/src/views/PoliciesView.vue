@@ -34,6 +34,9 @@ function empty() {
     needs_model: false,
     ports: 4,
     env_text: toYaml({}),
+    // Secret variables (an LLM API key): name + value. A stored one comes back
+    // with its name only; leaving its value blank keeps it.
+    secrets: [] as { key: string; value: string; stored: boolean }[],
   }
 }
 const form = ref(empty())
@@ -73,6 +76,7 @@ function openEdit(p: Policy) {
     needs_model: p.needs_model ?? true,
     ports: p.ports,
     env_text: toYaml(p.env ?? {}),
+    secrets: (p.secret_env_keys ?? []).map((key) => ({ key, value: '', stored: true })),
   }
   advanced.value = []
   editorOpen.value = true
@@ -81,8 +85,14 @@ function openEdit(p: Policy) {
 async function save() {
   busy.value = true
   try {
-    const { env_text, ...rest } = form.value
-    const body = { ...rest, env: fromYaml<Record<string, string>>(env_text, 'Environment') ?? {} }
+    const { env_text, secrets, ...rest } = form.value
+    const secret_env: Record<string, string> = {}
+    for (const s of secrets) if (s.key.trim()) secret_env[s.key.trim()] = s.value
+    const body = {
+      ...rest,
+      env: fromYaml<Record<string, string>>(env_text, 'Environment') ?? {},
+      secret_env,
+    }
     if (editingId.value === null) await api.post('/policies', body)
     else await api.put(`/policies/${editingId.value}`, body)
     editorOpen.value = false
@@ -217,6 +227,27 @@ onMounted(first.run)
             <el-form-item label="Environment (YAML)">
               <el-input v-model="form.env_text" type="textarea" :rows="3" class="mono" />
             </el-form-item>
+            <el-form-item>
+              <template #label>
+                <span>Secret variables</span>
+                <InfoHint :width="340">
+                  For credentials, such as an agent policy's LLM API key. Stored encrypted,
+                  never shown again, and hidden from the container's launch command. The
+                  environment above is visible to everyone who can open this page.
+                </InfoHint>
+              </template>
+              <div class="secrets">
+                <div v-for="(s, i) in form.secrets" :key="i" class="secret-row">
+                  <el-input v-model="s.key" placeholder="NAME" class="mono" :disabled="s.stored" />
+                  <el-input v-model="s.value" type="password" show-password class="mono"
+                    :placeholder="s.stored ? 'stored — leave blank to keep' : 'value'" />
+                  <el-button link type="danger" @click="form.secrets.splice(i, 1)">Remove</el-button>
+                </div>
+                <el-button link type="primary"
+                  @click="form.secrets.push({ key: '', value: '', stored: false })">
+                  Add a secret</el-button>
+              </div>
+            </el-form-item>
           </el-collapse-item>
         </el-collapse>
       </el-form>
@@ -232,6 +263,15 @@ onMounted(first.run)
 </template>
 
 <style scoped>
+.secrets {
+  width: 100%;
+}
+.secret-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+  gap: 8px;
+  margin-bottom: 6px;
+}
 .header-row {
   display: flex;
   justify-content: space-between;

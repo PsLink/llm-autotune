@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Policy contract 1.3: a policy can see what happened, and is told what it
+  may not change.** For its own launches and benchmarks a policy can now read
+  the engine log (`GET /launches/{id}/log`, with `tail`/`grep`/`context`), the
+  environment the engine ran (`/launches/{id}/environment`) and the full
+  benchmark results, every concurrency level included
+  (`/benchmarks/{id}/results`, `/results/raw`). `POST /configs/check` is a dry
+  run that answers what a launch would meet without spending one. The manifest
+  carries `policy.params`, a campaign's own knobs for its policy (set under
+  Advanced in the campaign form), and `services.diagnostics`.
+- **Forbidden parameters for policy campaigns.** The benchmarks measure speed,
+  not answers, so by default a policy may not change the flags that change
+  what a deployment returns: KV-cache and weight precision, context length,
+  chat template, parsers, default sampling, tokenizer. It may keep the
+  campaign's own value, and anything the campaign's search space sweeps is
+  allowed. The list is editable per campaign (Advanced in the campaign form).
+- **Every policy config must round-trip through a command line**: rendered to
+  engine arguments and parsed back, it must come out the same. A list or an
+  object value, an empty string, or a value starting with `--` is refused
+  before a launch is spent on it. Refused configs are kept in the campaign's
+  activity log.
+- **Secret variables for a policy** (Policies page, `secret_env` on
+  `/api/policies`): for credentials such as an agent policy's LLM API key.
+  Stored encrypted, never returned (only their names, `secret_env_keys`),
+  passed to the container, and redacted from its launch command.
 - **Check an API key from the API keys page**: the page shows the one call
   that tells you who a key acts as (`GET /api/auth/me` with `X-API-Key`), ready
   to copy, and a field to try a key from the page. The new-key dialog shows the
@@ -103,6 +127,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant without a role `other` rather than `optimized`, and hashes each
   variant file's content instead of its bytes, so the catalog's formatting does
   not break it.
+
+### Security
+
+- **A policy's environment no longer has to hold credentials.** Its `env` is
+  shown on the Policies page and was written into the container's launch
+  command, which the session page displays; anything secret now belongs in
+  `secret_env`.
 
 ## [0.3.0] - 2026-10-15
 

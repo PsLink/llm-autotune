@@ -11,19 +11,28 @@ handler:
     timestamp it honours; `policy_sessions.status` is never written here.
   * Nothing a policy sends is silently rewritten. Configs are canonicalized
     (base merged, inactive params pruned) and echoed back; out-of-space
-    parameters become recorded deviations, not rejections; the only 422s are
-    safety (the same validate_config the platform's own expansion faces).
+    parameters become recorded deviations, not rejections. The only 422s are
+    safety (the same validate_config the platform's own expansion faces), a
+    forbidden parameter changed, and a value that cannot round-trip through a
+    command line — all three answered in advance by POST /configs/check.
 """
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.loader import load_run
+from app.agent.parts import environment_part, results_part
 from app.control.baseline import resolve_baseline
+from app.control.engine_command import PLACEMENT_FLAGS, round_trip_problems
+from app.control.engines.base import render_args
+from app.control.engines.flags import known_flags, normalize_args
 from app.control.orchestrator.policy_lifecycle import (
     PENDING_CONTENDER_STATES,
     command_for,
@@ -33,7 +42,7 @@ from app.control.orchestrator.policy_lifecycle import (
 )
 from app.control.search.base import CandidateConfig
 from app.control.search.space import deviations as space_deviations
-from app.control.search.space import prune_inactive
+from app.control.search.space import forbidden_hits, prune_inactive
 from app.control.search.validation import ValidationContext, cards_used, validate_config
 from app.core.auth import PolicyCaller, get_policy_session
 from app.core.config import get_settings
@@ -60,11 +69,16 @@ from app.db.models import (
 )
 from app.hardware import is_node_pool
 from app.objective import direction, redlines, target_metric
+from app.reporting.run_log import read_run_log
+from app.schemas.agent import EnvironmentPart, ResultsPart
 from app.schemas.policy import (
     CONTRACT_VERSION,
     BenchmarkOut,
     BenchmarkSuite,
     BenchmarkSummary,
+    ConfigCheckIn,
+    ConfigCheckOut,
+    ConfigProblem,
     ContenderOut,
     ContendersEcho,
     ContendersPut,
@@ -140,23 +154,35 @@ def _canonical(config: dict[str, Any], campaign: Campaign) -> dict[str, Any]:
     return prune_inactive(merged, space)
 
 
-def _reject_placement(config: dict[str, Any]) -> None:
-    from app.control.engine_command import PLACEMENT_FLAGS
-
-    offending = sorted(set(config) & set(PLACEMENT_FLAGS))
-    if offending:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"placement is the platform's: remove {', '.join(offending)}",
-        )
-
-
-def _validated(
+def _config_problems(
     config: dict[str, Any], campaign: Campaign, machine: Machine | None
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Canonical config + deviations, or a 422 for the safety failures."""
-    _reject_placement(config)
+) -> tuple[dict[str, Any], list[ConfigProblem]]:
+    """The canonical config, and every reason a launch of it would be refused.
+
+    Shared by the refusals (`_validated`) and the dry run (`POST
+    /configs/check`), so the two can never disagree about a config.
+    """
+    problems = [
+        ConfigProblem(
+            kind="placement", param=key,
+            message=f"{key} is placement, which the platform sets: remove it",
+        )
+        for key in sorted(set(config) & set(PLACEMENT_FLAGS))
+    ]
     canonical = _canonical(config, campaign)
+    for hit in forbidden_hits(
+        canonical, campaign.search_space or {}, settings_of(campaign).forbidden(),
+        campaign.engine,
+    ):
+        problems.append(ConfigProblem(
+            kind="forbidden", param=hit["param"],
+            message=f"{hit['param']} is forbidden for this campaign (matches "
+            f"{hit['pattern']!r}): leave it at the campaign's value",
+        ))
+    for found in round_trip_problems(
+        {k: v for k, v in canonical.items() if k not in PLACEMENT_FLAGS}, campaign.engine
+    ):
+        problems.append(ConfigProblem(**found))
     error = validate_config(
         canonical,
         ValidationContext(
@@ -164,8 +190,43 @@ def _validated(
         ),
     )
     if error:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, error)
+        problems.append(ConfigProblem(kind="safety", message=error))
+    return canonical, problems
+
+
+def _validated(
+    config: dict[str, Any], campaign: Campaign, machine: Machine | None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Canonical config + deviations, or a 422 saying everything that is wrong
+    with it: placement, a forbidden parameter, a value that cannot round-trip
+    through a command line, or a safety failure."""
+    canonical, problems = _config_problems(config, campaign, machine)
+    if problems:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(p.message for p in problems)
+        )
     return canonical, space_deviations(canonical, campaign.search_space or {})
+
+
+async def _validated_or_audit(
+    db: AsyncSession,
+    caller: PolicyCaller,
+    config: dict[str, Any],
+    campaign: Campaign,
+    machine: Machine | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """`_validated`, with a refusal kept in the campaign's activity log: a
+    refused config never becomes a trial, so without this the only trace of
+    what a policy tried and was told no is the policy's own log."""
+    try:
+        return _validated(config, campaign, machine)
+    except HTTPException as exc:
+        _audit(
+            db, caller, "policy_config_refused",
+            payload={"config": config, "reason": str(exc.detail)[:1000]},
+        )
+        await db.commit()
+        raise
 
 
 async def _live_session_runs(db: AsyncSession, session: PolicySession) -> list[Run]:
@@ -474,6 +535,7 @@ async def manifest(
             "name": policy.name if policy else "",
             "image": policy.image if policy else "",
             "version": policy.version if policy else "",
+            "params": dict(knobs.params),
         },
         model=ManifestModel(
             engine=campaign.engine,
@@ -499,6 +561,7 @@ async def manifest(
         ),
         objective={SCREEN: _objective(SCREEN), VERIFY: _objective(VERIFY)},
         search_space=campaign.search_space or {},
+        space_policy={"deviations": "allowed_if_declared", "forbidden": knobs.forbidden()},
         production=production,
         time=ManifestTime(
             started_at=session.started_at,
@@ -524,6 +587,7 @@ async def manifest(
                 )
             },
             state=True,
+            diagnostics=True,
         ),
         prior=prior,
     )
@@ -692,7 +756,7 @@ async def request_launch(
         await db.commit()
         return _launch_out(existing, await db.get(Candidate, existing.candidate_id))
 
-    canonical, dev = _validated(body.engine_args, campaign, machine)
+    canonical, dev = await _validated_or_audit(db, caller, body.engine_args, campaign, machine)
     needed = cards_used(canonical)
     # A machine with no cards (a CPU-only slice: kind, the demo's mock
     # engine) gives the session none, and its launches ask for none whatever
@@ -853,7 +917,7 @@ async def bench_external(
         return await _benchmark_out(db, existing, await db.get(Candidate, existing.candidate_id))
 
     _require_self_serving_is_reachable(machine)
-    canonical, dev = _validated(body.engine_args, campaign, machine)
+    canonical, dev = await _validated_or_audit(db, caller, body.engine_args, campaign, machine)
     candidate = await _make_candidate(db, campaign, canonical, dev)
     run = Run(
         campaign_id=campaign.id,
@@ -947,6 +1011,130 @@ async def cancel_benchmark(
         )
     await db.commit()
     return await _benchmark_out(db, run, await db.get(Candidate, run.candidate_id))
+
+
+# -- diagnostics (1.3) -----------------------------------------------------------------
+
+
+@router.post("/configs/check", response_model=ConfigCheckOut)
+async def check_config(
+    body: ConfigCheckIn,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Everything a launch of this config would meet — refusals, the canonical
+    echo, the rendered command, catalog warnings, deviations — without
+    spending a launch. Never 422s: the answer is the point."""
+    _session, campaign, machine = await _context(db, caller)
+    canonical, problems = _config_problems(body.engine_args, campaign, machine)
+    known = known_flags(campaign.engine)
+    normalized, _ = normalize_args(campaign.engine, canonical)
+    warnings = [
+        f"{key} is not in the platform's {campaign.engine} flag catalog — the engine "
+        "may still accept it; a typo fails only at launch"
+        for key in sorted(normalized)
+        if known and key not in known
+    ]
+    command: list[str] = []
+    if not any(p.kind in ("not_renderable", "bad_key") for p in problems):
+        command = render_args(canonical, campaign.engine)
+    return ConfigCheckOut(
+        ok=not problems,
+        config=canonical,
+        cards=cards_used(canonical),
+        command=command,
+        problems=problems,
+        warnings=warnings,
+        deviations=space_deviations(canonical, campaign.search_space or {}),
+    )
+
+
+def _filter_log(text: str, grep: str | None, context: int, tail: int) -> str:
+    """The last `tail` lines of a log, or of the lines matching `grep` (a
+    case-insensitive regex, or a plain substring when it is not one) with
+    `context` lines either side."""
+    lines = text.splitlines()
+    if grep:
+        try:
+            pattern = re.compile(grep, re.IGNORECASE)
+            hit = pattern.search
+        except re.error:
+            needle = grep.lower()
+
+            def hit(line: str) -> bool:
+                return needle in line.lower()
+
+        keep: set[int] = set()
+        for index, line in enumerate(lines):
+            if hit(line):
+                keep.update(range(max(0, index - context), min(len(lines), index + context + 1)))
+        picked: list[str] = []
+        previous = -2
+        for index in sorted(keep):
+            if index != previous + 1 and picked:
+                picked.append("--")
+            picked.append(lines[index])
+            previous = index
+        lines = picked
+    return "\n".join(lines[-tail:])
+
+
+@router.get("/launches/{run_id}/log", response_class=PlainTextResponse)
+async def launch_log(
+    run_id: int,
+    tail: int = Query(default=500, ge=1, le=20000),
+    grep: str | None = Query(default=None, max_length=200),
+    context: int = Query(default=0, ge=0, le=50),
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """The engine's log: live from its container while it runs, the saved copy
+    after. Startup errors, OOM traces and the engine's own throughput lines
+    are here — the evidence a failed or slow launch leaves."""
+    run = await _session_run(db, caller, run_id, RunKind.POLICY_LAUNCH.value)
+    return _filter_log(await read_run_log(db, run), grep, context, tail)
+
+
+@router.get("/launches/{run_id}/environment", response_model=EnvironmentPart)
+async def launch_environment(
+    run_id: int,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """What the launch actually ran on: engine, torch and CUDA versions, image
+    digest, card. Recorded once the engine is up; fill a contender's
+    `launch_spec.environment` from it to make its verdict promotable."""
+    run = await _session_run(db, caller, run_id, RunKind.POLICY_LAUNCH.value)
+    bundle = await load_run(db, run.id)
+    return environment_part(bundle)
+
+
+@router.get("/benchmarks/{run_id}/results", response_model=ResultsPart)
+async def benchmark_results(
+    run_id: int,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """The benchmark in full: every scenario, every concurrency level, latency
+    percentiles, the best level that met the gate. `status` says whether it is
+    measured yet."""
+    run = await _session_run(db, caller, run_id, RunKind.EXTERNAL.value)
+    bundle = await load_run(db, run.id)
+    return results_part(bundle)
+
+
+@router.get("/benchmarks/{run_id}/results/raw")
+async def benchmark_results_raw(
+    run_id: int,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """The benchmark platform's own result payload, exactly as harvested."""
+    run = await _session_run(db, caller, run_id, RunKind.EXTERNAL.value)
+    bundle = await load_run(db, run.id)
+    if bundle is None or bundle.result is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"benchmark {run_id} has no result yet")
+    return bundle.result.raw or {}
 
 
 # -- contenders ---------------------------------------------------------------------

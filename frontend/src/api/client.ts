@@ -842,6 +842,8 @@ export interface Policy {
   /** Mount the campaign's weights at /model. */
   needs_model: boolean
   env: Record<string, string>
+  /** Names of the encrypted secret variables; their values are never returned. */
+  secret_env_keys?: string[]
   ports: number
   created_at: string | null
 }

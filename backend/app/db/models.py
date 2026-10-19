@@ -1,6 +1,7 @@
 """Core tables. Enum values are stored as plain strings (native str enums) so
 migrations stay trivial while states are still typed in code."""
 
+import json
 from datetime import datetime
 from enum import StrEnum
 
@@ -1261,8 +1262,14 @@ class Policy(Base):
     # happens to hold the weights. Defaults true so every policy registered
     # before this field keeps the mount it was launched with.
     needs_model: Mapped[bool] = mapped_column(Boolean, default=True)
-    # Static env for the container (e.g. an LLM API key for an agent policy).
+    # Static env for the container, shown on the Policies page and in the
+    # container's launch command — nothing secret belongs here.
     env: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    # Env that IS secret (an agent policy's LLM API key): one encrypted JSON
+    # object (core/secrets.py), merged into the container's env at launch and
+    # redacted from its launch command. Never returned by the API; only its
+    # keys are (`secret_env_keys`).
+    secret_env: Mapped[str] = mapped_column(Text, default="", server_default="")
     # How many host ports a session should reserve for it.
     ports: Mapped[int] = mapped_column(Integer, default=4)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -1271,6 +1278,35 @@ class Policy(Base):
     )
 
     owner: Mapped[User] = relationship()
+
+    def secret_env_values(self) -> dict[str, str]:
+        """The decrypted secret env; {} when there is none or it will not
+        decrypt (a rotated key reads as absent, never as an error)."""
+        from app.core.secrets import decrypt_secret
+
+        text = decrypt_secret(self.secret_env or "")
+        if not text:
+            return {}
+        try:
+            values = json.loads(text)
+        except ValueError:
+            return {}
+        return {str(k): str(v) for k, v in values.items()} if isinstance(values, dict) else {}
+
+    @property
+    def secret_env_keys(self) -> list[str]:
+        return sorted(self.secret_env_values())
+
+    def set_secret_env(self, values: dict[str, str]) -> None:
+        """Replace the secret env; a key given an empty value keeps what is
+        stored for it (so a form can show keys without their values), and a
+        key left out is removed."""
+        from app.core.secrets import encrypt_secret
+
+        stored = self.secret_env_values()
+        merged = {k: (v if v != "" else stored.get(k, "")) for k, v in values.items()}
+        merged = {k: v for k, v in merged.items() if v != ""}
+        self.secret_env = encrypt_secret(json.dumps(merged, sort_keys=True)) if merged else ""
 
 
 class PolicySession(Base):

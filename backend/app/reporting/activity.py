@@ -134,6 +134,9 @@ _DESCRIBE: dict[str, Callable[[Event, dict], str]] = {
     "policy_launch_requested": lambda e, p: (
         f"policy asked for run {e.run_id}{_gpus(p)}: {_config(p.get('config'))}"
     ),
+    "policy_config_refused": lambda e, p: (
+        f"refused a policy config: {p.get('reason', '')} — {_config(p.get('config'))}"
+    ),
     "policy_bench_requested": lambda e, p: (
         f"policy asked to benchmark run {p.get('of_launch', '?')} (run {e.run_id})"
     ),

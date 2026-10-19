@@ -64,6 +64,8 @@ const verifyModule = ref('')
 /** Registered policy containers. Picking one in the Strategy select makes this
  *  a policy-as-code campaign: the container searches, the platform judges. */
 const policies = ref<Policy[]>([])
+/** The parameters a policy may not change when a campaign keeps the default. */
+const forbiddenDefault = ref<string[]>([])
 const selectedSpaceId = ref<number | null>(null)
 const selectedObjectiveId = ref<number | null>(null)
 const verifyObjectiveId = ref<number | null>(null)
@@ -74,6 +76,7 @@ const advancedNames = ref<string[]>([]) // 'split' — the two-stage benchmark
 const modelAdvanced = ref<string[]>([])
 const machinesAdvanced = ref<string[]>([])
 const searchAdvanced = ref<string[]>([])
+const policyAdvanced = ref<string[]>([])
 
 const form = ref({
   name: '',
@@ -103,6 +106,13 @@ const form = ref({
   policy_max_contenders: 2,
   // Timings an imported campaign pinned, carried through untouched.
   policy_pinned: {} as Record<string, number>,
+  // Parameters the policy may not change. Off = the platform's default list
+  // (flags that change answers rather than speed); on = this list, one glob
+  // per line, where an empty list forbids nothing.
+  policy_forbidden_custom: false,
+  policy_forbidden_text: '',
+  // Knobs for the policy itself, handed to it verbatim (YAML).
+  policy_params_text: '',
   confirm_top_k: 0,
   confirm_repeats: 3,
   // The expensive second stage. Off by default: it is only worth turning on
@@ -281,6 +291,31 @@ const preflight = ref<{ machines: PreflightMachine[]; ok: boolean; note: string 
  *  missing model path is only discovered after the image pulls and the engine
  *  starts opening weights — twenty minutes in, on a box whose production
  *  service has already been torn down to make room. */
+/** A policy campaign's settings: the finalist count, anything an imported
+ *  campaign pinned, and — only when set here — its own forbidden list and the
+ *  policy's knobs. Throws YamlError on a malformed knobs block. */
+function policySettings(): Record<string, unknown> {
+  const settings: Record<string, unknown> = {
+    ...form.value.policy_pinned,
+    max_contenders: form.value.policy_max_contenders,
+  }
+  if (form.value.policy_forbidden_custom) {
+    settings.forbidden_params = form.value.policy_forbidden_text
+      .split('\n').map((line) => line.trim()).filter(Boolean)
+  }
+  const params = fromYaml(form.value.policy_params_text, 'Policy parameters')
+  if (Object.keys(params).length) settings.params = params
+  return settings
+}
+
+function useCustomForbidden(on: string | number | boolean) {
+  // Start a custom list from the default, so turning it on edits rather than
+  // wipes it.
+  if (on && !form.value.policy_forbidden_text.trim()) {
+    form.value.policy_forbidden_text = forbiddenDefault.value.join('\n')
+  }
+}
+
 /** The benchmark half of a campaign body: a described workload goes as a
  *  spec (the API creates its benchmark), an existing one as its slug. */
 function benchmarkFields() {
@@ -411,6 +446,9 @@ async function load() {
     api.get('/campaigns/benchmarks')
       .then(({ data }) => (benchmarks.value = data))
       .catch(() => (benchmarks.value = [])),
+    api.get('/policies/defaults')
+      .then(({ data }) => (forbiddenDefault.value = data.forbidden_params ?? []))
+      .catch(() => (forbiddenDefault.value = [])),
   )
   machines.value = ms.data
   groups.value = gs?.data ?? []
@@ -585,10 +623,16 @@ function applyImport(opts: { review?: boolean } = {}) {
   // them as the Strategy select and the three budget inputs.
   const policyId = parsed.fields.policy_id
   form.value.strategy = typeof policyId === 'number' ? `policy:${policyId}` : ''
-  const { max_contenders, ...pinned } =
-    (parsed.fields.policy_settings ?? {}) as Record<string, number>
-  if (max_contenders) form.value.policy_max_contenders = max_contenders
-  form.value.policy_pinned = pinned
+  const { max_contenders, forbidden_params, params, ...pinned } =
+    (parsed.fields.policy_settings ?? {}) as Record<string, unknown>
+  if (typeof max_contenders === 'number') form.value.policy_max_contenders = max_contenders
+  form.value.policy_pinned = pinned as Record<string, number>
+  form.value.policy_forbidden_custom = Array.isArray(forbidden_params)
+  form.value.policy_forbidden_text = Array.isArray(forbidden_params)
+    ? forbidden_params.join('\n') : ''
+  form.value.policy_params_text =
+    params && typeof params === 'object' && Object.keys(params).length ? toYaml(params) : ''
+
   if (parsed.fields.extra_env || parsed.fields.extra_volumes) {
     form.value.extras_text = toYaml({
       env: parsed.fields.extra_env ?? {},
@@ -827,9 +871,7 @@ async function create() {
       ...benchmarkFields(),
       policy_id: selectedPolicy.value?.id ?? null,
       extensions: form.value.extensions,
-      policy_settings: selectedPolicy.value
-        ? { ...form.value.policy_pinned, max_contenders: form.value.policy_max_contenders }
-        : {},
+      policy_settings: selectedPolicy.value ? policySettings() : {},
       confirm_top_k: form.value.confirm_top_k,
       confirm_repeats: form.value.confirm_repeats,
       daily_start: form.value.daily_start,
@@ -1122,6 +1164,44 @@ onMounted(async () => {
               <el-input-number v-model="form.policy_max_contenders" :min="1" :max="8"
                 size="small" />
             </el-form-item>
+
+            <el-collapse v-if="selectedPolicy" v-model="policyAdvanced" class="advanced">
+              <el-collapse-item name="policy" title="Advanced">
+                <el-form-item>
+                  <template #label>
+                    <span>Parameters the policy may not change</span>
+                    <InfoHint :width="380">
+                      The benchmarks measure speed, not answers, so a flag that changes what the
+                      model returns (KV-cache or weight precision, context length, chat template,
+                      parsers, default sampling) would look like a win. The policy may keep the
+                      value this campaign gives such a flag, but not change it. A flag this
+                      campaign's own search space sweeps is always allowed. One glob per line.
+                    </InfoHint>
+                  </template>
+                  <el-switch v-model="form.policy_forbidden_custom" active-text="Custom list"
+                    inactive-text="Platform default" @change="useCustomForbidden" />
+                </el-form-item>
+                <el-form-item v-if="form.policy_forbidden_custom">
+                  <el-input v-model="form.policy_forbidden_text" type="textarea" :rows="6"
+                    class="mono" placeholder="Empty: the policy may change anything" />
+                </el-form-item>
+                <p v-else class="muted mono forbidden-default">
+                  {{ forbiddenDefault.join(', ') || 'The platform default list.' }}
+                </p>
+                <el-form-item>
+                  <template #label>
+                    <span>Policy parameters</span>
+                    <InfoHint :width="360">
+                      Knobs for the policy itself, passed to it as they are (YAML) — for example
+                      which LLM an agent policy uses and how hard it thinks. The platform does
+                      not read them; the policy's README lists what it accepts.
+                    </InfoHint>
+                  </template>
+                  <el-input v-model="form.policy_params_text" type="textarea" :rows="4"
+                    class="mono" placeholder="model: my-llm" />
+                </el-form-item>
+              </el-collapse-item>
+            </el-collapse>
 
             <el-collapse v-if="!selectedPolicy" v-model="searchAdvanced" class="advanced">
               <el-collapse-item name="search" title="Advanced">
@@ -1593,6 +1673,13 @@ onMounted(async () => {
   margin-top: 4px;
 }
 /* The opt-in split disclosure and its lead-in note. */
+.forbidden-default {
+  margin: -4px 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .advanced {
   margin: 4px 0 8px;
 }

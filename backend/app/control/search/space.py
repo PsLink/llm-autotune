@@ -46,6 +46,7 @@ shown before a campaign starts and the candidates it actually creates must not
 be two separate derivations that can drift apart.
 """
 
+import fnmatch
 import json
 from dataclasses import dataclass
 from itertools import product
@@ -346,6 +347,74 @@ def deviations(config: dict[str, Any], search_space: dict[str, Any]) -> list[dic
                 out.append({"param": param, "kind": "base_override", "value": value})
         elif param not in gated:
             out.append({"param": param, "kind": "unknown", "value": value})
+    return out
+
+
+# Parameters a policy may not change on its own, by default. Both benchmark
+# suites measure speed, not answers, so every flag here would score as a "win"
+# while changing what the deployment returns or can do: a lower-precision KV
+# cache or weights, a shorter context, a different chat template or parser,
+# different default sampling, a different tokenizer. Patterns are fnmatch
+# globs over canonical keys. A campaign replaces the list in its policy
+# settings (`forbidden_params`), and an empty list forbids nothing.
+DEFAULT_FORBIDDEN_PARAMS: tuple[str, ...] = (
+    "quantization*",
+    "modelopt_quant*",
+    "kv_cache_dtype",
+    "dtype",
+    "context_length",
+    "max_model_len",
+    "chat_template*",
+    "*_parser",
+    "enable_auto_tool_choice",
+    "trust_remote_code",
+    "load_format",
+    "tokenizer*",
+    "skip_tokenizer_init",
+    "revision",
+    "json_model_override_args",
+    "hf_overrides",
+    "generation_config",
+    "override_generation_config",
+    "preferred_sampling_params",
+    "sampling_defaults",
+)
+
+
+def forbidden_hits(
+    config: dict[str, Any],
+    search_space: dict[str, Any],
+    patterns: list[str] | tuple[str, ...],
+    engine: str = "",
+) -> list[dict[str, Any]]:
+    """Forbidden parameters a config changes.
+
+    A forbidden parameter may still appear: with the value the space's `base`
+    fixes (the policy left it alone), or when the campaign's own space sweeps
+    it (its author chose to tune it, so it is not the policy's doing). Any
+    other value, or the key appearing where the base does not set it, is a
+    hit. Keys are matched in canonical spelling, so an alias spelling of a
+    forbidden flag cannot slip past the list.
+    """
+    if not patterns:
+        return []
+    from app.control.engines.flags import normalize_args
+
+    space = search_space or {}
+    base, _ = normalize_args(engine, dict(space.get("base") or {}))
+    swept = set(normalize_args(engine, {k: None for k in swept_keys(space)})[0])
+    normalized, _ = normalize_args(engine, dict(config))
+    out: list[dict[str, Any]] = []
+    for param in sorted(normalized):
+        if param in swept:
+            continue
+        pattern = next((p for p in patterns if fnmatch.fnmatchcase(param, p)), None)
+        if pattern is None:
+            continue
+        value = normalized[param]
+        if param in base and _same_value(value, base[param]):
+            continue
+        out.append({"param": param, "pattern": pattern, "value": value})
     return out
 
 

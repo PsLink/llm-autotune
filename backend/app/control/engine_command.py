@@ -113,6 +113,75 @@ def parse_engine_args(command: Any) -> dict[str, Any]:
     return args
 
 
+_KEY_SHAPE = re.compile(r"^[a-z0-9][a-z0-9_]*$")
+
+
+def round_trip_problems(config: dict[str, Any], engine: str) -> list[dict[str, Any]]:
+    """Why a config would not survive the trip to a command line and back.
+
+    A config is only worth measuring if what was measured can be deployed:
+    rendered to the engine's argv (`render_args`, what every launch runs) and
+    read back from that argv (`parse_engine_args`, what capture and pasted
+    deploy scripts go through) it must come out as the same config. Values
+    that cannot make the trip are refused before a launch is spent on them:
+    a list or a dict (rendered with Python's str(), which no engine parses),
+    an empty string (dropped, so the flag turns into a bare switch), a value
+    that starts with "--" (read back as the next flag). Each problem is
+    {"param", "kind", "message"}; an empty list means the config round-trips.
+    """
+    from app.control.engines.base import render_args
+
+    problems: list[dict[str, Any]] = []
+
+    def problem(param: str, kind: str, message: str) -> None:
+        problems.append({"param": param, "kind": kind, "message": message})
+
+    renderable: dict[str, Any] = {}
+    for key, value in config.items():
+        if not isinstance(key, str) or not _KEY_SHAPE.match(key):
+            problem(str(key), "bad_key", f"{key!r} is not a snake_case flag name")
+        elif value is None:
+            problem(key, "not_renderable", f"{key} has no value (null)")
+        elif isinstance(value, (list, tuple, dict)):
+            kind = "a list" if isinstance(value, (list, tuple)) else "an object"
+            problem(
+                key, "not_renderable",
+                f"{key} is {kind}; give the value as the one string the engine "
+                "expects on its command line (JSON text for a JSON flag)",
+            )
+        elif isinstance(value, str) and not value.strip():
+            problem(key, "not_renderable", f"{key} is an empty string")
+        elif isinstance(value, str) and value.startswith("--"):
+            problem(key, "not_renderable", f"{key}={value!r} would be read back as a flag")
+        else:
+            renderable[key] = value
+    if problems:
+        return problems
+
+    parsed, _ = normalize_args(engine, parse_engine_args(render_args(renderable, engine)))
+    expected, _ = normalize_args(engine, renderable)
+    for key, value in expected.items():
+        back = parsed.pop(key, None)
+        if value is False and back is None:
+            # A --no-<flag> the catalog does not know stays `no_<flag>: true`
+            # when read back; it is still this switch turned off.
+            back = False if parsed.pop(f"no_{key}", None) is True else None
+        if isinstance(value, bool):
+            # False on a switch with no --no- form is rendered as nothing,
+            # which is exactly "off": absent reads back as False.
+            ok = back is value or (value is False and back is None)
+        else:
+            ok = back is not None and str(back) == str(value)
+        if not ok:
+            problem(
+                key, "round_trip",
+                f"{key}={value!r} comes back from the command line as {back!r}",
+            )
+    for key, back in parsed.items():
+        problem(key, "round_trip", f"the command line gains {key}={back!r}")
+    return problems
+
+
 def baseline_engine_args(command: Any) -> dict[str, Any]:
     """Production's engine config with placement stripped — the tuning knobs
     only, so it reads and compares exactly like a search-space config."""
