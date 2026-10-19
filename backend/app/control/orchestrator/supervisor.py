@@ -2084,6 +2084,7 @@ class Supervisor:
             volumes=volumes,
             nodes=nodes,
             nnodes=max(1, len(nodes)),
+            allowed_nodes=list(campaign.node_names or []),
             dist_port=dist_port,
             # Only a gang has a rendezvous. A single-node run with a leftover
             # dist_port must not be handed an address nothing is listening on.

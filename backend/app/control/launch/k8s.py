@@ -79,6 +79,7 @@ DEFAULT_ENV = {
 # naming scheme.
 RUN_LABEL = "autotune.modelsphere.dev/run"
 MANAGED_LABEL = "autotune.modelsphere.dev/managed"
+HOSTNAME_LABEL = "kubernetes.io/hostname"
 # A policy container's Job and its pod. Distinct from RUN_LABEL: a policy is not
 # a run, and its pods must never be selected by an engine's log or state read.
 POLICY_LABEL = "autotune.modelsphere.dev/policy"
@@ -159,8 +160,25 @@ def _node_selector(spec: LaunchSpec, settings: Settings) -> dict[str, str]:
     Sourced from the MACHINE ("k=v,k2=v2") — a k8s machine is a named node-slice,
     so its selector is a property of the machine, set on the Resources page — and
     falls back to the global AUTOTUNE_K8S_NODE_SELECTOR only when the machine
-    declares none."""
-    return _node_selector_pairs(spec.machine.node_selector, settings)
+    declares none. One allowed node (Campaign.node_names) is pinned here by
+    hostname; several need the affinity in `_node_affinity`."""
+    selector = _node_selector_pairs(spec.machine.node_selector, settings)
+    if len(spec.allowed_nodes) == 1:
+        selector[HOSTNAME_LABEL] = spec.allowed_nodes[0]
+    return selector
+
+
+def _node_affinity(spec: LaunchSpec) -> dict[str, Any]:
+    """Several allowed nodes, as a required node affinity on the hostname, on
+    top of the machine's selector. Empty for none or one (that one is in the
+    nodeSelector)."""
+    if len(spec.allowed_nodes) < 2:
+        return {}
+    return {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
+        "nodeSelectorTerms": [{"matchExpressions": [{
+            "key": HOSTNAME_LABEL, "operator": "In", "values": list(spec.allowed_nodes),
+        }]}],
+    }}}
 
 
 def _node_selector_pairs(raw: str, settings: Settings) -> dict[str, str]:
@@ -296,6 +314,9 @@ def _engine_container(spec: LaunchSpec, settings: Settings) -> dict:
     selector = _node_selector(spec, settings)
     if selector:
         pod_spec["nodeSelector"] = selector
+    affinity = _node_affinity(spec)
+    if affinity:
+        pod_spec["affinity"] = affinity
     tolerations = _tolerations(gpus, settings)
     if tolerations:
         pod_spec["tolerations"] = tolerations
@@ -621,6 +642,14 @@ def _render_cr(spec: LaunchSpec, settings: Settings) -> dict:
     selector = _node_selector(spec, settings)
     if selector:
         cr_spec["nodeSelector"] = selector
+    if _node_affinity(spec):
+        # The TuningRun CRD has a nodeSelector and no affinity: several allowed
+        # nodes cannot be said here, so the run may land on any node the
+        # machine matches. Deployment mode says it.
+        logger.warning(
+            "run %s may use nodes %s, which a %s cannot express; set the cluster's "
+            "workload kind to deployment", spec.run_id, spec.allowed_nodes, settings.k8s_cr_kind,
+        )
     return {
         "apiVersion": f"{settings.k8s_cr_group}/{settings.k8s_cr_version}",
         "kind": settings.k8s_cr_kind,
@@ -729,6 +758,25 @@ def _pod_gpu_request(pod: dict, resource: str) -> int:
         except (TypeError, ValueError):
             continue
     return total
+
+
+def _pod_allowed_nodes(pod: dict) -> set[str]:
+    """The hostnames a pod is limited to (LaunchSpec.allowed_nodes), read back
+    from its own spec: the nodeSelector's hostname, or the affinity's list."""
+    spec = pod.get("spec") or {}
+    pinned = (spec.get("nodeSelector") or {}).get(HOSTNAME_LABEL)
+    if pinned:
+        return {pinned}
+    terms = (
+        ((spec.get("affinity") or {}).get("nodeAffinity") or {})
+        .get("requiredDuringSchedulingIgnoredDuringExecution") or {}
+    ).get("nodeSelectorTerms") or []
+    out: set[str] = set()
+    for term in terms:
+        for expr in term.get("matchExpressions") or []:
+            if expr.get("key") == HOSTNAME_LABEL and expr.get("operator") == "In":
+                out.update(expr.get("values") or [])
+    return out
 
 
 def _node_name(node: dict) -> str:
@@ -1018,6 +1066,16 @@ class K8sDriver(DeploymentDriver):
                 f"no cluster node matches this machine's node selector ({selector}); "
                 "the pod can never be scheduled — fix the selector on the Resources page",
             )
+        allowed = _pod_allowed_nodes(pod)
+        if allowed:
+            nodes = [n for n in nodes if _node_name(n) in allowed]
+            if not nodes:
+                return (
+                    "unplaceable",
+                    f"none of the nodes this run may use ({', '.join(sorted(allowed))}) "
+                    f"is a node of this machine ({selector or 'any node'}); the pod can "
+                    "never be scheduled",
+                )
         want = _pod_gpu_request(pod, self.settings.k8s_gpu_resource)
         if want > 0 and nodes:
             biggest = max((_node_gpu_count(node) for node in nodes), default=0)
@@ -1571,6 +1629,89 @@ class K8sDriver(DeploymentDriver):
             return checks
         checks.extend(self._probe_job(api, machine, image, model_path, policy_images, timeout))
         return checks
+
+    def model_presence(
+        self,
+        machine: MachineInfo,
+        *,
+        image: str,
+        model_path: str,
+        timeout: float = _PREFLIGHT_WAIT_SECONDS,
+    ) -> list[dict[str, Any]]:
+        """Whether the weights are on each node this machine matches, by one
+        probe Job per node that mounts the model the way a run does (the
+        preflight's model probe, pinned to that node). A weights claim is the
+        same on every node, so one probe answers for all of them. Cordoned and
+        not-Ready nodes are left out: no run lands there. Never raises."""
+        from app.control.launch import preflight as pf
+
+        def unknown(detail: str) -> list[dict[str, Any]]:
+            return [{"node": machine.name, "present": None, "detail": detail}]
+
+        if not model_path or not image:
+            return unknown("nothing to check: no weights path or no image")
+        selector = (machine.node_selector or self.settings.k8s_node_selector).strip()
+        if not selector:
+            return unknown("no node selector set, so the machine's nodes are unknown")
+        try:
+            api = self.api
+            names = [_node_name(n) for n in api.list("nodes", label_selector=selector)
+                     if _node_takes_pods(n)]
+        except Exception as exc:  # noqa: BLE001 — a probe reports, never raises
+            return unknown(f"could not read the machine's nodes: {str(exc)[:300]}")
+        if not names:
+            return unknown(f"no schedulable node matches {selector}")
+        shared = bool((self.settings.k8s_model_pvc or "").strip())
+        targets = names[:1] if shared else names
+        s = self.settings
+        token = secrets.token_hex(4)
+        images = [("engine", "Container image", "image", image)]
+        jobs: dict[str, tuple[str, bool]] = {}
+        try:
+            for i, node in enumerate(targets):
+                name = f"autotune-weights-{token}-{i}"
+                pinned = machine.model_copy(
+                    update={"node_selector": f"{selector},{HOSTNAME_LABEL}={node}"})
+                manifest, reads_log = render_preflight_job(name, pinned, images, model_path, s)
+                api.apply(manifest)
+                jobs[name] = (node, reads_log)
+            verdicts = {name: ProbeVerdict() for name in jobs}
+            deadline = time.monotonic() + timeout
+            while True:
+                for name in jobs:
+                    pods = api.list("pods", label_selector=f"{PREFLIGHT_LABEL}={name}")
+                    verdicts[name] = read_probe(pods, self._events_for(api, pods), ["engine"])
+                if all(verdicts[n].mount_settled(jobs[n][1]) for n in jobs) or (
+                    time.monotonic() >= deadline
+                ):
+                    break
+                time.sleep(2)
+            found: dict[str, dict[str, Any]] = {}
+            for name, (node, reads_log) in jobs.items():
+                log = None
+                if reads_log:
+                    try:
+                        log = api.logs(f"{PREFLIGHT_LABEL}={name}", tail=5)
+                    except Exception:  # noqa: BLE001
+                        log = ""
+                check = verdicts[name].model_check(model_path, node, log)
+                found[node] = {
+                    "node": node,
+                    "present": {pf.PASS: True, pf.FAIL: False}.get(check.status),
+                    "detail": check.detail,
+                }
+        except Exception as exc:  # noqa: BLE001
+            return unknown(f"could not probe the nodes: {str(exc)[:300]}")
+        finally:
+            for name in jobs:
+                try:
+                    api.delete("job", name)
+                except Exception:  # noqa: BLE001 — labelled; findable by PREFLIGHT_LABEL
+                    logger.warning("could not delete weights probe job %s", name)
+        if shared:
+            only = found[targets[0]]
+            return [{**only, "node": node} for node in names]
+        return [found[node] for node in names]
 
     def _probe_job(
         self,

@@ -537,6 +537,11 @@ class Campaign(Base):
     # previous single-node pin instead of silently losing it. Resolved through
     # app/control/orchestrator/lifecycle.py:machines_for.
     node_group: Mapped[str] = mapped_column(String(64), default="")
+    # k8s only: the cluster nodes a run may land on, by hostname, within its
+    # machine's own node selector. Empty = any node the machine matches. For a
+    # machine that is a pool of nodes whose weights live on only some of them
+    # (a per-node hostPath): name those nodes and runs go nowhere else.
+    node_names: Mapped[list] = mapped_column(JsonCol, default=list)
     # The occurrence currently in force. For a scheduled campaign these are
     # WRITTEN by the supervisor from `daily_start`/`daily_end` each time a
     # window opens; for an unscheduled one they are set by hand or left null.

@@ -52,6 +52,8 @@ export const PORTABLE_KEYS = [
   'policy_id',
   'policy_settings',
   'node_group',
+  // k8s: the nodes (hostnames) runs may land on, within the machine's selector.
+  'node_names',
   // What enabled plugins keep about the campaign, by plugin name.
   'extensions',
 ] as const
