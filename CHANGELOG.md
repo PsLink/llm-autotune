@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Check an API key from the API keys page**: the page shows the one call
+  that tells you who a key acts as (`GET /api/auth/me` with `X-API-Key`), ready
+  to copy, and a field to try a key from the page. The new-key dialog shows the
+  same call with the new key. `/api/auth/me` now answers for an API key as well
+  as a signed-in browser.
+- **Plugin slots on the Reports page**: `reports.actions` (header buttons) and
+  `reports.sections` (above the list), so a plugin can write reports from there.
+
+### Fixed
+
+- **Account and API keys in the user menu open again.** Clicking them did
+  nothing: the menu's links cancel their own click so the menu can navigate,
+  and Element Plus's dropdown ignores a cancelled click. The links navigate
+  themselves now (a middle or Ctrl/Cmd-click still opens a new tab).
+- **The API keys page is translated**; it was English only. The account page's
+  link to it no longer sits indented, and the help icons no longer warn in the
+  browser console.
+- **The dev server's API proxy matches `/api/` only**, as nginx does: `/api`
+  also caught the `/api-keys` page, which then loaded as an API 404.
+
 ### Changed
 
 - **Export to model catalog writes the catalog's v2 layout**
@@ -27,6 +49,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `validate:schema` and `validate:helm` on an export.
   - API: the preview returns `files` and `variants`; `version`, `base_entry`
     and `with_metadata` are gone; a variant takes `image_tag`.
+- **Catalog export ships the saved report on the exported runs** with a tuned
+  variant (the newest one comparing exactly these runs, or the one picked under
+  Advanced), and writes its `tuning` entry. Without a report the export still
+  goes through, with no tuning entry and a warning (`report_source` says which
+  report shipped).
+- **Catalog export sorts env vars and mounts into the recipe and the site's
+  setup** instead of copying them as measured. Engine and runtime settings
+  are kept; network interfaces, store addresses, proxies, library paths, and
+  values that are addresses or paths no mount provides are left out. A draft
+  model a flag reads is published at `/data/models/<name>`; a mount an env var
+  reads is kept with it; cache mounts become empty directories; mounts nothing
+  reads are left out. The export lists every env var and mount with what it
+  did and why. A name no rule knows is kept and flagged, and can be settled for
+  one export (`env_categories`) or for all of them
+  (`PUT /api/catalog-export/env-categories/{name}`, migration
+  `012_catalog_env_categories`).
 
 ### Fixed
 
@@ -38,11 +76,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or runs past `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` (45), fails the run with the pull's own
   output. Policy sessions wait the same way before they start.
 
+- **Pages load faster on a slow connection, and say they are loading.**
+  - nginx compresses: the build leaves a `.gz` next to every script and
+    stylesheet, and API responses are compressed as they pass through.
+  - Element Plus is loaded per component, in the pages that use them, and
+    libraries get chunks of their own that stay cached across redeploys.
+    The first download goes from 1.5 MB uncompressed to about 180 kB.
+  - The page shows a spinner from the first byte instead of a blank page,
+    lists show "Loading…" until their rows arrive instead of "No data", and
+    a campaign's page shows a spinner, or the error with a retry, instead of
+    staying blank.
+  - Pages send their requests at once instead of one after another: a
+    campaign's page made up to 11 in a row on every 10-second refresh, the
+    new-campaign form up to 10.
+- A perf report shipped with a catalog export embedded the whole frozen
+  comparison, so the HTML named the machines, GPU indices, host paths, run and
+  campaign ids and names, and links into the platform it was measured on. The
+  shipped copy now keeps what the report draws and leaves the rest out
+  (`app/agent/publish.py`); saved reports are unchanged.
 - Catalog export: a run whose image was named by digest only exported no
   image, so the chart's default engine would have deployed; it now asks for
   the tag. `source.hf` is no longer written from a guess off the weights path:
   a new model needs it given, with the guess offered. A tuned variant without
-  its baseline or report is refused instead of published untuned.
+  its baseline or report says that the catalog will ask for its tuning entry.
 - The CI routing file of a track export (`<name>.validation.json`) labels a
   variant without a role `other` rather than `optimized`, and hashes each
   variant file's content instead of its bytes, so the catalog's formatting does
@@ -51,6 +107,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] - 2026-10-15
 
 ### Added
+
+- **A campaign can keep its runs to the k8s nodes that hold the weights.**
+  `node_names` (hostnames) narrows a k8s machine to some of the nodes its
+  selector matches: one node is pinned in the pod's nodeSelector, several
+  become a required node affinity (deployment workloads; the TuningRun CRD
+  cannot say it). A run whose nodes are not among the machine's fails at once
+  as unplaceable instead of waiting.
+- **Drivers can say where the weights are** (`model_presence`): an ssh machine
+  checks the path on the box; a k8s machine runs one probe Job per schedulable
+  node that mounts the model as a run does (one for all nodes on a weights
+  claim). For plugins and tools that place work by where the model is.
 
 - **Export to model catalog** on a campaign's page (**⋯** menu): measured
   runs become a [model-catalog](https://github.com/modelsphere/model-catalog)

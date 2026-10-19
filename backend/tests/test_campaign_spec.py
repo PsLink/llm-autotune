@@ -58,7 +58,7 @@ def test_a_spec_is_exactly_the_body_that_recreates_the_campaign():
         served_model_name="m", search_space={"grid": {"tp": [2, 4]}},
         objective={"target_metric": "x"}, policy_id=3, policy_settings={"max_contenders": 2},
         node_group="pair",
-        machine_names=[], extra_env={}, extra_volumes={}, verify_objective={},
+        machine_names=[], node_names=[], extra_env={}, extra_volumes={}, verify_objective={},
         benchmark_slug="", service_port=28200, run_baseline_canary=True, share_machine=False,
         daily_start="", daily_end="", schedule_timezone="", max_run_minutes=150,
         confirm_top_k=0, confirm_repeats=3, verify_benchmark_slug="", verify_top_k=0,

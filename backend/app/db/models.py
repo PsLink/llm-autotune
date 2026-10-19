@@ -537,6 +537,11 @@ class Campaign(Base):
     # previous single-node pin instead of silently losing it. Resolved through
     # app/control/orchestrator/lifecycle.py:machines_for.
     node_group: Mapped[str] = mapped_column(String(64), default="")
+    # k8s only: the cluster nodes a run may land on, by hostname, within its
+    # machine's own node selector. Empty = any node the machine matches. For a
+    # machine that is a pool of nodes whose weights live on only some of them
+    # (a per-node hostPath): name those nodes and runs go nowhere else.
+    node_names: Mapped[list] = mapped_column(JsonCol, default=list)
     # The occurrence currently in force. For a scheduled campaign these are
     # WRITTEN by the supervisor from `daily_start`/`daily_end` each time a
     # window opens; for an unscheduled one they are set by hand or left null.
@@ -1075,6 +1080,24 @@ class ReplayDataset(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CatalogEnvCategory(Base):
+    """What an env var is to a model-catalog export, settled by a person for a
+    name the export's rules do not know (catalog_export/portability.py): part
+    of the serving recipe, or this site's setup. Settled once, it applies to
+    every later export."""
+
+    __tablename__ = "catalog_env_categories"
+
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    category: Mapped[str] = mapped_column(String(16))  # recipe | site | secret | platform
+    set_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    set_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class Baseline(Base):

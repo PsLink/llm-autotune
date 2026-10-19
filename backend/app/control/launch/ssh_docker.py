@@ -25,6 +25,7 @@ import logging
 import shlex
 import subprocess
 import time
+from typing import Any
 
 import httpx
 
@@ -373,6 +374,28 @@ class SshDockerDriver(DeploymentDriver):
             raise RuntimeError(
                 f"image_pull: pulling {image} onto {machine.host} failed: {rest.strip()[-1500:]}"
             )
+
+    def model_presence(self, machine, *, image: str, model_path: str) -> list[dict[str, Any]]:
+        """Whether the weights path exists on this box: the one node it is."""
+        if not model_path:
+            return [{"node": machine.name, "present": None, "detail": "no weights path"}]
+        q = shlex.quote(model_path)
+        try:
+            result = self._ssh(
+                machine, f"if [ -e {q} ]; then echo present; else echo missing; fi", timeout=30
+            )
+        except RuntimeError as exc:
+            return [{"node": machine.name, "present": None, "detail": str(exc)[:300]}]
+        answer = (result.stdout or "").strip()
+        if result.returncode != 0 or answer not in ("present", "missing"):
+            detail = (result.stderr or answer or "no answer").strip()[:300]
+            return [{"node": machine.name, "present": None,
+                     "detail": f"could not check {machine.host}: {detail}"}]
+        if answer == "present":
+            return [{"node": machine.name, "present": True,
+                     "detail": f"{model_path} exists on {machine.host}"}]
+        return [{"node": machine.name, "present": False,
+                 "detail": f"{model_path} is not on {machine.host}"}]
 
     # -- DeploymentDriver ----------------------------------------------------
 
