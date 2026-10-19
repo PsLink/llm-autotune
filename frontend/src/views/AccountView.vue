@@ -11,7 +11,6 @@ import { apiErrorText } from '../utils/apiError'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api/client'
-import LinkButton from '../components/LinkButton.vue'
 import PluginSlot from '../components/PluginSlot.vue'
 import InfoHint from '../components/InfoHint.vue'
 import { useI18n } from '../i18n'
@@ -179,9 +178,7 @@ onMounted(first.run)
             {{ me?.created_at ? relativeTime(me.created_at) : '—' }}
           </dd>
         </dl>
-        <LinkButton text type="primary" to="/api-keys">
-          {{ t('account.manageKeys') }}
-        </LinkButton>
+        <router-link to="/api-keys" class="keys-link">{{ t('account.manageKeys') }} →</router-link>
       </el-card>
 
       <el-card class="password">
@@ -299,6 +296,9 @@ onMounted(first.run)
 </template>
 
 <style scoped>
+.keys-link {
+  font-size: 13px;
+}
 .saved {
   color: var(--el-color-success);
 }
