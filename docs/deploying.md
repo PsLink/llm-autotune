@@ -259,7 +259,7 @@ The ones installs usually reach for:
 | `AUTOTUNE_DEFAULT_DAILY_START`, `_END`, `AUTOTUNE_DEFAULT_SCHEDULE_TIMEZONE` | — | the window a drafted campaign gets when none is given |
 | `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `240` | window a run reserves when its length can be neither measured nor estimated from its benchmark |
 | `AUTOTUNE_READY_TIMEOUT_MINUTES` | `30` | how long a started engine may take to answer `/v1/models` |
-| `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` | `45` | how long a pod may spend scheduling and pulling its image |
+| `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` | `45` | how long a pod may spend scheduling and pulling its image, and how long an ssh machine may spend pulling one |
 | `AUTOTUNE_HEALTH_PROBE_TIMEOUT_SECONDS` | `600` | how long the first chat completion may take |
 | `AUTOTUNE_K8S_IMAGE_PULL_SECRETS` | — | pull secrets (comma-separated names) for engine and policy pods |
 | `AUTOTUNE_K8S_TOLERATIONS` | — | taints engine pods tolerate, e.g. `dedicated=ml:NoSchedule` |

@@ -257,12 +257,24 @@ class DeploymentHandle(BaseModel):
         return [self, *self.node_handles]
 
 
+class LaunchDeferred(RuntimeError):
+    """The launch cannot start yet, and is on its way: an image still pulling
+    onto the machine. The run stays pending and says why; the next tick tries
+    again. Anything that will not resolve by waiting is a plain RuntimeError."""
+
+
 class DeploymentDriver(ABC):
     name: str = "base"
 
     @abstractmethod
     def launch(self, spec: LaunchSpec) -> tuple[DeploymentHandle, str]:
         """Start the service detached. Returns (handle, exact_launch_command)."""
+
+    def ensure_image(self, machine: "MachineInfo", image: str) -> None:
+        """Have `image` on the machine before a launch needs it, or raise
+        LaunchDeferred while it is on its way. A substrate that pulls on its
+        own (a cluster's kubelet) has nothing to do here."""
+        return None
 
     def model_presence(
         self, machine: "MachineInfo", *, image: str, model_path: str

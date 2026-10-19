@@ -112,7 +112,7 @@ def classify_failure(log_text: str) -> str:
         ("bad_config", ("unrecognized arguments", "invalid argument", "error: argument")),
         ("model_load", ("no such file", "not a valid model", "safetensors")),
         ("ssh_timeout", ("timed out after",)),
-        ("image_pull", ("pulling from", "manifest for", "denied")),
+        ("image_pull", ("image_pull:", "pulling from", "manifest for", "denied")),
     ]
     for failure_class, needles in rules:
         if any(needle in lowered for needle in needles):
