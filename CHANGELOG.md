@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   object value, an empty string, or a value starting with `--` is refused
   before a launch is spent on it. Refused configs are kept in the campaign's
   activity log.
+- **A performance landscape in the mock engine** (`--mock-landscape sglang`):
+  real sglang flags move its numbers — KV capacity, batch limits, CUDA-graph
+  coverage, attention backend, speculative decoding, out-of-memory edges, a
+  little noise — so a search policy can be tested end to end without a GPU.
 - **Secret variables for a policy** (Policies page, `secret_env` on
   `/api/policies`): for credentials such as an agent policy's LLM API key.
   Stored encrypted, never returned (only their names, `secret_env_keys`),

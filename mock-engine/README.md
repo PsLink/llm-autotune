@@ -59,3 +59,31 @@ measures how fast the benchmark client can prepare requests rather than the
 mock, and two settings rank by noise. Screen mock campaigns with
 `autotune-quickstart-v1` instead (short requests, concurrency 1 and 4), as the
 demo does; `deploy/demo.sh` creates it on LLMBench.
+
+## A landscape to search
+
+By default the mock ignores real engine flags, so every config measures the
+same. `--mock-landscape sglang` (put `mock_landscape: sglang` in the space's
+`base`) makes real sglang flags move the numbers instead — roughly, and on
+purpose simply ([landscape.py](landscape.py)), so a search policy can be run end
+to end without a GPU and still have something to find:
+
+- `mem_fraction_static` sets the KV-cache capacity; when it is full, requests
+  wait, so throughput at high concurrency depends on it. Above 0.93 the engine
+  fails at startup with a CUDA out-of-memory error, as do a `cuda_graph_max_bs`
+  above 384 or a `chunked_prefill_size` above 32768 with more than 0.90.
+- `max_running_requests` caps the batch; `cuda_graph_max_bs` below the batch
+  size makes every decode step slower; `attention_backend`,
+  `enable_torch_compile`, `num_continuous_decode_steps`, `schedule_policy` and
+  `enable_mixed_chunk` shift it a little; `chunked_prefill_size` trades prefill
+  speed against decode interference.
+- Speculative decoding (`speculative_algorithm NEXTN`) speeds small batches and
+  slows large ones; any other algorithm without `speculative_draft_model_path`
+  fails at startup.
+- Each engine process has about 1.5% noise, and it logs sglang-style
+  `Decode batch.` lines and answers `/get_server_info` with its resolved
+  arguments.
+
+Use a slow enough `mock_token_ms` (around 30) that the mock, one Python process,
+is not itself the bottleneck at high concurrency.
+
