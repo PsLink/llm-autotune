@@ -334,6 +334,9 @@ export interface Campaign {
    *  `machine_names` is the whole pin. Non-empty: the group's members are the
    *  pin and their count is the deployment width. sglang only for now. */
   node_group: string
+  /** k8s only: the nodes (hostnames) runs may land on, within the machine's
+   *  selector. Empty = any node the machine matches. */
+  node_names?: string[]
   run_baseline_canary: boolean
   share_machine: boolean
   extra_env: Record<string, string>

@@ -143,6 +143,9 @@ class LaunchSpec(BaseModel):
     # handle; a caller that predates multi-node and builds no plan at all still
     # works because `launch_nodes` synthesizes the rank-0 entry from `machine`.
     nodes: list[NodeAssignment] = Field(default_factory=list)
+    # k8s only: hostnames the pod may land on, within the machine's selector
+    # (Campaign.node_names). Empty = any node the machine matches.
+    allowed_nodes: list[str] = Field(default_factory=list)
     # THIS spec's own rank, set by `for_node`. 0 on the gang spec.
     rank: int = 0
     nnodes: int = 1
@@ -260,6 +263,16 @@ class DeploymentDriver(ABC):
     @abstractmethod
     def launch(self, spec: LaunchSpec) -> tuple[DeploymentHandle, str]:
         """Start the service detached. Returns (handle, exact_launch_command)."""
+
+    def model_presence(
+        self, machine: "MachineInfo", *, image: str, model_path: str
+    ) -> list[dict[str, Any]]:
+        """Whether `model_path` is where a run on this machine would mount it,
+        node by node: `[{"node", "present", "detail"}]`, `present` None when
+        it could not be told. A machine that is one box answers for itself; a
+        k8s machine answers for every node its selector matches. Empty when the
+        substrate cannot check. Never raises."""
+        return []
 
     # -- multi-node -----------------------------------------------------------
 

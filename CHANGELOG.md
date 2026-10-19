@@ -100,6 +100,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A campaign can keep its runs to the k8s nodes that hold the weights.**
+  `node_names` (hostnames) narrows a k8s machine to some of the nodes its
+  selector matches: one node is pinned in the pod's nodeSelector, several
+  become a required node affinity (deployment workloads; the TuningRun CRD
+  cannot say it). A run whose nodes are not among the machine's fails at once
+  as unplaceable instead of waiting.
+- **Drivers can say where the weights are** (`model_presence`): an ssh machine
+  checks the path on the box; a k8s machine runs one probe Job per schedulable
+  node that mounts the model as a run does (one for all nodes on a weights
+  claim). For plugins and tools that place work by where the model is.
+
 - **Export to model catalog** on a campaign's page (**⋯** menu): measured
   runs become a [model-catalog](https://github.com/modelsphere/model-catalog)
   entry, a `catalog.swiss/v1` version file with one variant per run plus a

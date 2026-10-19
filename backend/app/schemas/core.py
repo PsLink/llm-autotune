@@ -306,6 +306,10 @@ class CampaignCreate(BaseModel):
     # and their count is the deployment width; the config's world size
     # (tp×dp×pp) must divide evenly across them. sglang only for now.
     node_group: str = ""
+    # k8s only: the cluster nodes (hostnames) a run may land on, within its
+    # machine's node selector. Empty = any node the machine matches. Use it
+    # when a machine is a pool and the weights are on some of its nodes only.
+    node_names: list[str] = Field(default_factory=list)
     # A one-off window. Leave both null and give `daily_start`/`daily_end`
     # instead for a campaign that repeats; the supervisor then writes these two
     # itself, one occurrence at a time.
@@ -401,6 +405,7 @@ class CampaignOut(BaseModel):
     share_machine: bool
     machine_names: list[str]
     node_group: str = ""
+    node_names: list[str] = Field(default_factory=list)
     window_start: datetime | None
     window_end: datetime | None
     daily_start: str
