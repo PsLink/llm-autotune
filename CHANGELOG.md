@@ -72,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measures, and ends with it: failed with the launch's own reason when the
   engine crashed, killed when it was released. Migration
   `015_run_launch_link`.
+- **Stop no longer reopens a finished campaign as paused.** Stopping a policy
+  campaign whose session had just ended set it to paused, over the done its
+  session's end had set. Stop now leaves a done campaign done, and ends a
+  one-off policy night as done (it has no later night to resume into); a
+  nightly campaign is still paused for a person.
 
 - **Account and API keys in the user menu open again.** Clicking them did
   nothing: the menu's links cancel their own click so the menu can navigate,

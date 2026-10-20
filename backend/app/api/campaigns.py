@@ -1041,7 +1041,19 @@ async def force_stop(
             )
         # Then the classic pause.
 
-    campaign.status = CampaignStatus.PAUSED.value
+    if campaign.status == CampaignStatus.DONE.value:
+        # Already over — the session it was waiting on may have ended it a
+        # moment ago. Stop still ends whatever is left running; it never
+        # reopens a finished campaign as paused.
+        pass
+    elif campaign.policy_id and sched.from_campaign(campaign) is None:
+        # A one-off policy night has nothing to resume into: its window has one
+        # session, and that session is being ended. It is done, as the end of
+        # its session would make it anyway.
+        campaign.status = CampaignStatus.DONE.value
+        session.add(Event(actor=user.username, kind="campaign_done", campaign_id=campaign_id))
+    else:
+        campaign.status = CampaignStatus.PAUSED.value
     # Cleared, or the next tick would read the override and wake it again.
     campaign.override_until = None
 

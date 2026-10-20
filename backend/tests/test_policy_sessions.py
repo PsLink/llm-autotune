@@ -858,7 +858,8 @@ async def _force_stop(http):
 async def test_force_stop_aborts_a_policy_that_never_started(night):
     supervisor, driver, http = night
     row = await _starting(supervisor, driver, http)
-    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
+    # A one-off night has nothing to resume into: Stop ends it.
+    assert (await _force_stop(http))["status"] == CampaignStatus.DONE.value
     supervisor.tick()
     row = await _session_row(http)
     assert row.status == PolicySessionStatus.ABORTED.value
@@ -866,7 +867,7 @@ async def test_force_stop_aborts_a_policy_that_never_started(night):
     supervisor.tick()
     async with http.db() as session:
         sessions = (await session.execute(select(func.count(PolicySession.id)))).scalar()
-    assert sessions == 1, "a paused campaign starts no new session"
+    assert sessions == 1, "a stopped campaign starts no new session"
 
 
 async def test_force_stop_finalizes_a_search_and_a_second_press_aborts(night):
@@ -877,8 +878,34 @@ async def test_force_stop_finalizes_a_search_and_a_second_press_aborts(night):
     row = await _session_row(http)
     assert row.finalize_requested_at is not None and row.abort_requested_at is None
 
-    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
+    assert (await _force_stop(http))["status"] == CampaignStatus.DONE.value
     assert (await _session_row(http)).abort_requested_at is not None
+
+
+async def test_stop_after_the_session_ended_leaves_the_campaign_done(night):
+    """Abort the session, let the worker end it (a one-off night is then
+    done), then press Stop: it used to reopen the campaign as paused."""
+    supervisor, driver, http = night
+    await _boot(supervisor, driver, http)
+    async with http.db() as session:
+        row = (await session.execute(select(PolicySession))).scalars().one()
+        row.abort_requested_at = datetime.now(UTC)
+        await session.commit()
+    supervisor.tick()
+    assert (await _session_row(http)).status == PolicySessionStatus.ABORTED.value
+    async with http.db() as session:
+        assert (await session.get(Campaign, 1)).status == CampaignStatus.DONE.value
+    assert (await _force_stop(http))["status"] == CampaignStatus.DONE.value
+
+
+async def test_stop_pauses_a_recurring_policy_campaign(night):
+    """A nightly campaign has later nights: Stop holds it for a person."""
+    supervisor, driver, http = night
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.daily_start, campaign.daily_end = "22:00", "06:00"
+        await session.commit()
+    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
 
 
 def test_a_validation_run_takes_the_cards_its_config_uses():
