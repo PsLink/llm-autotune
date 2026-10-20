@@ -1204,13 +1204,22 @@ async def put_contenders(
         )
     ).scalars().all()
 
-    # Idempotent no-op: a policy that re-declares the same best on a cadence
-    # (rank + config unchanged) should not churn the ledger — no supersede, no
-    # new rows, no event. Keeps the contender history to real changes.
+    # Same contenders (rank + config unchanged): no supersede, no new rows, no
+    # event — the ledger keeps to real changes. But the evidence is refreshed
+    # in place: a policy re-declares the same best after measuring it again,
+    # and a verdict or report built on the first measurement alone would read
+    # an outdated number.
     def _sig(rows: list[PolicyContender]) -> list[tuple[int, str]]:
         return sorted((r.rank, r.config_hash) for r in rows)
 
     if _sig(current) == _sig(accepted_rows):
+        fresh = {(r.rank, r.config_hash): r for r in accepted_rows}
+        for row in current:
+            update = fresh[(row.rank, row.config_hash)]
+            row.evidence = update.evidence
+            row.trial_ids = update.trial_ids
+            row.launch_spec = update.launch_spec
+        await db.commit()
         return ContendersEcho(
             accepted=[ContenderOut.model_validate(r) for r in current], rejected=rejected
         )

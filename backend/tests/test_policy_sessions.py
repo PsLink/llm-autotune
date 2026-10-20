@@ -925,3 +925,21 @@ async def test_production_validation_can_be_turned_off(night):
     assert len(runs) == 2
     async with http.db() as session:
         assert not any([(await session.get(Candidate, r.candidate_id)).is_baseline for r in runs])
+
+
+async def test_re_declaring_the_same_contender_refreshes_its_evidence(night):
+    # A policy measures its best again and re-declares it unchanged: no new
+    # row, no supersede — but the evidence the verdict rests on is the new one.
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    spec = {"engine_args": {"tp_size": 2}, "image": "sglang:test"}
+    first = await policy.put("/contenders", {"contenders": [
+        {"rank": 1, "launch_spec": spec, "evidence": {"values": [100.0], "measurements": 1}}]})
+    again = await policy.put("/contenders", {"contenders": [
+        {"rank": 1, "launch_spec": spec, "evidence": {"values": [100.0, 96.0], "measurements": 2}}]})
+    assert first.status_code == again.status_code == 200
+    assert again.json()["accepted"][0]["id"] == first.json()["accepted"][0]["id"]
+    async with http.db() as session:
+        rows = (await session.execute(select(PolicyContender))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].evidence == {"values": [100.0, 96.0], "measurements": 2}
