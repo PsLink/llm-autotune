@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A benchmark stops when the engine under it crashes.** A policy's benchmark
+  of one of its launches ran on against a dead engine for as long as
+  LLMBench's timeouts allowed (over an hour on a replay), and the policy
+  waited on it as if it were measuring. A benchmark now records the launch it
+  measures, and ends with it: failed with the launch's own reason when the
+  engine crashed, killed when it was released. Migration
+  `015_run_launch_link`.
+
 - **Account and API keys in the user menu open again.** Clicking them did
   nothing: the menu's links cancel their own click so the menu can navigate,
   and Element Plus's dropdown ignores a cancelled click. The links navigate

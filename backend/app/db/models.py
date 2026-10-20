@@ -752,6 +752,12 @@ class Run(Base):
     # same cards. Unique per session (enforced in the router; sqlite tests have
     # no partial unique indexes), null for runs the platform decided on its own.
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # A policy's benchmark of one of its launches: the launch it measures. When
+    # that engine crashes or is released mid-benchmark, the benchmark is
+    # stopped with it — LLMBench cannot tell a dead engine from a slow one.
+    launch_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runs.id"), nullable=True, index=True
+    )
     # A policy's DELETE /launches/{id} lands here; the worker turns it into a
     # teardown + SUCCEEDED on its next tick. Column rather than an Event so
     # GET /launches/{id} can honestly say "releasing".

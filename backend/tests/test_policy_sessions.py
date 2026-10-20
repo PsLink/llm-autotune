@@ -42,7 +42,7 @@ from app.db.models import (
     User,
 )
 from app.main import app
-from tests.fakes import CompletingDriver, StubEvaluator
+from tests.fakes import CompletingDriver, EndlessEvaluator, StubEvaluator
 
 _counter = count()
 
@@ -207,6 +207,52 @@ async def _boot(supervisor, driver, http) -> FakePolicy:
     supervisor.tick()
     assert (await _session_row(http)).status == PolicySessionStatus.SEARCHING.value
     return policy
+
+
+async def _serving_launch(supervisor, policy) -> int:
+    launched = await policy.post(
+        "/launches", json={"engine_args": {"tp_size": 2}, "gpu_indices": [0, 1]}
+    )
+    assert launched.status_code == 201, launched.text
+    for _ in range(3):
+        supervisor.tick()
+    assert (await policy.get(f"/launches/{launched.json()['id']}")).json()["status"] == "serving"
+    return launched.json()["id"]
+
+
+async def test_a_benchmark_stops_when_the_engine_under_it_crashes(night):
+    """LLMBench cannot tell a dead engine from a slow one: the platform, which
+    launched it, ends the benchmark with the launch."""
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    supervisor.bench = EndlessEvaluator()
+    run_id = await _serving_launch(supervisor, policy)
+    bench = await policy.post(f"/launches/{run_id}/benchmarks", json={"suite": "screen"})
+    bench_id = bench.json()["id"]
+    supervisor.tick()
+    supervisor.tick()
+    assert (await policy.get(f"/benchmarks/{bench_id}")).json()["status"] == "benching"
+
+    driver.crashed.add(f"autotune-run-{run_id}")
+    supervisor.tick()
+    assert (await policy.get(f"/launches/{run_id}")).json()["status"] == "failed"
+    bench = (await policy.get(f"/benchmarks/{bench_id}")).json()
+    assert bench["status"] == "failed"
+    assert f"launch {run_id}" in bench["error"]
+    assert supervisor.bench.cancelled, "the LLMBench submission was left running"
+
+
+async def test_releasing_an_engine_mid_benchmark_stops_its_benchmark(night):
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    supervisor.bench = EndlessEvaluator()
+    run_id = await _serving_launch(supervisor, policy)
+    bench = await policy.post(f"/launches/{run_id}/benchmarks", json={"suite": "screen"})
+    bench_id = bench.json()["id"]
+    supervisor.tick()
+    await http.delete(f"/api/policy/v1/launches/{run_id}", headers={"X-API-Key": policy.token})
+    supervisor.tick()
+    assert (await policy.get(f"/benchmarks/{bench_id}")).json()["status"] == "killed"
 
 
 async def test_a_whole_night_start_to_verdict(night):

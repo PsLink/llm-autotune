@@ -879,6 +879,7 @@ async def bench_launch(
         service_port=0,
         policy_session_id=session.id,
         idempotency_key=idempotency_key,
+        launch_run_id=parent.id,
         started_at=datetime.now(UTC),
     )
     db.add(run)

@@ -2196,6 +2196,49 @@ class Supervisor:
         # offers back every member, not just the master.
         if cleaned:
             self._release_run_machines(session, run)
+        if run.kind == RunKind.POLICY_LAUNCH.value:
+            self._stop_benchmarks_of(session, run)
+
+    def _stop_benchmarks_of(self, session: Session, launch: Run) -> None:
+        """Stop what is still benchmarking an engine that just stopped.
+
+        LLMBench cannot tell a dead engine from a slow one — a replay against a
+        crashed endpoint runs out its own timeouts, an hour or more, and the
+        policy waits on it as if it were measuring. The platform launched the
+        engine, so it is the one that knows: the benchmark ends with the launch,
+        failed with the launch's own reason when the engine crashed.
+        """
+        live = session.scalars(
+            select(Run).where(
+                Run.launch_run_id == launch.id,
+                Run.status.not_in([s.value for s in TERMINAL_RUN_STATES]),
+            )
+        ).all()
+        for bench in live:
+            if bench.llmbench_submission_id:
+                try:
+                    self.bench.cancel(bench.llmbench_submission_id)
+                except Exception:
+                    logger.exception(
+                        "cancelling benchmark %d of launch %d failed", bench.id, launch.id
+                    )
+            if launch.status == RunStatus.FAILED.value:
+                bench.failure_class = launch.failure_class or "engine_crashed"
+                self._finish(
+                    session, bench, RunStatus.FAILED,
+                    error=f"the engine under test stopped mid-benchmark (launch {launch.id}): "
+                    f"{(launch.error or launch.failure_class or 'crashed')[:300]}",
+                )
+            else:
+                self._finish(
+                    session, bench, RunStatus.KILLED,
+                    error=f"the engine under test was released mid-benchmark (launch {launch.id})",
+                )
+            self._event(
+                session, "benchmark_stopped_with_launch",
+                campaign_id=bench.campaign_id, run_id=bench.id,
+                payload={"launch": launch.id, "launch_status": launch.status},
+            )
 
     def _begin_teardown(self, session: Session, run: Run) -> bool:
         """Start tearing a run's container down; return whether it is already
