@@ -123,6 +123,7 @@ from app.evaluation import (
 )
 from app.evaluation.aggregate import summary_of
 from app.hardware import is_node_pool, record_capacity
+from app.measures import reader_for
 from app.objective import sort_key
 from app.staging import (
     SCREEN,
@@ -2574,9 +2575,12 @@ class Supervisor:
         # None, which every reader downstream takes to mean "this run measured
         # nothing" — the expensive stage would produce no usable evidence at all.
         if source == "llmbench":
-            stored = summarize(
-                _stage_objective(run.campaign, stage_of_run(run)), outcome.metrics
-            ).as_dict()
+            # Through a Reader, so an objective may name measures
+            # (output_tpm_per_gpu, ttft_ms@p99) as well as raw LLMBench keys.
+            reader = reader_for(
+                outcome.metrics, outcome.raw, run.candidate.config if run.candidate else None
+            )
+            stored = summarize(_stage_objective(run.campaign, stage_of_run(run)), reader).as_dict()
             result.objective_value = stored["objective_value"]
             result.feasible = stored["feasible"]
             result.constraints = stored["constraints"]

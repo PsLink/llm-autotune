@@ -68,8 +68,20 @@ class MeasureRef:
 
 def is_measure_ref(text: str) -> bool:
     """True when `text` is meant as a measure, False for a raw LLMBench key.
-    A raw key always has a module and a `.`; a measure reference never does."""
-    return "." not in text and bool(_REF.match(text))
+
+    A raw key has a module and a `.` (`replay.uptime`), or is one of the few
+    submission-wide names (`score_total`). A measure reference never has a
+    `.`; it either uses the reference syntax (`/ @ [ :`) or is a name the
+    catalogue knows — so a typo'd measure is refused, not read as a raw key.
+    """
+    if not text or "." in text:
+        return False
+    match = _REF.match(text)
+    if not match:
+        return any(c in text for c in "/@[:")
+    if any(c in text for c in "/@[:"):
+        return True
+    return lookup(match["measure"]) is not None
 
 
 def parse(text: str) -> MeasureRef:

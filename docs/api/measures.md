@@ -49,6 +49,33 @@ replay/success_rate             a named scenario (a module, `name#2` for its sec
   it, because a limit that was not measured cannot be certified.
 - `uptime` is accepted as another name for `success_rate`.
 
+## In an objective
+
+An objective's target and its redlines can name measures and raw keys,
+mixed freely:
+
+```json
+{
+  "target_metric": "output_tpm_per_gpu",
+  "redlines": [
+    {"metric": "success_rate", "op": ">=", "value": 0.99},
+    {"metric": "ttft_ms@p90[32k_64k]", "op": "<=", "value": 8000},
+    {"metric": "functional_acceptance/pass_rate", "op": ">=", "value": 0.99}
+  ]
+}
+```
+
+- A latency target is minimised by default, a throughput target maximised.
+  The measure's catalogue entry decides.
+- Saving an objective refuses a malformed reference, such as an unknown
+  measure or a statistic the measure doesn't have.
+- The campaign preflight refuses a target or redline that the chosen
+  benchmark's modules never report (`itl_ms@p99` on a replay, `:c8` on
+  anything but a sweep).
+- The Baseline Hub gate reads `ttft_ms@p50/p90/p99` and `request_output_tps`
+  redlines the same way as their raw-key forms.
+- `GET /api/objectives/metrics` returns the catalogue as `measures`.
+
 ## The operating point
 
 A scenario's measures describe one operating point unless a reference names

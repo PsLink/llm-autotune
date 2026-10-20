@@ -115,3 +115,106 @@ def value(
             scenarios = measures_of(metrics or {})
         return resolve(parse(name), scenarios)
     return (metrics or {}).get(name)
+
+
+class Reader:
+    """One run's numbers by name: a measure reference through its scenarios,
+    a raw LLMBench key verbatim. Has the `.get` of the metrics dict it
+    replaces, so everything that judges a run (objective, redlines, gate)
+    reads both kinds of name without knowing there are two.
+    """
+
+    def __init__(
+        self,
+        metrics: dict[str, Any] | None,
+        reports: list[dict[str, Any]] | None = None,
+        cards: float | None = None,
+    ):
+        self.metrics = metrics or {}
+        self._reports = reports
+        self._cards = cards
+        self._scenarios: list[Scenario] | None = None
+
+    @property
+    def scenarios(self) -> list[Scenario]:
+        if self._scenarios is None:
+            self._scenarios = measures_of(self.metrics, self._reports, self._cards)
+        return self._scenarios
+
+    def get(self, name: str, default: Any = None) -> Any:
+        if name and is_measure_ref(name):
+            try:
+                found = resolve(parse(name), self.scenarios)
+            except RefError:
+                return default
+            return default if found is None else found
+        return self.metrics.get(name, default)
+
+    def __contains__(self, name: str) -> bool:
+        return self.get(name) is not None
+
+
+def reader_for(
+    metrics: dict[str, Any] | None,
+    raw: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
+) -> Reader:
+    """A Reader for a stored result: module params from the raw submission,
+    cards from the config it measured (tp × dp × pp)."""
+    reports = None
+    if raw:
+        from app.evaluation.llmbench import module_reports
+
+        try:
+            reports = module_reports(raw)
+        except Exception:
+            reports = None
+    cards = None
+    if config:
+        from app.control.search.validation import cards_used
+
+        try:
+            cards = cards_used(config) or None
+        except Exception:
+            cards = None
+    return Reader(metrics, reports, cards)
+
+
+def problem_with(
+    name: str,
+    modules: list[str],
+    replay_names: tuple[str, ...] | None = None,
+    aliases: dict[str, str] | None = None,
+) -> str | None:
+    """Why a benchmark running `modules` (in order) can never report `name`,
+    or None when it can. A raw key is the caller's business."""
+    from app.evaluation.llmbench import instance_keys
+    from app.measures.adapters import adapt
+
+    if not is_measure_ref(name):
+        return None
+    try:
+        ref = parse(name)
+    except RefError as exc:
+        return str(exc)
+    if replay_names is None or aliases is None:
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        replay_names = (settings.llmbench_replay_module,) if replay_names is None else replay_names
+        aliases = dict(settings.llmbench_module_families or {}) if aliases is None else aliases
+    scenarios = [
+        adapt(key, {}, None, None, replay_names, aliases) for key in instance_keys(modules)
+    ]
+    scenario = main_scenario(scenarios, ref.scenario)
+    if scenario is None:
+        return (
+            f"no module {ref.scenario} in this benchmark"
+            if ref.scenario
+            else "this benchmark runs no modules"
+        )
+    if ref.point and scenario.kind != "sweep":
+        return f"{scenario.key} is not a sweep, so it has no point {ref.point}"
+    if ref.key not in scenario.supports:
+        return f"{scenario.key} never reports {ref.key}"
+    return None

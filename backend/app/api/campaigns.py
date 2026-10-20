@@ -55,7 +55,7 @@ from app.evaluation.benchmarks import BenchmarkRefused
 from app.evaluation.llmbench import LLMBenchClient
 from app.evaluation.ranking import leaderboard_entries
 from app.metrics_catalog import DEFAULT_VERIFY_TARGET_METRIC
-from app.objective import target_metric
+from app.objective import redlines, target_metric
 from app.reporting import render_campaign_report
 from app.reporting.activity import render_activity
 from app.schemas.core import (
@@ -638,6 +638,7 @@ def _benchmark_checks(
         pf.benchmark_check(
             "benchmark", "Benchmark", body.benchmark_slug, catalog,
             target_metric(body.objective),
+            [r.get("metric", "") for r in redlines(body.objective)],
         )
     ]
     if body.verify_benchmark_slug:

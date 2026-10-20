@@ -467,3 +467,22 @@ ALIASES: dict[str, str] = {"uptime": "success_rate"}
 
 def lookup(name: str) -> Measure | None:
     return BY_NAME.get(ALIASES.get(name, name))
+
+
+def catalogue() -> list[dict]:
+    """The catalogue as data, for an editor, a policy or the docs."""
+    return [
+        {
+            "name": m.name,
+            "label": m.label,
+            "unit": m.unit,
+            "better": m.better,
+            "group": m.group,
+            "meaning": m.meaning,
+            "stats": list(m.stats),
+            "default_stat": m.default_stat,
+            "qualifier": m.qualifier,
+            "qualifier_values": list(m.qualifier_values),
+        }
+        for m in MEASURES
+    ]

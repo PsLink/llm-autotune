@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Measures: one vocabulary for benchmark results** (`docs/api/measures.md`).
+  An objective, a redline or the Hub gate can name `output_tpm_per_gpu`,
+  `ttft_ms@p99`, `success_rate` or `replay/ttft_ms@p90[32k_64k]` instead of
+  the LLMBench module key behind it, whose name, meaning and statistics differ
+  from module to module (a replay's `output_tps_mean` is one request's speed,
+  a sweep's is a whole level's; `*_card_norm` is per eight cards). Adapters
+  translate each module's keys; a sweep is read at its highest-throughput
+  level that met its SLO. Saving refuses a malformed reference, and preflight
+  refuses one the benchmark never reports. Raw keys keep working unchanged.
+
 - **A policy night validates production next to its finalists, side by side.**
   The final measurement launches production and every registered contender
   at once, as many as the night's GPU budget holds, instead of one contender

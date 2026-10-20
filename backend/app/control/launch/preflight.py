@@ -493,6 +493,7 @@ def benchmark_check(
     slug: str,
     catalog: dict[str, list[str]] | None,
     target_metric: str = "",
+    redline_metrics: list[str] | None = None,
 ) -> Check:
     """Does this benchmark exist, and can it report what the objective ranks on?
 
@@ -518,6 +519,17 @@ def benchmark_check(
             else f"{len(catalog)} benchmark(s) are available to this account.",
         )
     modules = [m for m in catalog[slug] if m]
+    from app.measures import is_measure_ref, problem_with
+
+    for name in [target_metric, *(redline_metrics or [])]:
+        if name and is_measure_ref(name):
+            problem = problem_with(name, modules)
+            if problem:
+                return Check(
+                    key, label, FAIL, f"{slug}: {problem}",
+                    "Every run would complete and score nothing against it. See "
+                    "docs/api/measures.md for what each module reports.",
+                )
     module = target_metric.split(".")[0] if "." in target_metric else ""
     if module and module not in modules:
         return Check(

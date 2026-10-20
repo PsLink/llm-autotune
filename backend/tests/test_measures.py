@@ -49,6 +49,9 @@ def test_a_raw_llmbench_key_is_never_read_as_a_measure():
     assert not is_measure_ref("replay.output_tpm_card_norm")
     assert not is_measure_ref("perf_guidellm_sweep.c1.request_output_tps")
     assert is_measure_ref("output_tpm_per_gpu")
+    # A submission-wide raw key has no dot either.
+    assert not is_measure_ref("score_total")
+    assert is_measure_ref("ttft_ms@p95")  # a measure, refused when parsed
 
 
 @pytest.mark.parametrize(
@@ -315,3 +318,88 @@ def test_a_second_run_of_a_module_is_its_own_scenario():
     assert value("replay#2/output_tpm", scenarios) == pytest.approx(
         2 * value("replay/output_tpm", scenarios)
     )
+
+
+# -- judged by measures ------------------------------------------------------------
+
+
+def test_an_objective_on_measures_scores_and_judges_a_run():
+    from app.evaluation.aggregate import summarize
+    from app.measures import Reader
+
+    d = _load("replay")
+    reader = Reader(d["metrics"], [{"module": "replay", "params": {"concurrency": 16}}], cards=2)
+    objective = {
+        "target_metric": "output_tpm_per_gpu",
+        "redlines": [
+            {"metric": "success_rate", "op": ">=", "value": 0.99},
+            {"metric": "ttft_ms@p90[32k_64k]", "op": "<=", "value": 100.0},  # crossed
+            {"metric": "replay.uptime", "op": ">=", "value": 0.99},  # a raw key still works
+        ],
+    }
+    summary = summarize(objective, reader)
+    assert summary.objective_value == pytest.approx(d["metrics"]["replay.output_tpm"] / 2)
+    assert not summary.feasible
+    assert summary.breaches == [
+        f"ttft_ms@p90[32k_64k]={d['metrics']['replay.ttft_32k_64k_p90_ms']:g} <= 100"
+    ]
+
+
+def test_a_latency_measure_is_minimized_by_default():
+    from app.objective import direction
+
+    assert direction({"target_metric": "ttft_ms@p99"}) == "minimize"
+    assert direction({"target_metric": "output_tpm_per_gpu"}) == "maximize"
+
+
+@pytest.mark.parametrize(
+    "name, modules, problem",
+    [
+        ("ttft_ms@p99", ["replay"], None),
+        ("itl_ms@p99", ["replay"], "never reports itl_ms@p99"),
+        ("request_output_tps@p10", ["perf_guidellm_sweep"], "never reports"),
+        ("request_output_tps:c1", ["replay"], "not a sweep"),
+        ("request_output_tps:c1", ["perf_guidellm_sweep"], None),
+        ("functional_acceptance/pass_rate", ["perf_guidellm_sweep", "functional_acceptance"], None),
+        ("hallucination/hallucination_rate", ["replay"], "no module hallucination"),
+        ("ttft_ms@p95", ["replay"], "no statistic"),
+    ],
+)
+def test_a_benchmark_that_can_never_report_a_measure_is_caught_before_the_night(
+    name, modules, problem
+):
+    from app.measures import problem_with
+
+    found = problem_with(name, modules, replay_names=(), aliases={})
+    assert (found is None) if problem is None else (problem in found)
+
+
+def test_the_gate_reads_measure_redlines():
+    from app.evaluation.gate import Gate
+
+    gate = Gate.from_objective(
+        {
+            "redlines": [
+                {"metric": "ttft_ms@p90", "op": "<=", "value": 3000},
+                {"metric": "request_output_tps", "op": ">=", "value": 20},
+                {
+                    "metric": "ttft_ms@p50[32k_64k]",
+                    "op": "<=",
+                    "value": 10,
+                },  # a bucket is not the gate
+            ]
+        }
+    )
+    assert (gate.ttft_ms, gate.ttft_percentile, gate.min_request_output_tps) == (3000, "p90", 20)
+
+
+def test_an_objective_naming_a_malformed_measure_is_refused_when_saved():
+    from fastapi import HTTPException
+
+    from app.api.objectives import _validate
+    from app.schemas.core import ObjectiveCreate
+
+    with pytest.raises(HTTPException, match="no statistic 'p95'"):
+        _validate(ObjectiveCreate(name="x", target_metric="ttft_ms@p95"))
+    _validate(ObjectiveCreate(name="y", target_metric="output_tpm_per_gpu"))
+    _validate(ObjectiveCreate(name="z", target_metric="replay.output_tpm_card_norm"))

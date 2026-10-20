@@ -22,6 +22,27 @@ TTFT_SUFFIXES = ("ttft_p50_ms", "ttft_p90_ms", "ttft_p99_ms")
 REQUEST_TPS_SUFFIX = "request_output_tps"
 
 
+def _measure_leaf(metric: str) -> str | None:
+    """The raw-key leaf a gate measure stands for (`ttft_ms@p99` →
+    `ttft_p99_ms`), or None when `metric` is not a gate measure. Only the
+    overall TTFT counts — a prompt-bucket TTFT is not the scenario's gate."""
+    from app.measures import RefError, is_measure_ref, parse
+
+    if not is_measure_ref(metric):
+        return None
+    try:
+        ref = parse(metric)
+    except RefError:
+        return None
+    if ref.point or ref.qualifier:
+        return None
+    if ref.measure == "ttft_ms" and ref.stat in ("p50", "p90", "p99"):
+        return f"ttft_{ref.stat}_ms"
+    if ref.measure == "request_output_tps" and ref.stat == "mean":
+        return REQUEST_TPS_SUFFIX
+    return None
+
+
 @dataclass
 class Gate:
     """A latency bound plus a per-request floor. A new rule is a new field
@@ -60,6 +81,11 @@ class Gate:
             except (TypeError, ValueError):
                 continue
             leaf = metric.rsplit(".", 1)[-1]
+            # A measure reference names the same two rules: ttft_ms@p99 and
+            # request_output_tps (app.measures).
+            measure = _measure_leaf(metric)
+            if measure is not None:
+                leaf = measure
             if leaf in TTFT_SUFFIXES and rule.get("op") in ("<=", "<"):
                 # The tightest TTFT redline is the gate: a scenario has to hold
                 # every one of them, so the strictest is the binding one.
