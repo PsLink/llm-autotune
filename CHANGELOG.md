@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A policy night validates production next to its finalists, side by side.**
+  The final measurement launches production and every registered contender
+  at once, as many as the night's GPU budget holds, instead of one contender
+  after another — so the verdict says, like for like, whether a contender
+  beats production, and the validation reserve shrinks to the rounds the
+  launches take. The report quotes "vs production" on the validation
+  benchmark when production was measured on it. On by default
+  (`policy_settings.validate_production`).
+- **GPU budget.** `policy_settings.cards` is the night's GPU budget, shared by
+  every launch (trials, repeats, validation), each taking the cards its config
+  uses. It is now a field in the campaign form.
+
 - **Policy contract 1.3: a policy can see what happened, and is told what it
   may not change.** For its own launches and benchmarks a policy can now read
   the engine log (`GET /launches/{id}/log`, with `tail`/`grep`/`context`), the

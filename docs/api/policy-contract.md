@@ -27,7 +27,10 @@ and measures it with the full replay, the same way for every campaign, so the
 verdict never depends on how you would have served it. (The one exception: a
 contender the platform cannot launch — a spec on a *different* engine image
 because you serve your own engines — is one it asks *you* to serve.) That
-measurement — never your own — is the campaign's verdict. Then you exit, the
+measurement — never your own — is the campaign's verdict. Production is
+measured the same way, at the same time, so the verdict says whether a
+contender beats it under the same conditions; validation launches run side by
+side, as many as the night's GPU budget holds. Then you exit, the
 container is removed, and production is restored exactly as it is after any
 other night.
 
@@ -151,8 +154,11 @@ the response is always current.
 
 Field notes:
 
-- **`hardware`** — the cards and host ports that are yours tonight. Use no
-  others. Engines you serve yourself must bind `0.0.0.0:<one of these ports>`
+- **`hardware`** — the cards and host ports that are yours tonight: the
+  night's **GPU budget** (the campaign's `policy_settings.cards`). Every launch
+  you make shares it, each taking as many cards as its config uses, so the
+  budget — not a count of launches — is what limits how much runs at once. Use
+  no others. Engines you serve yourself must bind `0.0.0.0:<one of these ports>`
   (the container runs on the host network). If `gpus_visible_in_container` is
   true the cards are already visible to your process.
   With `pool: true` (1.2) the machine is a Kubernetes node pool, and
@@ -627,7 +633,8 @@ from their specs, time permitting. Either way the machine's own guarantees
 ## What is *not* guaranteed
 
 - That every contender gets validated — a night that runs out of clock
-  validates in rank order and marks the rest `skipped`.
+  validates in rank order (production first, then the contenders, side by
+  side as the budget allows) and marks the rest `skipped`.
 - That a benchmark you request completes — the window's hard cutoff kills
   running work, and `EvaluatorBusy` nights exist. Design your loop to treat a
   lost measurement as a lost measurement, not a crisis.

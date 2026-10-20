@@ -43,13 +43,19 @@ class PolicySettings(BaseModel):
     # pin it, for a model whose first night has nothing to learn from yet.
     approx_minutes_each: int | None = Field(default=None, ge=5, le=240)
     model_startup_minutes: int | None = Field(default=None, ge=0, le=120)
-    # Overrides the derived default (max_contenders * per-contender + 15).
+    # Overrides the derived default: the validation launches, side by side on
+    # the GPU budget, in rounds of one contender's time, + 15.
     validation_reserve_minutes: int | None = Field(default=None, ge=5, le=720)
-    # Cards this session holds on its machine. None = the whole box, the
-    # default for a night that has the machine to itself. Set (together with
-    # `share_machine` on the campaign) to take only a slice — the cards the
-    # widest candidate needs — so several sessions can share one node.
+    # The night's GPU budget: how many cards the session holds at once, which
+    # every launch it makes (search trials, repeats, validation) shares. A
+    # launch takes as many as its config uses (tp × dp × pp), so the budget,
+    # not a count of launches, is what limits parallelism. None = the whole
+    # machine on a box the night has to itself; on a node pool, the cards of
+    # the widest config in the space (one launch at a time).
     cards: int | None = Field(default=None, ge=1, le=64)
+    # Measure production with the validation benchmark next to the contenders,
+    # so the verdict says whether they beat it under the same conditions.
+    validate_production: bool = True
     heartbeat_timeout_s: int | None = Field(default=None, ge=30, le=3600)
     # Productivity watchdog: a SEARCHING session with nothing running and no
     # delegated request for this long earns a strike; `search_idle_strikes`
@@ -76,12 +82,19 @@ class PolicySettings(BaseModel):
             return list(DEFAULT_FORBIDDEN_PARAMS)
         return [p.strip() for p in self.forbidden_params if p.strip()]
 
-    def reserve_minutes(self, per_contender: int) -> int:
+    def validation_launches(self) -> int:
+        """Validation runs at the end of the night: the contenders, and
+        production next to them."""
+        return self.max_contenders + (1 if self.validate_production else 0)
+
+    def reserve_minutes(self, per_contender: int, rounds: int | None = None) -> int:
         """Validation time held back at the end of the window, given what one
-        contender costs (policy_lifecycle.contender_minutes)."""
+        contender costs (policy_lifecycle.contender_minutes) and how many
+        rounds the launches take side by side on the GPU budget (one launch
+        per round when unknown)."""
         if self.validation_reserve_minutes is not None:
             return self.validation_reserve_minutes
-        return self.max_contenders * per_contender + 15
+        return (rounds or self.validation_launches()) * per_contender + 15
 
 
 # -- registry (human-facing, JWT) -----------------------------------------------

@@ -43,6 +43,8 @@ from app.control.orchestrator.policy_lifecycle import (
     settings_of,
 )
 from app.control.orchestrator.schedule import from_campaign as schedule_of
+from app.control.search.base import CandidateConfig
+from app.control.search.space import prune_inactive
 from app.control.search.validation import cards_used, widest_cards
 from app.core import apikeys
 from app.db.models import (
@@ -114,19 +116,26 @@ def policy_log_path(run_log_dir: str, session_id: int) -> str:
 
 
 
-def _validation_cards(session: PolicySession, config: dict, blockers: list) -> list[int]:
-    """The cards a contender's validation run takes: as many as its config
-    uses (tp × dp × pp), out of the session's block, free ones first. The
-    block is every card the session may use; a launch sized to the block
-    asked a cluster for all of them, and waited forever for cards that
-    production or another session held."""
+def _validation_cards(session: PolicySession, config: dict, blockers: list) -> list[int] | None:
+    """The cards a validation run takes: as many as its config uses
+    (tp × dp × pp), all of them free within the session's block — or None
+    when not enough are free yet. Validation launches run side by side, so
+    a launch never borrows a card another one (or a dying engine) still
+    holds; it waits for the next tick instead. A session with no card block
+    (an exclusive box without slicing) takes none here: the launch driver
+    places it."""
     block = list(session.gpu_indices or [])
     if not block:
         return []
-    needed = min(max(cards_used(config), 1), len(block))
+    needed = max(cards_used(config), 1)
+    if needed > len(block):
+        needed = len(block)
     held = {i for r in blockers for i in (r.gpu_indices or [])}
-    ordered = [i for i in block if i not in held] + [i for i in block if i in held]
-    return sorted(ordered[:needed])
+    free = [i for i in block if i not in held]
+    if len(free) < needed:
+        return None
+    return sorted(free[:needed])
+
 
 class PolicySessionEngine:
     """Advances every live policy session by one step per tick.
@@ -746,15 +755,18 @@ class PolicySessionEngine:
     def _advance_validating(
         self, db: Session, session: PolicySession, campaign: Campaign, machine
     ) -> None:
+        """Measure every registered contender, and production next to them,
+        with the validation benchmark. Launches go side by side, as many as
+        the session's free cards allow; production goes first, then the
+        contenders by rank."""
         contenders = db.scalars(
             select(PolicyContender)
             .where(PolicyContender.session_id == session.id)
             .order_by(PolicyContender.rank, PolicyContender.id)
         ).all()
 
-        # 1. A contender being measured: wait for its run to land.
-        serving = [c for c in contenders if c.status == ContenderStatus.SERVING.value]
-        for contender in serving:
+        # 1. Contenders being measured: resolve the ones whose run has landed.
+        for contender in [c for c in contenders if c.status == ContenderStatus.SERVING.value]:
             run = db.get(Run, contender.run_id) if contender.run_id else None
             if run is None:
                 # Commanded but the policy has not POSTed /serving yet — give it
@@ -770,10 +782,9 @@ class PolicySessionEngine:
                         contender.status = ContenderStatus.SKIPPED.value
                         contender.skip_reason = "policy never served it"
                         session.serving_contender_id = None
-                    return
                 continue
             if run.status not in {s.value for s in TERMINAL_RUN_STATES}:
-                return  # measurement in flight; nothing else to do this tick
+                continue  # still measuring; the others go on
             contender.status = (
                 ContenderStatus.VALIDATED.value
                 if run.status == RunStatus.SUCCEEDED.value
@@ -794,64 +805,104 @@ class PolicySessionEngine:
                          "rank": contender.rank, "status": contender.status},
             )
 
-        # 2. Next claim, if the clock still allows a measurement.
+        # 2. Launch what fits, while the clock still allows a measurement.
+        reference = self._reference_run(db, session)
+        want_reference = (
+            settings_of(campaign).validate_production and reference is None
+            and any(c.status in (ContenderStatus.REGISTERED.value, ContenderStatus.SERVING.value,
+                                 ContenderStatus.VALIDATED.value) for c in contenders)
+        )
         pending = [c for c in contenders if c.status == ContenderStatus.REGISTERED.value]
-        if pending:
-            # The search engine that just finalized is still flushing GPU memory
-            # and NCCL on the very cards (and port) this verify reuses — a
-            # container holds them for ~a minute after SIGTERM. Launching now
-            # trips the gpus_in_use / port backstop, and a sole contender then
-            # ends validation with no verdict. Hold until the machine is
-            # confirmed clear, the same way the classic scheduler keeps cards
-            # reserved until a dying container is gone.
-            if machine is not None and self._teardown_blocking(db, session, campaign, machine):
+        if pending or want_reference:
+            if self._launch_validations(db, session, campaign, machine, pending, want_reference):
                 return
-            _search, hard = deadlines(campaign, machine)
-            nxt = pending[0]
-            if hard is not None and now() + timedelta(
-                minutes=contender_minutes(campaign)
-            ) > hard:
-                for contender in pending:
-                    contender.status = ContenderStatus.SKIPPED.value
-                    contender.skip_reason = "out of clock before validation"
-                # fall through to the wrap-up below on the next tick
-                return
-            # The platform validates by default: it launches the contender from
-            # its own spec, the same way for every campaign, so a verdict never
-            # depends on how a policy would serve it. The only exception is a
-            # spec the platform cannot launch (a different engine image, or no
-            # engine_args) — only the policy that made it can bring that up, so
-            # if it is still alive it is asked to serve; otherwise it is skipped.
-            if self._platform_launchable(campaign, nxt):
-                self._platform_launch(db, session, campaign, machine, nxt)
-            elif (
-                self._workload_state(db, session, machine) == WorkloadState.RUNNING
-                and heartbeat_silence(session) < 2 * heartbeat_timeout_seconds(campaign)
-            ):
-                if session.serving_contender_id != nxt.id:
-                    nxt.status = ContenderStatus.SERVING.value
-                    nxt.serve_commanded_at = now()
-                    session.serving_contender_id = nxt.id
-                    self.sup._event(
-                        db, "policy_contender_serve_commanded", campaign_id=campaign.id,
-                        payload={"session_id": session.id, "contender_id": nxt.id,
-                                 "rank": nxt.rank},
-                    )
-            else:
-                nxt.status = ContenderStatus.SKIPPED.value
-                nxt.skip_reason = "the platform cannot launch this spec and the policy is gone"
-            return
 
-        # Re-read, not the list from step 1: a contender resolved above must
-        # not hold the wrap-up for one more tick.
+        # 3. Nothing left to launch: the night is over once every measurement
+        # has landed. Re-read, not the list from step 1.
         if any(c.status == ContenderStatus.SERVING.value for c in contenders):
-            return  # a /serving we are still waiting out
-
-        # 3. Nothing left to measure: the night is over.
+            return
+        if reference is not None and reference.status not in {s.value for s in TERMINAL_RUN_STATES}:
+            return
         final = (
             PolicySessionStatus.FAILED if session.failure_class else PolicySessionStatus.DONE
         )
         self._terminate(db, session, final, session.error)
+
+    def _launch_validations(
+        self, db: Session, session: PolicySession, campaign: Campaign, machine,
+        pending: list, want_reference: bool,
+    ) -> bool:
+        """Start every validation that fits on the free cards now, production
+        first. Returns True while something is still waiting to launch."""
+        machine = db.get(Machine, session.machine_id) if session.machine_id else machine
+        # The search engine that just finalized is still flushing GPU memory
+        # and NCCL on the cards (and port) validation reuses — a container
+        # holds them for ~a minute after SIGTERM. Hold the first launch until
+        # the machine is confirmed clear; after that, free cards decide.
+        started = any(c.run_id for c in pending) or self._reference_run(db, session) is not None
+        launched_any = db.scalar(
+            select(func.count(Run.id)).where(
+                Run.policy_session_id == session.id, Run.kind == RunKind.EXPERIMENT.value
+            )
+        )
+        if not started and not launched_any and machine is not None and self._teardown_blocking(
+            db, session, campaign, machine
+        ):
+            return True
+        _search, hard = deadlines(campaign, machine)
+        if hard is not None and now() + timedelta(minutes=contender_minutes(campaign)) > hard:
+            for contender in pending:
+                contender.status = ContenderStatus.SKIPPED.value
+                contender.skip_reason = "out of clock before validation"
+            return False
+        queue: list = (["reference"] if want_reference else []) + list(pending)
+        for item in queue:
+            if item == "reference":
+                config = self._production_config(db, campaign, machine)
+                if not self._launch_validation_run(db, session, campaign, None, config):
+                    return True
+                continue
+            contender = item
+            if self._platform_launchable(campaign, contender):
+                config = dict((contender.launch_spec or {}).get("engine_args") or {})
+                if not self._launch_validation_run(db, session, campaign, contender, config):
+                    return True  # out of cards for now: the rest wait their turn
+            elif (
+                self._workload_state(db, session, machine) == WorkloadState.RUNNING
+                and heartbeat_silence(session) < 2 * heartbeat_timeout_seconds(campaign)
+            ):
+                # Only the policy can bring this spec up, one at a time.
+                if session.serving_contender_id is None:
+                    contender.status = ContenderStatus.SERVING.value
+                    contender.serve_commanded_at = now()
+                    session.serving_contender_id = contender.id
+                    self.sup._event(
+                        db, "policy_contender_serve_commanded", campaign_id=campaign.id,
+                        payload={"session_id": session.id, "contender_id": contender.id,
+                                 "rank": contender.rank},
+                    )
+                return True
+            else:
+                contender.status = ContenderStatus.SKIPPED.value
+                contender.skip_reason = "the platform cannot launch this spec and the policy is gone"
+        return False
+
+    def _reference_run(self, db: Session, session: PolicySession) -> Run | None:
+        """This session's validation run of the production config, if any."""
+        return db.scalars(
+            select(Run)
+            .join(Candidate, Run.candidate_id == Candidate.id)
+            .where(Run.policy_session_id == session.id, Candidate.is_baseline.is_(True))
+        ).first()
+
+    def _production_config(self, db: Session, campaign: Campaign, machine) -> dict:
+        """Production as the night's reference: the recorded baseline's engine
+        args for this model, engine and card type, over the campaign's base —
+        the same canonical form the policy's own anchor used."""
+        recorded = self.sup._campaign_baseline(db, campaign, machine)
+        space = campaign.search_space or {}
+        merged = {**(space.get("base") or {}), **dict(getattr(recorded, "engine_args", None) or {})}
+        return prune_inactive(merged, space)
 
     def _platform_launchable(self, campaign: Campaign, contender) -> bool:
         """Whether the platform can bring this contender up itself — the norm.
@@ -863,75 +914,83 @@ class PolicySessionEngine:
             return False
         return bool(spec.get("engine_args"))
 
-    def _platform_launch(
-        self, db: Session, session: PolicySession, campaign: Campaign, machine, contender
-    ) -> None:
-        """Bring the contender up ourselves and measure it — the DEFAULT way a
-        verdict is taken. Every campaign's contenders are validated the same
-        way, launched from their own spec, so the deciding number never depends
-        on how a particular policy would have served it; the policy's job ended
-        when it declared the contender. Callers route only launchable specs here
-        (see `_platform_launchable`); the guard below is defensive.
-        """
-        spec = contender.launch_spec or {}
-        image = spec.get("image") or ""
-        config = dict(spec.get("engine_args") or {})
-        if (image and image != campaign.image) or not config:
-            contender.status = ContenderStatus.SKIPPED.value
-            contender.skip_reason = "the platform cannot launch this contender's spec"
-            return
-        candidate = Candidate(
-            campaign_id=campaign.id,
-            config=config,
-            config_hash=contender.config_hash,
-            status=CandidateStatus.EXHAUSTED.value,
-            kind=CandidateKind.VERIFICATION.value,
-            deviations=contender.deviations,
-        )
-        db.add(candidate)
-        db.flush()
-        # This launch fires the instant search finalizes, while the last screen
-        # engine is still being torn down — and a container holds its port for
-        # seconds after teardown is requested. Reusing the session's base port
-        # then races that container and fails with port_conflict, sinking the
-        # whole validation. So pick a port no run on this machine still holds,
-        # live OR tearing down, exactly as the classic scheduler does — walking
-        # off the just-freed port rather than colliding on it.
+    def _launch_validation_run(
+        self, db: Session, session: PolicySession, campaign: Campaign, contender, config: dict
+    ) -> bool:
+        """Bring a config up ourselves and measure it with the validation
+        benchmark — the DEFAULT way a verdict is taken, launched from its own
+        spec so the deciding number never depends on how a policy would have
+        served it. `contender` None is production, measured as the reference
+        the contenders are judged against (`is_baseline` keeps it out of the
+        ranking). Returns False, changing nothing, when the session has no
+        free cards or port for it yet."""
+        if not config:
+            if contender is not None:
+                contender.status = ContenderStatus.SKIPPED.value
+                contender.skip_reason = "the platform cannot launch this contender's spec"
+            return True
         machine = db.get(Machine, session.machine_id)
         blockers = (
             self.sup._live_runs_on(db, machine) + self.sup._teardown_pending_on(db, machine)
             if machine is not None
             else []
         )
-        # On a shared box the session's port block is what keeps its engines
-        # out of the neighbours' — so walk that block before the campaign-wide
-        # fallback, which knows nothing about other sessions' reservations.
+        cards = _validation_cards(session, config, blockers)
+        if cards is None:
+            return False
+        # A container holds its port for seconds after teardown is requested,
+        # so walk off any port a run on this machine still holds, live or
+        # tearing down. On a shared box the session's own port block keeps its
+        # engines out of the neighbours' — walk that first.
         held = {r.service_port for r in blockers if r.service_port}
         port = next((p for p in (session.ports or []) if p not in held), None)
         if port is None:
+            # The block is spent (it is sized for the policy's own engines);
+            # any port no other session reserved will do.
             port = self.sup._free_port(
                 campaign, blockers, reserved=self._ports_reserved_by_others(db, session)
             )
+        candidate = Candidate(
+            campaign_id=campaign.id,
+            config=config,
+            config_hash=(
+                contender.config_hash if contender is not None
+                else f"production-{CandidateConfig(engine_args=config).hash}"
+            ),
+            status=CandidateStatus.EXHAUSTED.value,
+            kind=CandidateKind.VERIFICATION.value,
+            deviations=contender.deviations if contender is not None else [],
+            is_baseline=contender is None,
+        )
+        db.add(candidate)
+        db.flush()
         run = Run(
             campaign_id=campaign.id,
             candidate_id=candidate.id,
             machine_id=session.machine_id,
             kind=RunKind.EXPERIMENT.value,  # launched + benched like any run
             status=RunStatus.PENDING.value,
-            gpu_indices=_validation_cards(session, config, blockers),
+            gpu_indices=cards,
             service_port=port,
             policy_session_id=session.id,
             started_at=now(),  # like the classic scheduler; no null on this path
         )
         db.add(run)
         db.flush()
-        contender.status = ContenderStatus.SERVING.value
-        contender.candidate_id = candidate.id
-        contender.run_id = run.id
+        if contender is not None:
+            contender.status = ContenderStatus.SERVING.value
+            contender.candidate_id = candidate.id
+            contender.run_id = run.id
         self.sup._event(
-            db, "policy_contender_platform_launch", campaign_id=campaign.id, run_id=run.id,
-            payload={"session_id": session.id, "contender_id": contender.id},
+            db,
+            "policy_contender_platform_launch" if contender is not None
+            else "policy_production_validation_launch",
+            campaign_id=campaign.id, run_id=run.id,
+            payload={"session_id": session.id,
+                     "contender_id": contender.id if contender is not None else None,
+                     "gpus": cards},
         )
+        return True
 
     # ------------------------------------------------------------- plumbing
 

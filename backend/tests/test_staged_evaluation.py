@@ -507,7 +507,25 @@ def test_the_report_does_not_quote_a_percentage_against_a_baseline_it_never_repl
 
     verified_section = report.split("## Screening")[0]
     assert "%" not in verified_section
-    assert "not this one" in verified_section, "say why there is no comparison"
+    assert "not measured on this benchmark" in verified_section, "say why there is no comparison"
+
+
+def test_production_measured_on_the_replay_is_quoted_like_for_like():
+    """A policy night validates production next to its contenders, with the
+    same benchmark — that IS a like-for-like comparison, and the report says
+    how the leader did against it."""
+    runs = [
+        _Run(1, {"tp": 2}),
+        _Run(2, {"tp": 2}, stage=VERIFY),
+        _Run(3, {"__baseline__": "prod"}, stage=VERIFY),
+    ]
+    results = {1: _Result(1, 68000.0), 2: _Result(2, 4_600_000.0),
+               3: _Result(3, 4_000_000.0)}
+    report = render_campaign_report(_campaign(), runs, results, MACHINES)
+
+    verified_section = report.split("## Screening")[0]
+    assert "+15.0%" in verified_section
+    assert "| production |" in verified_section
 
 
 def test_a_verified_candidate_that_crossed_a_redline_is_not_crowned():

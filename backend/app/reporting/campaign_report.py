@@ -187,6 +187,7 @@ def _verification_section(
     verified: list[Run],
     results_by_run: dict[int, Result],
     varying: set[str],
+    production: list[Run] | None = None,
 ) -> list[str]:
     """What the expensive benchmark said, on its own terms.
 
@@ -194,11 +195,12 @@ def _verification_section(
     two stages ran different benchmarks, so their scores share no scale and no
     units. One table sorted across both would be a ranking of nothing.
 
-    There is deliberately no "vs production" column. The baseline canary
-    measures the handed-over service with the SCREENING benchmark, so a
-    percentage against it here would be computed from two different
-    measurements of two different workloads — a number that looks like a
-    finding and is not one.
+    "vs production" appears only when production itself was measured with
+    this benchmark (`production`: validation runs of the production config,
+    as a policy night takes them). The screening canary is never used here: a
+    percentage against it would be computed from two different measurements
+    of two different workloads — a number that looks like a finding and is not
+    one.
     """
     objective = _verify_objective(campaign)
     target = target_metric(objective)
@@ -216,6 +218,13 @@ def _verification_section(
         [g for g in groups if not g.breaches], key=lambda g: sort_key(g.mean, objective)
     )
     rejected = [g for g in groups if g.breaches]
+    production_values = [
+        v for v in (score(r) for r in (production or []) if r.status == "succeeded")
+        if v is not None
+    ]
+    reference = (
+        sum(production_values) / len(production_values) if production_values else None
+    )
 
     lines = [f"## Verified on `{slug}`", *_dataset_line(campaign)]
     if not groups:
@@ -231,12 +240,20 @@ def _verification_section(
 
     if ranked:
         best = ranked[0]
+        gain = (
+            improvement_pct(best.mean, reference, objective) if reference is not None else None
+        )
         lines += [
             f"**{_config_summary(best.config, varying)}** leads on real traffic "
             f"({_fmt(best.mean)} {target}){_evidence_note(best)}.",
             "",
-            "Production was measured on the screening benchmark, not this one, "
-            "so there is no like-for-like comparison to quote here.",
+            (
+                f"Production, measured the same way: {_fmt(reference)} {target} — "
+                f"the leader is {gain:+.1f}% against it."
+                if gain is not None
+                else "Production was not measured on this benchmark, so there is no "
+                "like-for-like comparison to quote here."
+            ),
             "",
         ]
     else:
@@ -246,11 +263,23 @@ def _verification_section(
             "",
         ]
 
-    lines += [f"| Config | {target} | Measurements | Runs |", "|---|---|---|---|"]
+    if reference is None:
+        lines += [f"| Config | {target} | Measurements | Runs |", "|---|---|---|---|"]
+    else:
+        lines += [f"| Config | {target} | vs production | Measurements | Runs |",
+                  "|---|---|---|---|---|"]
+        lines.append(
+            f"| production | {_fmt(reference)} | — | {len(production_values)} | "
+            f"{', '.join(str(r.id) for r in production or [])} |"
+        )
     for group in [*ranked, *rejected]:
         note = " ⚠ " + "; ".join(group.breaches) if group.breaches else ""
+        delta = ""
+        if reference is not None:
+            pct = improvement_pct(group.mean, reference, objective)
+            delta = f" {pct:+.1f}% |" if pct is not None else " — |"
         lines.append(
-            f"| {_config_summary(group.config, varying)}{note} | {_fmt(group.mean)} | "
+            f"| {_config_summary(group.config, varying)}{note} | {_fmt(group.mean)} |{delta} "
             f"{group.n} | {', '.join(str(r.id) for r in group.runs)} |"
         )
     lines.append("")
@@ -331,7 +360,12 @@ def render_campaign_report(
     # The expensive stage goes first when there is one: it is the answer, and
     # everything below it is the shortlisting that led there.
     if verified:
-        lines += _verification_section(campaign, verified, results_by_run, varying)
+        production_verified = [
+            r for r in runs if is_baseline(r) and _stage(r) == VERIFY
+        ]
+        lines += _verification_section(
+            campaign, verified, results_by_run, varying, production_verified
+        )
 
     # -- headline ------------------------------------------------------------
     verdict_heading = "## Screening verdict" if verified else "## Verdict"

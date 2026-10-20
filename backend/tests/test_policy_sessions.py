@@ -27,6 +27,7 @@ from app.db.base import Base, get_async_session
 from app.db.models import (
     ApiKey,
     Campaign,
+    Candidate,
     CampaignStatus,
     ContenderStatus,
     Machine,
@@ -365,13 +366,21 @@ async def test_a_dead_policy_still_gets_its_verdict(night):
     assert row.status == PolicySessionStatus.VALIDATING.value
     assert row.failure_class == "container_died"
 
-    # The platform launches the claim itself and measures it.
-    supervisor.tick()  # fallback run created (policy is dead, no serve command)
+    # The platform launches the claim itself and measures it — and production
+    # next to it, as the reference the verdict is judged against.
+    supervisor.tick()  # both runs created (policy is dead, no serve command)
     async with http.db() as session:
-        fallback = (
-            await session.execute(select(Run).where(Run.kind == RunKind.EXPERIMENT.value))
-        ).scalars().one()
-        assert fallback.policy_session_id == row.id
+        runs = (
+            await session.execute(
+                select(Run).where(Run.kind == RunKind.EXPERIMENT.value).order_by(Run.id)
+            )
+        ).scalars().all()
+        assert [r.policy_session_id for r in runs] == [row.id, row.id]
+        kinds = []
+        for r in runs:
+            candidate = await session.get(Candidate, r.candidate_id)
+            kinds.append(candidate.is_baseline)
+        assert kinds == [True, False]  # production first, then the contender
     for _ in range(4):  # launch -> ready -> health+bench -> verdict
         supervisor.tick()
     supervisor.tick()  # contender resolved; session closes
@@ -841,3 +850,78 @@ def test_a_validation_run_takes_the_cards_its_config_uses():
     assert _validation_cards(session, {"tp_size": 4, "dp_size": 2}, []) == list(range(8))
     # A card-less session (a CPU-only slice) launches with none.
     assert _validation_cards(SimpleNamespace(gpu_indices=[]), {"tp_size": 2}, []) == []
+
+
+async def _validating_with(http, supervisor, driver, policy, contenders):
+    put = await policy.put("/contenders", {"contenders": contenders})
+    assert put.status_code == 200
+    assert len(put.json()["accepted"]) == len(contenders), put.json()
+    row = await _session_row(http)
+    driver.workload_states[row.container_name] = WorkloadState.EXITED
+    supervisor.tick()
+    row = await _session_row(http)
+    assert row.status == PolicySessionStatus.VALIDATING.value
+    return row
+
+
+async def _validation_runs(http):
+    async with http.db() as session:
+        return (
+            await session.execute(
+                select(Run).where(Run.kind == RunKind.EXPERIMENT.value).order_by(Run.id)
+            )
+        ).scalars().all()
+
+
+_TWO = [
+    {"rank": 1, "launch_spec": {"engine_args": {"tp_size": 2}, "image": "sglang:test"}},
+    {"rank": 2, "launch_spec": {"engine_args": {"tp_size": 2, "chunked_prefill_size": 4096},
+                                "image": "sglang:test"}},
+]
+
+
+async def _allow_two(http, **extra):
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.policy_settings = {**(campaign.policy_settings or {}), "max_contenders": 2, **extra}
+        await session.commit()
+
+
+async def test_validation_launches_side_by_side_on_the_gpu_budget(night):
+    # Production and both contenders fit the 8-card box at once: one tick
+    # starts all three, each on its own cards.
+    supervisor, driver, http = night
+    await _allow_two(http)
+    policy = await _boot(supervisor, driver, http)
+    await _validating_with(http, supervisor, driver, policy, _TWO)
+    supervisor.tick()
+    runs = await _validation_runs(http)
+    assert len(runs) == 3
+    cards = [set(r.gpu_indices or []) for r in runs]
+    assert all(cards) and not (cards[0] & cards[1] or cards[0] & cards[2] or cards[1] & cards[2])
+    assert len({r.service_port for r in runs}) == 3
+
+
+async def test_a_small_gpu_budget_validates_one_after_another(night):
+    # Two cards: production first, the contenders wait for its cards.
+    supervisor, driver, http = night
+    await _allow_two(http, cards=2)
+    policy = await _boot(supervisor, driver, http)
+    await _validating_with(http, supervisor, driver, policy, _TWO)
+    supervisor.tick()
+    runs = await _validation_runs(http)
+    assert len(runs) == 1
+    async with http.db() as session:
+        assert (await session.get(Candidate, runs[0].candidate_id)).is_baseline
+
+
+async def test_production_validation_can_be_turned_off(night):
+    supervisor, driver, http = night
+    await _allow_two(http, validate_production=False)
+    policy = await _boot(supervisor, driver, http)
+    await _validating_with(http, supervisor, driver, policy, _TWO)
+    supervisor.tick()
+    runs = await _validation_runs(http)
+    assert len(runs) == 2
+    async with http.db() as session:
+        assert not any([(await session.get(Candidate, r.candidate_id)).is_baseline for r in runs])

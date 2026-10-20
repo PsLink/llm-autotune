@@ -23,9 +23,15 @@ def _campaign(settings: dict | None = None, timing: dict | None = None,
 
 
 def test_reserve_is_per_contender_time_plus_margin():
-    s = PolicySettings(max_contenders=2)
-    # 2 * 60 + 15
-    assert s.reserve_minutes(60) == 135
+    # Two contenders and production, one after another: 3 * 60 + 15.
+    assert PolicySettings(max_contenders=2).reserve_minutes(60) == 195
+    # Without production: 2 * 60 + 15.
+    assert PolicySettings(max_contenders=2, validate_production=False).reserve_minutes(60) == 135
+
+
+def test_side_by_side_validation_reserves_rounds_not_launches():
+    # All three launches fit the budget at once: one round.
+    assert PolicySettings(max_contenders=2).reserve_minutes(60, rounds=1) == 75
 
 
 def test_explicit_override_ignores_the_per_contender_math():

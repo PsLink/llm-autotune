@@ -104,6 +104,10 @@ const form = ref({
   // Only sent for a policy campaign: how many of its finalists the platform
   // re-measures at the end. Their benchmark and startup time are learned.
   policy_max_contenders: 2,
+  // The night's GPU budget (policy_settings.cards); undefined = the default
+  // (the whole box, or one launch's worth on a node pool).
+  policy_gpu_budget: undefined as number | undefined,
+  policy_validate_production: true,
   // Timings an imported campaign pinned, carried through untouched.
   policy_pinned: {} as Record<string, number>,
   // Parameters the policy may not change. Off = the platform's default list
@@ -299,6 +303,8 @@ function policySettings(): Record<string, unknown> {
     ...form.value.policy_pinned,
     max_contenders: form.value.policy_max_contenders,
   }
+  if (form.value.policy_gpu_budget) settings.cards = form.value.policy_gpu_budget
+  if (!form.value.policy_validate_production) settings.validate_production = false
   if (form.value.policy_forbidden_custom) {
     settings.forbidden_params = form.value.policy_forbidden_text
       .split('\n').map((line) => line.trim()).filter(Boolean)
@@ -623,9 +629,11 @@ function applyImport(opts: { review?: boolean } = {}) {
   // them as the Strategy select and the three budget inputs.
   const policyId = parsed.fields.policy_id
   form.value.strategy = typeof policyId === 'number' ? `policy:${policyId}` : ''
-  const { max_contenders, forbidden_params, params, ...pinned } =
+  const { max_contenders, forbidden_params, params, cards, validate_production, ...pinned } =
     (parsed.fields.policy_settings ?? {}) as Record<string, unknown>
   if (typeof max_contenders === 'number') form.value.policy_max_contenders = max_contenders
+  form.value.policy_gpu_budget = typeof cards === 'number' ? cards : undefined
+  form.value.policy_validate_production = validate_production !== false
   form.value.policy_pinned = pinned as Record<string, number>
   form.value.policy_forbidden_custom = Array.isArray(forbidden_params)
   form.value.policy_forbidden_text = Array.isArray(forbidden_params)
@@ -1164,9 +1172,33 @@ onMounted(async () => {
               <el-input-number v-model="form.policy_max_contenders" :min="1" :max="8"
                 size="small" />
             </el-form-item>
+            <el-form-item>
+              <template #label>
+                <span>GPU budget</span>
+                <InfoHint :width="380">
+                  How many cards the night holds at once. Every launch shares them — search
+                  trials, repeats, and the final validation of the finalists and production —
+                  each taking as many as its config needs (tp × dp × pp), so a bigger budget
+                  means more measurements side by side. Empty: the whole machine, or on a
+                  node pool one launch's worth.
+                </InfoHint>
+              </template>
+              <el-input-number v-model="form.policy_gpu_budget" :min="1" :max="64"
+                size="small" placeholder="default" />
+            </el-form-item>
 
             <el-collapse v-if="selectedPolicy" v-model="policyAdvanced" class="advanced">
               <el-collapse-item name="policy" title="Advanced">
+                <el-form-item>
+                  <el-checkbox v-model="form.policy_validate_production">
+                    Validate production next to the finalists
+                  </el-checkbox>
+                  <InfoHint :width="340">
+                    Measures the production config with the validation benchmark, at the same
+                    time as the finalists, so the verdict says whether they beat it under the
+                    same conditions. Costs one more launch's worth of cards at the end.
+                  </InfoHint>
+                </el-form-item>
                 <el-form-item>
                   <template #label>
                     <span>Parameters the policy may not change</span>
