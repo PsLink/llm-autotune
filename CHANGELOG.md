@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   launches take. The report quotes "vs production" on the validation
   benchmark when production was measured on it. On by default
   (`policy_settings.validate_production`).
+- **Engine and policy logs keep their start.** A log is read as its last
+  lines every few minutes, each save replacing the last, so on a long run the
+  start — the resolved server arguments, what the engine auto-enabled, its
+  startup warnings — scrolled away and could not be found later. A save now
+  keeps the first lines from the earliest read ahead of the latest end, and a
+  log over the size cap keeps its start as well as its end.
 - **GPU budget.** `policy_settings.cards` is the night's GPU budget, shared by
   every launch (trials, repeats, validation), each taking the cards its config
   uses. It is now a field in the campaign form.

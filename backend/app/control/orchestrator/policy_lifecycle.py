@@ -21,6 +21,7 @@ from typing import Any
 
 from app.control.orchestrator import timing
 from app.control.orchestrator.lifecycle import as_utc, now
+from app.control.search.validation import cards_used, widest_cards
 from app.core.config import get_settings
 from app.db.models import (
     Campaign,
@@ -29,7 +30,6 @@ from app.db.models import (
     PolicySession,
     PolicySessionStatus,
 )
-from app.control.search.validation import cards_used, widest_cards
 from app.hardware import is_node_pool
 from app.schemas.policy import PolicySettings
 

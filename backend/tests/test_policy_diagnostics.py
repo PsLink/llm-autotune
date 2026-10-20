@@ -139,7 +139,8 @@ async def test_catalog_warnings_name_only_what_the_policy_chose(night):  # noqa:
 
     kept = (await warned({"tp_size": 2})).json()["warnings"]
     assert not any("operator_knob" in w for w in kept)
-    changed = (await warned({"tp_size": 2, "operator_knob": 4, "mat_fraction_static": 0.85})).json()["warnings"]
+    args = {"tp_size": 2, "operator_knob": 4, "mat_fraction_static": 0.85}
+    changed = (await warned(args)).json()["warnings"]
     assert any(w.startswith("operator_knob ") for w in changed)
     assert any(w.startswith("mat_fraction_static ") for w in changed)
 

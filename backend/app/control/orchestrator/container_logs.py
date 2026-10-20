@@ -12,17 +12,56 @@ from __future__ import annotations
 
 import time
 
+GAP_MARK = "[... later lines dropped; the end of the log follows ...]"
+HEAD_LINES = 800
+
 
 def clip(text: str, max_bytes: int) -> str:
-    """The end of `text`, at most `max_bytes` of UTF-8, starting on a line."""
+    """`text` in at most `max_bytes` of UTF-8: its first quarter and its end,
+    each cut on a line. The start of an engine's log is where it says what it
+    resolved and enabled; the end is what it was doing last — both matter, the
+    middle (steady-state batch lines) least."""
     data = text.encode("utf-8")
     if max_bytes <= 0 or len(data) <= max_bytes:
         return text
-    end = data[-max_bytes:].decode("utf-8", errors="ignore")
+    head = data[: max_bytes // 4].decode("utf-8", errors="ignore")
+    cut = head.rfind("\n")
+    head = head[: cut + 1] if cut > 0 else head
+    room = max_bytes - len(head.encode("utf-8")) - len(GAP_MARK) - 2
+    end = data[-max(room, 0):].decode("utf-8", errors="ignore") if room > 0 else ""
     newline = end.find("\n")
     if 0 <= newline < len(end) - 1:
         end = end[newline + 1:]
-    return "(earlier lines dropped)\n" + end
+    return f"{head}{GAP_MARK}\n{end}"
+
+
+def read_text(path: str | None) -> str:
+    """A saved log, or "" when there is none (or it cannot be read)."""
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def with_head(previous: str, latest: str, head_lines: int = HEAD_LINES) -> str:
+    """A log read again: `latest` is only its last lines, so once a container
+    has logged more than that its start is gone from the read. Keep the start
+    from the earlier save — the first `head_lines` lines — ahead of the latest
+    end. A `latest` that still begins where the earlier save began is the whole
+    log, and is kept as it is."""
+    if not previous.strip():
+        return latest
+    head = previous.split(GAP_MARK, 1)[0] if GAP_MARK in previous else previous
+    head_kept = head.splitlines()[:head_lines]
+    if not head_kept:
+        return latest
+    first = head_kept[0]
+    if latest.startswith(first) or latest.splitlines()[:1] == [first]:
+        return latest
+    return "\n".join(head_kept) + f"\n{GAP_MARK}\n" + latest
 
 
 class Snapshots:

@@ -27,8 +27,8 @@ from app.db.base import Base, get_async_session
 from app.db.models import (
     ApiKey,
     Campaign,
-    Candidate,
     CampaignStatus,
+    Candidate,
     ContenderStatus,
     Machine,
     MachineState,
@@ -883,7 +883,9 @@ _TWO = [
 async def _allow_two(http, **extra):
     async with http.db() as session:
         campaign = await session.get(Campaign, 1)
-        campaign.policy_settings = {**(campaign.policy_settings or {}), "max_contenders": 2, **extra}
+        campaign.policy_settings = {
+            **(campaign.policy_settings or {}), "max_contenders": 2, **extra,
+        }
         await session.commit()
 
 
@@ -936,7 +938,8 @@ async def test_re_declaring_the_same_contender_refreshes_its_evidence(night):
     first = await policy.put("/contenders", {"contenders": [
         {"rank": 1, "launch_spec": spec, "evidence": {"values": [100.0], "measurements": 1}}]})
     again = await policy.put("/contenders", {"contenders": [
-        {"rank": 1, "launch_spec": spec, "evidence": {"values": [100.0, 96.0], "measurements": 2}}]})
+        {"rank": 1, "launch_spec": spec,
+         "evidence": {"values": [100.0, 96.0], "measurements": 2}}]})
     assert first.status_code == again.status_code == 200
     assert again.json()["accepted"][0]["id"] == first.json()["accepted"][0]["id"]
     async with http.db() as session:

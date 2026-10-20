@@ -33,7 +33,7 @@ from app.control.launch.base import (
     WorkloadState,
 )
 from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
-from app.control.orchestrator.container_logs import clip
+from app.control.orchestrator.container_logs import clip, read_text, with_head
 from app.control.orchestrator.lifecycle import as_utc, now
 from app.control.orchestrator.policy_lifecycle import (
     contender_minutes,
@@ -884,7 +884,9 @@ class PolicySessionEngine:
                 return True
             else:
                 contender.status = ContenderStatus.SKIPPED.value
-                contender.skip_reason = "the platform cannot launch this spec and the policy is gone"
+                contender.skip_reason = (
+                    "the platform cannot launch this spec and the policy is gone"
+                )
         return False
 
     def _reference_run(self, db: Session, session: PolicySession) -> Run | None:
@@ -1047,7 +1049,11 @@ class PolicySessionEngine:
         read keeps what was saved before: the container may already be gone."""
         if not text.strip():
             return
-        text = clip(text, self.sup.settings.log_file_max_bytes)
+        previous = read_text(policy_log_path(self.sup.settings.run_log_dir, session.id))
+        text = clip(
+            with_head(previous or (session.log_tail or ""), text),
+            self.sup.settings.log_file_max_bytes,
+        )
         # Kept in the row as well: the file is on the worker's disk, which the
         # API reads only when the two share a volume.
         session.log_tail = text[-64_000:]
