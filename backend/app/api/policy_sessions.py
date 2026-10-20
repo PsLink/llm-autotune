@@ -1029,11 +1029,15 @@ async def check_config(
     canonical, problems = _config_problems(body.engine_args, campaign, machine)
     known = known_flags(campaign.engine)
     normalized, _ = normalize_args(campaign.engine, canonical)
+    # Only what the policy chose: a key the campaign itself sets to this value
+    # (the base config) is the operator's, and repeating its warning on every
+    # check buries the ones about the policy's own flags.
+    base, _ = normalize_args(campaign.engine, (campaign.search_space or {}).get("base") or {})
     warnings = [
         f"{key} is not in the platform's {campaign.engine} flag catalog — the engine "
         "may still accept it; a typo fails only at launch"
         for key in sorted(normalized)
-        if known and key not in known
+        if known and key not in known and not (key in base and base[key] == normalized[key])
     ]
     command: list[str] = []
     if not any(p.kind in ("not_renderable", "bad_key") for p in problems):

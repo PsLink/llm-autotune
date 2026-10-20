@@ -124,6 +124,26 @@ async def test_check_answers_without_refusing_and_launches_refuse_the_same(night
     assert "forbidden" in contenders.json()["rejected"][0]["reason"]
 
 
+async def test_catalog_warnings_name_only_what_the_policy_chose(night):  # noqa: F811
+    supervisor, driver, http = night
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        space = dict(campaign.search_space)
+        space["base"] = {**space.get("base", {}), "operator_knob": 3}
+        campaign.search_space = space
+        await session.commit()
+    policy = await _boot(supervisor, driver, http)
+
+    def warned(args):
+        return policy.post("/configs/check", json={"engine_args": args})
+
+    kept = (await warned({"tp_size": 2})).json()["warnings"]
+    assert not any("operator_knob" in w for w in kept)
+    changed = (await warned({"tp_size": 2, "operator_knob": 4, "mat_fraction_static": 0.85})).json()["warnings"]
+    assert any(w.startswith("operator_knob ") for w in changed)
+    assert any(w.startswith("mat_fraction_static ") for w in changed)
+
+
 async def test_a_campaign_can_lift_the_forbidden_list(night):  # noqa: F811
     supervisor, driver, http = night
     async with http.db() as session:
