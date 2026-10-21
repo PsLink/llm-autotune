@@ -7,6 +7,7 @@ import InfoHint from '../components/InfoHint.vue'
 import { exactTime, relativeTime } from '../utils/time'
 import { toYaml } from '../utils/yaml'
 import { useFirstLoad } from '../utils/load'
+import { metricOptions, specFor } from '../utils/measures'
 
 const objectives = ref<Objective[]>([])
 const metrics = ref<MetricSpec[]>([])
@@ -26,10 +27,10 @@ const form = ref({
 })
 const defaultTarget = ref('')
 
-/** Grouped by the benchmark that reports them, headline metrics first inside
- *  each group. Flat, the list invited building an objective out of a sweep
- *  metric and a replay redline — a combination no single benchmark returns, so
- *  every run would score None against half of it. */
+/** Measures first, grouped by what they are (throughput, latency, health…),
+ *  then the raw LLMBench keys grouped by the benchmark that reports them,
+ *  headline entries first inside each group. A measure means the same in
+ *  every benchmark; a raw key exists only in the module that names it. */
 const grouped = computed(() => {
   const order: string[] = []
   const bins = new Map<string, MetricSpec[]>()
@@ -48,7 +49,7 @@ const grouped = computed(() => {
 })
 
 function spec(key: string): MetricSpec | undefined {
-  return metrics.value.find((m) => m.key === key)
+  return specFor(key, metrics.value)
 }
 
 function label(key: string): string {
@@ -69,9 +70,12 @@ const first = useFirstLoad(load)
 
 async function loadMetrics() {
   const { data } = await api.get('/objectives/metrics')
-  metrics.value = data.metrics
+  metrics.value = metricOptions(data)
   operators.value = data.operators
-  defaultTarget.value = data.default_target_metric ?? ''
+  // A new objective starts on a measure; the platform's own default (a raw
+  // key, kept so old campaigns read the same) still preselects campaigns.
+  defaultTarget.value = (data.measure_options ?? []).length
+    ? 'output_tpm_per_gpu' : (data.default_target_metric ?? '')
   return data.default_target_metric as string
 }
 
@@ -104,13 +108,15 @@ function openEdit(objective: Objective, asCopy = false) {
 }
 
 function addRedline() {
-  // The usual redline is a latency ceiling on the same benchmark as the
-  // target: p99 time to first token, from the sweep or from a replay.
-  const group = spec(form.value.target_metric)?.group
+  // The usual redline is a latency ceiling: p99 time to first token, as a
+  // measure when the target is one, else from the target's benchmark.
+  const target = spec(form.value.target_metric)
   const unused = metrics.value.filter(
     (m) => !form.value.redlines.some((r) => r.metric === m.key))
-  const metric = unused.find((m) => m.group === group && /^[^.]+\.ttft_p99_ms$/.test(m.key))
-    ?? unused.find((m) => m.group === group) ?? unused[0]
+  const metric = target?.measure
+    ? unused.find((m) => m.key === 'ttft_ms@p99') ?? unused.find((m) => m.measure)
+    : unused.find((m) => m.group === target?.group && /^[^.]+\.ttft_p99_ms$/.test(m.key))
+      ?? unused.find((m) => m.group === target?.group) ?? unused[0]
   if (!metric) return
   form.value.redlines.push({
     metric: metric.key,
@@ -277,7 +283,8 @@ onMounted(() => {
               <span v-if="spec(form.target_metric)!.unit"> ({{ spec(form.target_metric)!.unit }})</span>
             </InfoHint>
           </template>
-          <el-select v-model="form.target_metric" filterable style="width: 100%">
+          <el-select v-model="form.target_metric" filterable allow-create
+            default-first-option style="width: 100%">
             <el-option-group v-for="g in grouped" :key="g.name" :label="g.name">
               <el-option v-for="m in g.metrics" :key="m.key" :value="m.key" :label="m.label">
                 <span>{{ m.label }}</span>
@@ -285,6 +292,13 @@ onMounted(() => {
               </el-option>
             </el-option-group>
           </el-select>
+          <div class="muted tiny help">
+            A measure reads the same in every benchmark; a sweep is read at its
+            highest-throughput level that met its SLO. Type one to narrow it:
+            <span class="mono">replay/ttft_ms@p90</span> (one module),
+            <span class="mono">ttft_ms@p90[32k_64k]</span> (a prompt-length bucket),
+            <span class="mono">output_tpm:c8</span> (one sweep level).
+          </div>
         </el-form-item>
 
         <el-form-item>
@@ -316,7 +330,8 @@ onMounted(() => {
             empty-text="No redlines">
             <el-table-column label="Metric" min-width="240">
               <template #default="{ row }">
-                <el-select v-model="row.metric" filterable style="width: 100%">
+                <el-select v-model="row.metric" filterable allow-create
+                  default-first-option style="width: 100%">
                   <el-option-group v-for="g in grouped" :key="g.name" :label="g.name">
                     <el-option v-for="m in g.metrics" :key="m.key" :value="m.key"
                       :label="m.label">

@@ -403,3 +403,15 @@ def test_an_objective_naming_a_malformed_measure_is_refused_when_saved():
         _validate(ObjectiveCreate(name="x", target_metric="ttft_ms@p95"))
     _validate(ObjectiveCreate(name="y", target_metric="output_tpm_per_gpu"))
     _validate(ObjectiveCreate(name="z", target_metric="replay.output_tpm_card_norm"))
+
+
+def test_the_editor_lists_every_measure_and_statistic_as_a_valid_reference():
+    from app.measures.catalog import options
+
+    listed = {o["key"]: o for o in options()}
+    for key in listed:
+        parse(key)  # every listed key is one the platform accepts
+    assert "ttft_ms@p99" in listed and "request_output_tps" in listed
+    assert "request_output_tps@mean" not in listed  # the default statistic is the bare name
+    assert listed["ttft_ms@p99"]["better"] == "lower" and listed["ttft_ms@p99"]["headline"]
+    assert not any(k.startswith("accuracy") for k in listed)  # needs a task: typed, not listed

@@ -32,6 +32,7 @@ __all__ = [
     "measures_of",
     "parse",
     "resolve",
+    "scenarios_out",
     "value",
 ]
 
@@ -178,6 +179,24 @@ def reader_for(
         except Exception:
             cards = None
     return Reader(metrics, reports, cards)
+
+
+def scenarios_out(scenarios: list[Scenario]) -> list[dict[str, Any]]:
+    """Scenarios as the APIs send them (policy benchmarks, report results):
+    the operating point, the other points, what each module can report."""
+    return [
+        {
+            "scenario": sc.key,
+            "module": sc.module,
+            "kind": sc.kind,
+            "operating_level": sc.operating_level or None,
+            "operating_rule": sc.operating_rule,
+            "operating": dict(sc.operating),
+            "points": {k: dict(v) for k, v in sc.points.items() if k != "operating"},
+            "supports": sorted(sc.supports),
+        }
+        for sc in scenarios
+    ]
 
 
 def problem_with(

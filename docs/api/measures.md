@@ -74,7 +74,13 @@ mixed freely:
   anything but a sweep).
 - The Baseline Hub gate reads `ttft_ms@p50/p90/p99` and `request_output_tps`
   redlines the same way as their raw-key forms.
-- `GET /api/objectives/metrics` returns the catalogue as `measures`.
+- `GET /api/objectives/metrics` returns the catalogue as `measures`, and as
+  pickable references (one per measure and statistic) as `measure_options`.
+- The objective editor lists measures first, grouped by what they are, then
+  the raw keys. A reference with a module, a prompt bucket or a sweep point
+  (`replay/ttft_ms@p90[32k_64k]`) can be typed into the same field.
+- The report API's results (`GET /api/agent/v1/runs/{id}/results`) carry
+  `measures` next to the raw `metrics`.
 
 ## For a policy
 

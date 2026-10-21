@@ -48,6 +48,7 @@ import { sweptKeysOf, type SpaceShape } from '../utils/space'
 import { campaignStatus, failureLabel, isLive, runLabel, runStatus } from '../utils/status'
 import { absoluteTime, clockTime, duration, exactTime, relativeTime } from '../utils/time'
 import { toYaml } from '../utils/yaml'
+import { metricOptions, specFor } from '../utils/measures'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -234,7 +235,7 @@ interface DeclaredObjective {
 function describe(raw: unknown, fallbackKey: string) {
   const declared = (raw ?? {}) as DeclaredObjective
   const key = declared.target_metric || fallbackKey
-  const spec = metricSpecs.value.find((m) => m.key === key)
+  const spec = specFor(key, metricSpecs.value)
   const direction = declared.direction || (spec?.better === 'lower' ? 'minimize' : 'maximize')
   return {
     // Campaigns created before objectives were named carry no name; fall back
@@ -1188,7 +1189,7 @@ onMounted(() => {
   const linked = Number(route.query.run)
   if (linked) void openRun({ id: linked } as Run)
   api.get('/objectives/metrics').then(({ data }) => {
-    metricSpecs.value = data.metrics
+    metricSpecs.value = metricOptions(data)
     if (data.default_verify_target_metric) defaultVerifyMetric.value = data.default_verify_target_metric
   })
   poll.start()

@@ -69,7 +69,7 @@ from app.db.models import (
     RunStatus,
 )
 from app.hardware import is_node_pool
-from app.measures import reader_for
+from app.measures import reader_for, scenarios_out
 from app.measures.catalog import catalogue as measure_catalogue
 from app.measures.workload import describe as describe_workload
 from app.objective import direction, redlines, target_metric
@@ -409,19 +409,7 @@ async def _waiting_reason(db: AsyncSession, run: Run) -> str:
 
 def _measures_out(result: Result, candidate: Candidate | None) -> list[ScenarioMeasures]:
     reader = reader_for(result.metrics, result.raw, candidate.config if candidate else None)
-    return [
-        ScenarioMeasures(
-            scenario=sc.key,
-            module=sc.module,
-            kind=sc.kind,
-            operating_level=sc.operating_level or None,
-            operating_rule=sc.operating_rule,
-            operating=sc.operating,
-            points={k: v for k, v in sc.points.items() if k != "operating"},
-            supports=sorted(sc.supports),
-        )
-        for sc in reader.scenarios
-    ]
+    return [ScenarioMeasures(**s) for s in scenarios_out(reader.scenarios)]
 
 
 # What a benchmark sends, per slug: the benchmark platform is asked once per

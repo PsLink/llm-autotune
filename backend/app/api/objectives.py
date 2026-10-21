@@ -8,6 +8,7 @@ from app.db.base import get_async_session
 from app.db.models import Event, Objective, User
 from app.measures import RefError, is_measure_ref, parse
 from app.measures.catalog import catalogue as measure_catalogue
+from app.measures.catalog import options as measure_options
 from app.metrics_catalog import (
     DEFAULT_TARGET_METRIC,
     DEFAULT_VERIFY_TARGET_METRIC,
@@ -29,6 +30,8 @@ async def metrics(_: User = Depends(get_current_user)):
         # objective should name. `metrics` above are raw LLMBench keys, still
         # accepted.
         "measures": measure_catalogue(),
+        # The measures as pickable references, in the shape of `metrics`.
+        "measure_options": measure_options(),
         "operators": sorted(OPERATORS),
         "default_target_metric": DEFAULT_TARGET_METRIC,
         "default_verify_target_metric": DEFAULT_VERIFY_TARGET_METRIC,

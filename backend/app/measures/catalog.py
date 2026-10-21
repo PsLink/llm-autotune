@@ -486,3 +486,35 @@ def catalogue() -> list[dict]:
         }
         for m in MEASURES
     ]
+
+
+# What an editor lists first: the numbers most objectives are built from.
+_HEADLINE = {
+    "output_tpm_per_gpu", "total_tpm_per_gpu", "ttft_ms@p99", "request_output_tps",
+    "success_rate", "score_per_gpu",
+}
+
+
+def options() -> list[dict]:
+    """Every reference an objective editor can offer, in the shape it lists
+    raw keys in (`key`, `label`, `better`, `help`, `unit`, `headline`,
+    `group`): one per measure and statistic. A measure that needs a qualifier
+    (a task, a prompt bucket) or a scenario prefix is typed, not listed."""
+    out = []
+    for m in MEASURES:
+        if m.qualifier and not m.qualifier_values:
+            continue  # accuracy[<task>]: the task is the benchmark's to name
+        for stat in m.stats or (None,):
+            key = m.name if stat in (None, m.default_stat) else f"{m.name}@{stat}"
+            label = m.label if stat in (None, m.default_stat) else f"{m.label} {stat}"
+            out.append({
+                "key": key,
+                "label": label,
+                "better": m.better,
+                "help": m.meaning,
+                "unit": m.unit,
+                "headline": key in _HEADLINE,
+                "group": m.group.capitalize(),
+                "measure": True,
+            })
+    return out

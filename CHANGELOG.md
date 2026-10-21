@@ -21,7 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Policies (contract 1.3) get the same: every benchmark result carries
   `measures` per module, and the manifest carries the catalogue and what each
   benchmark suite sends (`workload`), so a policy can read a replay and a
-  sweep alike without knowing either module.
+  sweep alike without knowing either module. The objective editor lists
+  measures first (raw keys after them, and any reference can be typed), the
+  campaign page labels a measure objective by its catalogue entry, and the
+  report API's results carry `measures` too.
 
 - **A policy night validates production next to its finalists, side by side.**
   The final measurement launches production and every registered contender
