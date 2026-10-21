@@ -102,11 +102,41 @@ async def get_run(
         **RunOut.model_validate(run).model_dump(),
         config=candidate.config,
         env_snapshot=run.env_snapshot or {},
-        results=[ResultOut.model_validate(r) for r in results],
+        results=[_with_named(r, campaign, candidate) for r in results],
         serve_command=_serve_command(run, candidate, campaign),
         image=campaign.image,
         model_path=campaign.model_path,
     )
+
+
+def _objective_names(campaign: Campaign) -> list[str]:
+    from app.objective import redlines, target_metric
+
+    names: list[str] = []
+    for objective in (campaign.objective or {}, campaign.verify_objective or {}):
+        if not objective:
+            continue
+        names.append(target_metric(objective))
+        names.extend(r.get("metric", "") for r in redlines(objective))
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def _with_named(result: Result, campaign: Campaign, candidate: Candidate) -> ResultOut:
+    """A result with the values its campaign's objectives name, read as the
+    run was judged — a raw metrics dict has no `success_rate`."""
+    from app.measures import reader_for
+
+    out = ResultOut.model_validate(result)
+    if result.source != "llmbench":
+        return out
+    try:
+        reader = reader_for(result.metrics, result.raw, candidate.config)
+        for name in _objective_names(campaign):
+            value = reader.get(name)
+            out.named[name] = float(value) if isinstance(value, (int, float)) else None
+    except Exception:  # noqa: BLE001 — a display aid; the run detail never fails on it
+        pass
+    return out
 
 
 def _serve_command(run: Run, candidate: Candidate, campaign: Campaign) -> str:

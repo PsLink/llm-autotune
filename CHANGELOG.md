@@ -98,6 +98,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine's own argument dump mentions NCCL options on every launch; the
   argument error is now checked first and NCCL is matched by its error
   messages.
+- A run's detail shows the values its objective names when they are
+  measures (`success_rate`, `ttft_ms@p99`); it showed "not reported", looking
+  them up among the raw benchmark keys. Results carry `named`.
+- A campaign's boards and run lists label configs by every parameter its runs
+  changed, not only the declared space's: a policy's best configs that differ
+  outside the space read as all-default.
 - The screen workload in a policy manifest lists the benchmark's params
   (LLMBench names them `params_json`).
 

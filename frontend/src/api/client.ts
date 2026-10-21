@@ -485,6 +485,9 @@ export interface RunDetail extends Run {
     feasible: boolean
     breaches: string[]
     created_at: string
+    /** The campaign objectives' names (measures or raw keys) as this result
+     *  reads them; null = not reported. Run detail only. */
+    named?: Record<string, number | null>
   }[]
 }
 

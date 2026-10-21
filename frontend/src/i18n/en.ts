@@ -338,7 +338,7 @@ export default {
       candidates: 'Candidates',
     },
     verifiedOn: 'Verified on real traffic',
-    finalists: "The policy's finalists, measured again",
+    finalists: 'Validation of finalists',
     finalistsHint: 'The platform launched the configs the policy named as its best and '
       + 'benchmarked each one itself, on this campaign\'s own benchmark. This '
       + 'measurement decides the winner; the policy never grades its own results.',

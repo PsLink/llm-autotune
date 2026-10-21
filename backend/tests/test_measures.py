@@ -415,3 +415,25 @@ def test_the_editor_lists_every_measure_and_statistic_as_a_valid_reference():
     assert "request_output_tps@mean" not in listed  # the default statistic is the bare name
     assert listed["ttft_ms@p99"]["better"] == "lower" and listed["ttft_ms@p99"]["headline"]
     assert not any(k.startswith("accuracy") for k in listed)  # needs a task: typed, not listed
+
+
+def test_the_run_detail_names_its_objectives_values_in_measures():
+    from types import SimpleNamespace
+
+    from app.api.runs import _with_named
+    from app.db.models import Result
+
+    d = _load("replay")
+    result = Result(id=1, run_id=1, source="llmbench", passed=True, score=None,
+                    metrics=d["metrics"], raw={}, feasible=True, breaches=[],
+                    created_at=__import__("datetime").datetime(2026, 10, 21))
+    campaign = SimpleNamespace(
+        objective={"target_metric": "output_tpm_per_gpu",
+                   "redlines": [{"metric": "success_rate", "op": ">=", "value": 0.99},
+                                {"metric": "itl_ms@p99", "op": "<=", "value": 50}]},
+        verify_objective={},
+    )
+    named = _with_named(result, campaign, SimpleNamespace(config={"tp_size": 2})).named
+    assert named["output_tpm_per_gpu"] == pytest.approx(d["metrics"]["replay.output_tpm"] / 2)
+    assert named["success_rate"] == d["metrics"]["replay.uptime"]
+    assert named["itl_ms@p99"] is None  # a replay never reports it
