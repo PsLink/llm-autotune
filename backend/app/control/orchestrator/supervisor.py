@@ -37,6 +37,7 @@ from app.control.launch.failures import (
     classify_failure,
     is_infrastructure,
     is_transient_placement,
+    restart_kind,
 )
 from app.control.orchestrator import schedule as sched
 from app.control.orchestrator import timing
@@ -1864,18 +1865,36 @@ class Supervisor:
             if run.engine_incarnation:
                 now = driver.incarnation(handle)
                 if now is not None and now != run.engine_incarnation:
-                    log_text = ""
-                    try:
-                        log_text = driver.logs(handle, tail=self.settings.log_lines)
-                    except Exception:
-                        logger.exception("log read for restarted run %d failed", run.id)
-                    cause = classify_failure(log_text)
-                    self._capture_failure(
-                        session, run, handle,
-                        failure_class=cause if cause != "unknown" else "engine_restarted",
-                        error="the engine restarted while serving (its container or pod "
-                        "was replaced), so it is no longer the engine that was launched",
-                    )
+                    self._fail_restarted(session, run, driver, handle, now)
+
+    def _fail_restarted(self, session: Session, run: Run, driver, handle, now: str) -> None:
+        """A serving engine came back as a new process. Which way decides
+        whose fault it was: a process that exited and was restarted in its pod
+        died (of its config, as far as anyone can tell); a pod replaced by the
+        cluster was moved, and the config is blameless."""
+        if restart_kind(run.engine_incarnation, now) == "replaced":
+            self._capture_failure(
+                session, run, handle, failure_class="engine_replaced",
+                error="the engine's pod was replaced while serving (deleted, evicted or "
+                "preempted by the cluster), so it is no longer the engine that was launched; "
+                "the config is not to blame",
+            )
+            return
+        code, oom = driver.exit_info(handle)
+        log_text = ""
+        try:
+            log_text = driver.logs(handle, tail=self.settings.log_lines)
+        except Exception:
+            logger.exception("log read for restarted run %d failed", run.id)
+        cause = "oom" if oom else classify_failure(log_text)
+        if cause == "unknown":
+            cause = classify_exit(code, oom) or "engine_crashed"
+        how = f"exit code {code}" if code is not None else "exit code not reported"
+        self._capture_failure(
+            session, run, handle, failure_class=cause,
+            error=f"the engine process exited while serving ({how}"
+            f"{', OOM-killed' if oom else ''}) and the cluster restarted it",
+        )
 
     def _advance_baseline(self, session: Session, run: Run) -> None:
         """A run against an endpoint the platform did not launch: health-check

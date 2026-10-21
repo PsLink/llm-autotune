@@ -43,9 +43,11 @@ class NullDriver(DeploymentDriver):
         self.workload_logs: dict[str, str] = {}
         # Engine containers a test has crashed: they report CRASHED until gone.
         self.crashed: set[str] = set()
-        # Engine containers a test has restarted in place (a Deployment's
-        # pod replaced): the count is part of their incarnation.
+        # Engine containers a test has restarted in place (`restarts`) or
+        # whose pod it has had replaced (`replacements`): both are part of
+        # their incarnation, as a pod's restart count and uid are on k8s.
         self.restarts: dict[str, int] = {}
+        self.replacements: dict[str, int] = {}
 
     def launch(self, spec):
         self._gone.discard(spec.container_name)  # a relaunch resurrects it
@@ -66,7 +68,8 @@ class NullDriver(DeploymentDriver):
         return self.workload_logs.get(handle.container_name, "")
 
     def incarnation(self, handle) -> str | None:
-        return f"{handle.container_name}:{self.restarts.get(handle.container_name, 0)}"
+        name = handle.container_name
+        return f"{name}-pod{self.replacements.get(name, 0)}:{self.restarts.get(name, 0)}"
 
     def teardown(self, handle) -> None:
         self.torn_down.append(handle.container_name)

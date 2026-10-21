@@ -21,6 +21,9 @@ INFRASTRUCTURE_FAILURES = frozenset(
         "gone",
         "orphaned",
         "killed_externally",
+        # A serving engine's pod was replaced (deleted, evicted, preempted):
+        # the process did not die of its config, the cluster moved it.
+        "engine_replaced",
         # Another service grabbed the port between placement and launch. The
         # config is blameless, and the next attempt gets a fresh port.
         "port_conflict",
@@ -73,6 +76,8 @@ CONFIG_FAILURES = frozenset(
         "nccl",
         "segfault",
         "model_load",
+        # A serving engine's process exited and its substrate restarted it.
+        "engine_crashed",
     }
 )
 
@@ -87,10 +92,6 @@ CONFIG_FAILURES = frozenset(
 #   terminated         a clean SIGTERM: a stop, a window cutoff, a redeploy.
 #   released           we took the run back (pause); see RELEASED above.
 #   unknown            by definition unclassified.
-#   engine_restarted   a serving engine came back as a new process (its pod
-#                      replaced or its container restarted) and its log names
-#                      no cause: an eviction and an unexplained crash look
-#                      the same from here.
 
 
 def classify_failure(log_text: str) -> str:
@@ -134,6 +135,25 @@ def classify_failure(log_text: str) -> str:
         if any(needle in lowered for needle in needles):
             return failure_class
     return "unknown"
+
+
+def restart_kind(before: str, now: str) -> str:
+    """How a serving engine came back, from two incarnations (`uid:restarts`
+    per pod, see DeploymentDriver.incarnation): "crashed" when a pod it was
+    serving from is still there with more restarts (the process exited and
+    was restarted in place), else "replaced" (a different pod)."""
+
+    def parse(text: str) -> dict[str, int]:
+        out = {}
+        for part in filter(None, text.split(",")):
+            uid, _, count = part.rpartition(":")
+            out[uid] = int(count) if count.isdigit() else 0
+        return out
+
+    was, is_ = parse(before), parse(now)
+    if any(uid in is_ and is_[uid] > count for uid, count in was.items()):
+        return "crashed"
+    return "replaced"
 
 
 def classify_exit(exit_code: int | None, oom_killed: bool) -> str | None:

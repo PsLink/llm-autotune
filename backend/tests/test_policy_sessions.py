@@ -242,27 +242,49 @@ async def test_a_benchmark_stops_when_the_engine_under_it_crashes(night):
     assert supervisor.bench.cancelled, "the LLMBench submission was left running"
 
 
-async def test_an_engine_its_substrate_restarted_ends_its_benchmark(night):
-    """A Deployment brings a dead engine back under the same name, so it never
-    reads as crashed: the platform tells by the process it serves from."""
-    supervisor, driver, http = night
+async def _benching_launch(supervisor, driver, http):
     policy = await _boot(supervisor, driver, http)
     supervisor.bench = EndlessEvaluator()
     run_id = await _serving_launch(supervisor, policy)
     bench = await policy.post(f"/launches/{run_id}/benchmarks", json={"suite": "screen"})
-    bench_id = bench.json()["id"]
-    supervisor.tick()
-    supervisor.tick()
-    supervisor.tick()
+    for _ in range(3):
+        supervisor.tick()
     assert (await policy.get(f"/launches/{run_id}")).json()["status"] == "serving"
+    return policy, run_id, bench.json()["id"]
 
+
+async def test_an_engine_that_died_and_was_restarted_in_place_is_a_crash(night):
+    """A Deployment brings a dead engine back under the same name, so it never
+    reads as crashed: the platform tells by the process it serves from."""
+    supervisor, driver, http = night
+    policy, run_id, bench_id = await _benching_launch(supervisor, driver, http)
     driver.restarts[f"autotune-run-{run_id}"] = 1
     supervisor.tick()
     launch = (await policy.get(f"/launches/{run_id}")).json()
-    assert launch["status"] == "failed" and launch["failure_class"] == "engine_restarted"
-    assert "restarted while serving" in launch["error"]
+    assert launch["status"] == "failed" and launch["failure_class"] == "engine_crashed"
+    assert "exited while serving" in launch["error"]
     bench = (await policy.get(f"/benchmarks/{bench_id}")).json()
     assert bench["status"] == "failed" and f"launch {run_id}" in bench["error"]
+
+
+async def test_an_engine_whose_pod_the_cluster_replaced_is_not_the_configs_fault(night):
+    supervisor, driver, http = night
+    policy, run_id, bench_id = await _benching_launch(supervisor, driver, http)
+    driver.replacements[f"autotune-run-{run_id}"] = 1
+    supervisor.tick()
+    launch = (await policy.get(f"/launches/{run_id}")).json()
+    assert launch["status"] == "failed" and launch["failure_class"] == "engine_replaced"
+    assert "not to blame" in launch["error"]
+    assert (await policy.get(f"/benchmarks/{bench_id}")).json()["status"] == "failed"
+
+
+def test_how_an_engine_came_back_is_read_from_its_incarnations():
+    from app.control.launch.failures import restart_kind
+
+    assert restart_kind("a:0", "a:1") == "crashed"
+    assert restart_kind("a:0", "b:0") == "replaced"
+    assert restart_kind("a:0", "a:0,b:0") == "replaced"  # a second pod beside it
+    assert restart_kind("a:2", "a:3,b:0") == "crashed"
 
 
 async def test_releasing_an_engine_mid_benchmark_stops_its_benchmark(night):

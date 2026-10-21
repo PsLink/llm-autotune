@@ -87,8 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crashed container restarted, a deleted or evicted pod recreated), so the
   launch never read as crashed and a benchmark ran on against a cold engine.
   The worker records the pod and restart count a launch started serving from
-  and fails it (`engine_restarted`, or the cause its log names) when they
-  change, which also stops its benchmarks.
+  and fails it when they change, which also stops its benchmarks: an engine
+  restarted in its pod died (`engine_crashed`, or the cause its log or exit
+  names, such as `oom`); one whose pod the cluster replaced was moved
+  (`engine_replaced`, an infrastructure failure the config is not blamed for).
 - **Two contender updates a moment apart no longer register the list twice.**
   Each read no current list and inserted its own; the next update then
   superseded both. Updates are now serialized per session.

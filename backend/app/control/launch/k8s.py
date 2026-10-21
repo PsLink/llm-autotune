@@ -996,14 +996,17 @@ class K8sDriver(DeploymentDriver):
             pods = self.api.list("pods", self._run_selector(handle))
         except Exception:
             return (None, False)
-        for pod in pods:
-            statuses = (pod.get("status") or {}).get("containerStatuses") or []
-            for container in statuses:
-                terminated = (container.get("state") or {}).get("terminated")
-                if terminated:
-                    code = terminated.get("exitCode")
-                    oom = terminated.get("reason") == "OOMKilled"
-                    return (code if isinstance(code, int) else None, oom)
+        for key in ("state", "lastState"):
+            # A container the cluster restarted runs again: its exit is the
+            # last state, not the current one.
+            for pod in pods:
+                statuses = (pod.get("status") or {}).get("containerStatuses") or []
+                for container in statuses:
+                    terminated = (container.get(key) or {}).get("terminated")
+                    if terminated:
+                        code = terminated.get("exitCode")
+                        oom = terminated.get("reason") == "OOMKilled"
+                        return (code if isinstance(code, int) else None, oom)
         return (None, False)
 
     def failure_reason(self, handle: DeploymentHandle) -> tuple[str, str] | None:

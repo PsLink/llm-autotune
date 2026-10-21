@@ -682,3 +682,15 @@ def test_a_replaced_pod_or_a_restarted_container_is_a_new_incarnation():
     assert driver.incarnation(handle) != first
     api.pods = [pod("b", 0)]  # deleted or evicted, recreated by the Deployment
     assert driver.incarnation(handle) not in (first, "a:1")
+
+
+def test_a_restarted_containers_exit_is_its_last_state():
+    settings = _clone(k8s_workload_kind="deployment")
+    api = FakeK8sApi(settings)
+    driver = _driver(settings, api)
+    handle, _ = driver.launch(_spec())
+    api.pods = [{"status": {"containerStatuses": [{
+        "state": {"running": {}}, "restartCount": 1,
+        "lastState": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}},
+    }]}}]
+    assert driver.exit_info(handle) == (137, True)
