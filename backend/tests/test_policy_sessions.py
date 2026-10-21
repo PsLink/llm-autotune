@@ -287,6 +287,24 @@ def test_how_an_engine_came_back_is_read_from_its_incarnations():
     assert restart_kind("a:2", "a:3,b:0") == "crashed"
 
 
+async def test_force_stop_with_a_benchmark_running_on_a_launch_ends_both(night):
+    """Stopping the launch stops its benchmark, which has a stop request of its
+    own: the second stop must find it already ended, not wedge every tick."""
+    from app.db.models import Run, RunStatus
+
+    supervisor, driver, http = night
+    policy, run_id, bench_id = await _benching_launch(supervisor, driver, http)
+    for _ in range(2):  # the first press finalizes, the second aborts
+        await _force_stop(http)
+    supervisor.tick()
+    supervisor.tick()  # a second tick must not trip over the first one's work
+    async with http.db() as session:
+        launch = await session.get(Run, run_id)
+        bench = await session.get(Run, bench_id)
+        assert launch.status == RunStatus.KILLED.value
+        assert bench.status in (RunStatus.KILLED.value, RunStatus.FAILED.value)
+
+
 async def test_releasing_an_engine_mid_benchmark_stops_its_benchmark(night):
     supervisor, driver, http = night
     policy = await _boot(supervisor, driver, http)
