@@ -82,6 +82,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Force stop on a policy campaign no longer wedges the worker.** Stopping a
+  policy's launch also stops the benchmarks on it, and each of those had a
+  stop request of its own; the second stop raised on the already-ended run,
+  which failed every tick that followed, for every campaign. Stopping a run
+  that has already ended is now a no-op.
+
 - **A policy launch whose engine Kubernetes restarted is failed, not left
   serving.** A Deployment brings a dead engine back under the same name (a
   crashed container restarted, a deleted or evicted pod recreated), so the

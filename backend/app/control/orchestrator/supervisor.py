@@ -907,7 +907,9 @@ class Supervisor:
         ).all()
         for event in stop_events:
             run = live_runs.pop(event.run_id, None)
-            if run is None:
+            # Already ended earlier in this loop: stopping a policy's launch
+            # stops the benchmarks on it, which have stop requests of their own.
+            if run is None or run.status in {s.value for s in TERMINAL_RUN_STATES}:
                 continue
             if run.llmbench_submission_id:
                 self.bench.cancel(run.llmbench_submission_id)
