@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import count
 
 import httpx
+import pytest
 import pytest_asyncio
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -1129,3 +1130,83 @@ async def test_re_declaring_the_same_contender_refreshes_its_evidence(night):
         rows = (await session.execute(select(PolicyContender))).scalars().all()
     assert len(rows) == 1
     assert rows[0].evidence == {"values": [100.0, 96.0], "measurements": 2}
+
+
+# -- history (1.4) ------------------------------------------------------------
+
+
+async def _seed_an_earlier_campaign(http) -> None:
+    """Campaign 2: same owner, model and engine, one finished night with a
+    digest and the platform's validation of production and one finalist.
+    Campaign 3: another owner's, which no one else's policy may read."""
+    from app.db.models import CandidateKind, Result
+
+    now = datetime.now(UTC)
+    async with http.db() as session:
+        session.add(User(id=2, username="other", password_hash="x"))
+        for cid, owner in ((2, 1), (3, 2)):
+            session.add(Campaign(
+                id=cid, owner_id=owner, name=f"earlier {cid}", engine="sglang",
+                image="sglang:test", model_path="/models/m", served_model_name="m",
+                search_space=SPACE, objective={"target_metric": "score_total"},
+                status=CampaignStatus.DONE.value, machine_names=["gpu-1"], policy_id=1,
+            ))
+            session.add(PolicySession(
+                id=100 + cid, campaign_id=cid, policy_id=1, machine_id=1,
+                status=PolicySessionStatus.DONE.value, finalized_at=now,
+                search_end_reason="deadline",
+                digest={"summary": f"night of campaign {cid}",
+                        "lessons": [{"text": "chunk 8192 is the default", "scope": "engine"}],
+                        "constraints": ["chunked_prefill_size 65536 OOMs at launch"],
+                        "open_questions": []},
+            ))
+        await session.flush()
+        for n, (config, baseline, value) in enumerate(
+            (({"tp_size": 2}, True, 100.0), ({"tp_size": 2, "page_size": 128}, False, 103.0))
+        ):
+            candidate = Candidate(
+                id=200 + n, campaign_id=2, config=config, config_hash=f"v{n}",
+                kind=CandidateKind.VERIFICATION.value, is_baseline=baseline,
+            )
+            run = Run(
+                id=300 + n, campaign_id=2, candidate_id=200 + n, machine_id=1,
+                kind=RunKind.EXPERIMENT.value, status=RunStatus.SUCCEEDED.value,
+                policy_session_id=102,
+            )
+            session.add_all([candidate, run])
+            await session.flush()
+            session.add(Result(
+                run_id=300 + n, source="llmbench", passed=True, score=value,
+                metrics={"score_total": value}, raw={}, objective_value=value, feasible=True,
+            ))
+        await session.commit()
+
+
+async def test_history_serves_other_campaigns_findings_with_their_conditions(night):
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    await _seed_an_earlier_campaign(http)
+    assert (await policy.get("/session")).json()["services"]["history"] is True
+
+    (entry,) = (await policy.get("/history")).json()  # never campaign 1, never campaign 3
+    assert entry["campaign_id"] == 2 and entry["session_id"] == 102
+    assert entry["digest"]["lessons"][0]["scope"] == "engine"
+    assert entry["conditions"]["gpu_type"] == "H100"
+    assert entry["conditions"]["objective"]["target_metric"] == "score_total"
+    verdicts = {v["is_production"]: v for v in entry["verdicts"]}
+    assert verdicts[True]["value"] == 100.0
+    assert verdicts[False]["config"]["page_size"] == 128
+    assert verdicts[False]["vs_production"] == pytest.approx(1.03)
+    assert (await policy.get("/history?match=anything")).status_code == 422
+
+
+async def test_a_night_files_its_digest_for_others(night):
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    digest = {"summary": "lpm helps a little", "lessons": [{"text": "x", "scope": "model"}],
+              "constraints": [], "open_questions": ["does lpm compose?"]}
+    assert (await policy.put("/session/digest", digest)).status_code == 204
+    row = await _session_row(http)
+    assert row.digest["open_questions"] == ["does lpm compose?"] and row.digest_at
+    too_long = {**digest, "summary": "x" * 20001}
+    assert (await policy.put("/session/digest", too_long)).status_code == 422

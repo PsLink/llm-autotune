@@ -50,6 +50,7 @@ from app.core.config import get_settings
 from app.db.base import get_async_session
 from app.db.models import (
     TERMINAL_RUN_STATES,
+    TERMINAL_SESSION_STATES,
     Campaign,
     Candidate,
     CandidateKind,
@@ -86,9 +87,13 @@ from app.schemas.policy import (
     ContenderOut,
     ContendersEcho,
     ContendersPut,
+    DigestIn,
     ExternalBenchmarkIn,
     HeartbeatIn,
     HeartbeatOut,
+    HistoryConditions,
+    HistoryEntry,
+    HistoryVerdict,
     LaunchBenchmarkIn,
     LaunchIn,
     LaunchOut,
@@ -654,6 +659,7 @@ async def manifest(
             },
             state=True,
             diagnostics=True,
+            history=True,
         ),
         prior=prior,
         measures=measure_catalogue(),
@@ -1447,6 +1453,134 @@ async def put_state(
     row.content_type = content_type[:128]
     row.size = len(blob)
     await db.commit()
+
+
+# -- history (1.4) -----------------------------------------------------------------
+
+
+@router.put("/session/digest", status_code=status.HTTP_204_NO_CONTENT)
+async def put_digest(
+    body: DigestIn,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """What tonight learned, for other campaigns. Replaces any earlier digest
+    of this session; accepted until the session ends."""
+    session = await db.get(PolicySession, caller.session.id)
+    if session.status in {s.value for s in TERMINAL_SESSION_STATES}:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"the session is {session.status}")
+    session.digest = body.model_dump(mode="json")
+    session.digest_at = datetime.now(UTC)
+    _audit(db, caller, "policy_digest_written", payload={"bytes": len(body.summary)})
+    await db.commit()
+
+
+_HISTORY_MATCHES = ("model", "engine")
+
+
+@router.get("/history", response_model=list[HistoryEntry])
+async def history(
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+    match: str = Query("model", description="model: same engine and model; engine: same engine"),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Other campaigns' nights, newest first: what each policy wrote it
+    learned, under which conditions, and what the platform validated. Only
+    campaigns of the same owner; this campaign's own nights are in /state.
+    Findings from another workload or image are hints, not facts here."""
+    if match not in _HISTORY_MATCHES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"match must be one of {list(_HISTORY_MATCHES)}"
+        )
+    _, campaign, _ = await _context(db, caller)
+    query = (
+        select(PolicySession, Campaign)
+        .join(Campaign, PolicySession.campaign_id == Campaign.id)
+        .where(
+            Campaign.owner_id == campaign.owner_id,
+            Campaign.id != campaign.id,
+            Campaign.engine == campaign.engine,
+            (PolicySession.digest.is_not(None)) | (PolicySession.finalized_at.is_not(None)),
+        )
+        .order_by(PolicySession.id.desc())
+    )
+    if match == "model":
+        query = query.where(
+            (Campaign.served_model_name == campaign.served_model_name)
+            | (Campaign.model_path == campaign.model_path)
+        )
+    out: list[HistoryEntry] = []
+    for past, past_campaign in (await db.execute(query.limit(limit * 3))).all():
+        entry = await _history_entry(db, past, past_campaign)
+        if entry.digest is not None or entry.verdicts:
+            out.append(entry)
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def _history_entry(
+    db: AsyncSession, past: PolicySession, campaign: Campaign
+) -> HistoryEntry:
+    from app.evaluation.ranking import leaderboard_entries
+
+    machine = await db.get(Machine, past.machine_id) if past.machine_id else None
+    objective = stage_objective(campaign, SCREEN)
+    rows = (
+        await db.execute(
+            select(Run, Candidate, Result)
+            .join(Candidate, Run.candidate_id == Candidate.id)
+            .join(Result, Result.run_id == Run.id)
+            .where(
+                Run.campaign_id == campaign.id,
+                Run.status == RunStatus.SUCCEEDED.value,
+                Result.source == "llmbench",
+            )
+        )
+    ).all()
+    night = {run.id for run, _, _ in rows if run.policy_session_id == past.id}
+    verdicts = [
+        HistoryVerdict(
+            config=dict(e.config),
+            is_production=e.is_baseline,
+            value=e.score,
+            vs_production=None if e.is_baseline else e.vs_baseline,
+            holds_redlines=e.holds_redlines,
+        )
+        for e in leaderboard_entries(campaign, list(rows))
+        if e.stage == VERIFY and e.run_id in night
+    ]
+    digest = None
+    if past.digest:
+        try:
+            digest = DigestIn.model_validate(past.digest)
+        except ValueError:
+            digest = None
+    return HistoryEntry(
+        campaign_id=campaign.id,
+        campaign_name=campaign.name,
+        session_id=past.id,
+        ended_at=past.finalized_at,
+        end_reason=past.search_end_reason or past.status,
+        conditions=HistoryConditions(
+            engine=campaign.engine,
+            image=campaign.image,
+            model_path=campaign.model_path,
+            served_model_name=campaign.served_model_name,
+            gpu_type=machine.gpu_type if machine is not None else "",
+            cards=settings_of(campaign).cards,
+            benchmark_slug=campaign.benchmark_slug or "",
+            objective=ManifestObjective(
+                target_metric=target_metric(objective),
+                direction=direction(objective),
+                redlines=redlines(objective),
+            ),
+            forbidden=list(settings_of(campaign).forbidden()),
+        ),
+        verdicts=verdicts,
+        digest=digest,
+    )
 
 
 # -- events -------------------------------------------------------------------------

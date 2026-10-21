@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT_VERSION = "1.3"
+CONTRACT_VERSION = "1.4"
 
 # Inbound payloads from policy containers: unknown fields are the future, not
 # an error.
@@ -202,6 +202,8 @@ class ManifestServices(BaseModel):
     # 1.3: engine logs, structured benchmark results, run environments, and
     # the configs/check dry run.
     diagnostics: bool = False
+    # 1.4: PUT /session/digest and GET /history — what other campaigns learned.
+    history: bool = False
 
 
 class SessionManifest(BaseModel):
@@ -627,3 +629,65 @@ class SpaceCoverage(BaseModel):
     axes: list[AxisCoverage] = Field(default_factory=list)
     # Echo of the policy's own last coverage heartbeat, badged self-reported.
     policy_declared: PolicyCoverage | None = None
+
+
+# -- history (1.4) -------------------------------------------------------------
+
+
+class DigestLesson(BaseModel):
+    model_config = _lenient
+
+    text: str = Field(max_length=2000)
+    # How far it reaches: campaign (this workload and objective), model,
+    # engine or hardware. Only the policy knows; the platform files it.
+    scope: str = Field("campaign", max_length=32)
+
+
+class DigestIn(BaseModel):
+    """What a night learned, in the policy's words: written once its search is
+    over, for other campaigns to read through GET /history. The conditions it
+    was learned under are the platform's to state, not the policy's."""
+
+    model_config = _lenient
+
+    summary: str = Field(max_length=20000)
+    lessons: list[DigestLesson] = Field(default_factory=list, max_length=50)
+    # What failed and must not be repeated, with the cause.
+    constraints: list[str] = Field(default_factory=list, max_length=50)
+    open_questions: list[str] = Field(default_factory=list, max_length=20)
+
+
+class HistoryConditions(BaseModel):
+    """Under what a night's findings hold, from the platform's own records."""
+
+    engine: str
+    image: str
+    model_path: str
+    served_model_name: str
+    gpu_type: str = ""
+    cards: int | None = None
+    benchmark_slug: str = ""
+    objective: ManifestObjective
+    forbidden: list[str] = Field(default_factory=list)
+
+
+class HistoryVerdict(BaseModel):
+    """One config the platform validated at the end of the night."""
+
+    config: dict[str, Any]
+    is_production: bool = False
+    value: float | None = None
+    # Value as a multiple of production's on the same night (>1 = higher).
+    vs_production: float | None = None
+    holds_redlines: bool = True
+
+
+class HistoryEntry(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    session_id: int
+    ended_at: datetime | None = None
+    end_reason: str = ""
+    conditions: HistoryConditions
+    verdicts: list[HistoryVerdict] = Field(default_factory=list)
+    digest: DigestIn | None = None

@@ -148,7 +148,8 @@ the response is always current.
                                "reads_as": "Recorded production requests, replayed at one fixed concurrency: …"}]}
     },
     "state": true,
-    "diagnostics": true
+    "diagnostics": true,
+    "history": true
   },
 
   "prior": {"contenders": []},
@@ -508,6 +509,55 @@ GET /api/policy/v1/state
 Per campaign, not per session: night 2 reads what night 1 wrote. The platform
 never looks inside.
 
+### History (1.4)
+
+When the manifest's `services.history` is true. State stays within one
+campaign; history is what other campaigns learned.
+
+```http
+PUT /api/policy/v1/session/digest
+{"summary": "Prefill CUDA graphs were the one large lever …",
+ "lessons": [{"text": "chunked_prefill_size above 16384 cannot launch at the default memory fraction", "scope": "model"}],
+ "constraints": ["enable_mixed_chunk wedges the scheduler under the replay"],
+ "open_questions": ["does lpm compose with breakable prefill graphs?"]}
+→ 204
+```
+
+Write the digest once your search is over (replacing an earlier one is
+fine). It is the night's findings in your own words, the way you would brief
+whoever tunes this model next. A lesson's `scope` says how far it reaches:
+`campaign` (this workload and objective), `model`, `engine` or `hardware`.
+Accepted until the session ends. Limits: a 20,000-character summary, 50
+lessons, 50 constraints and 20 open questions.
+
+```http
+GET /api/policy/v1/history?match=model&limit=10
+→ [{"campaign_id": 35, "campaign_name": "…", "session_id": 18,
+    "ended_at": "…", "end_reason": "explicit",
+    "conditions": {"engine": "sglang", "image": "…", "model_path": "…",
+                   "served_model_name": "…", "gpu_type": "H800", "cards": 8,
+                   "benchmark_slug": "…",
+                   "objective": {"target_metric": "output_tpm_per_gpu", "direction": "max", "redlines": […]},
+                   "forbidden": […]},
+    "verdicts": [{"config": {…}, "is_production": true, "value": 44774.2, "vs_production": null, "holds_redlines": true},
+                 {"config": {…}, "is_production": false, "value": 45933.8, "vs_production": 1.026, "holds_redlines": true}],
+    "digest": {…}}]
+```
+
+Other campaigns' nights, newest first, from campaigns of the same owner and
+the same engine. With `match=model` (the default) the model must match too.
+A night appears once it has a digest or a validation.
+
+- **`conditions`** are the platform's own record of what the night ran under,
+  not the policy's account of it.
+- **`verdicts`** are the platform's validation at the end of that night:
+  production and each finalist, measured again, with `vs_production` as a
+  multiple of production's value on the same night.
+
+Read another campaign's findings as hints, not facts. A different image,
+workload or objective can turn them over, so check them with this night's
+trials before relying on them.
+
 ### Diagnostics (1.3)
 
 When the manifest's `services.diagnostics` is true. Everything the platform
@@ -623,6 +673,8 @@ from their specs, time permitting. Either way the machine's own guarantees
   `search_idle_strikes`) and a recorded `search_end_reason`. A 1.0 image keeps
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
+- **1.4** (additive): `PUT /session/digest` and `GET /history`, and
+  `services.history` on the menu. A 1.3 policy runs unchanged.
 - **1.3** (additive): diagnostics (`POST /configs/check`, launch logs and
   environments, full benchmark results), [measures](measures.md) on every
   benchmark plus the catalogue and each suite's workload in the manifest,
