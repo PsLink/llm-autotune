@@ -680,6 +680,9 @@ class HistoryVerdict(BaseModel):
     # Value as a multiple of production's on the same night (>1 = higher).
     vs_production: float | None = None
     holds_redlines: bool = True
+    # A finalist whose config IS production's: its vs_production measures the
+    # validation's own noise, not an effect.
+    same_as_production: bool = False
 
 
 class HistoryEntry(BaseModel):

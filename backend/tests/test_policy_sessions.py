@@ -1161,9 +1161,11 @@ async def _seed_an_earlier_campaign(http) -> None:
                         "open_questions": []},
             ))
         await session.flush()
-        for n, (config, baseline, value) in enumerate(
-            (({"tp_size": 2}, True, 100.0), ({"tp_size": 2, "page_size": 128}, False, 103.0))
-        ):
+        for n, (config, baseline, value) in enumerate((
+            ({"tp_size": 2}, True, 100.0),
+            ({"tp_size": 2, "page_size": 128}, False, 103.0),
+            ({"tp_size": 2}, False, 108.0),  # production's own config, measured again
+        )):
             candidate = Candidate(
                 id=200 + n, campaign_id=2, config=config, config_hash=f"v{n}",
                 kind=CandidateKind.VERIFICATION.value, is_baseline=baseline,
@@ -1193,10 +1195,13 @@ async def test_history_serves_other_campaigns_findings_with_their_conditions(nig
     assert entry["digest"]["lessons"][0]["scope"] == "engine"
     assert entry["conditions"]["gpu_type"] == "H100"
     assert entry["conditions"]["objective"]["target_metric"] == "score_total"
-    verdicts = {v["is_production"]: v for v in entry["verdicts"]}
-    assert verdicts[True]["value"] == 100.0
-    assert verdicts[False]["config"]["page_size"] == 128
-    assert verdicts[False]["vs_production"] == pytest.approx(1.03)
+    production = next(v for v in entry["verdicts"] if v["is_production"])
+    assert production["value"] == 100.0
+    finalist = next(v for v in entry["verdicts"] if v["config"].get("page_size") == 128)
+    assert finalist["vs_production"] == pytest.approx(1.03) and not finalist["same_as_production"]
+    # Production's config as a finalist: its ratio is the validation's noise.
+    again = next(v for v in entry["verdicts"] if v["value"] == 108.0)
+    assert again["same_as_production"]
     assert (await policy.get("/history?match=anything")).status_code == 422
 
 

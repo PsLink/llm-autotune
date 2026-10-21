@@ -552,7 +552,10 @@ A night appears once it has a digest or a validation.
   not the policy's account of it.
 - **`verdicts`** are the platform's validation at the end of that night:
   production and each finalist, measured again, with `vs_production` as a
-  multiple of production's value on the same night.
+  multiple of production's value on the same night. A finalist with
+  `same_as_production` runs production's own config, so its `vs_production`
+  is the validation's noise, not an effect. On a short benchmark that noise
+  has been seen at several percent.
 
 Read another campaign's findings as hints, not facts. A different image,
 workload or objective can turn them over, so check them with this night's

@@ -1540,6 +1540,11 @@ async def _history_entry(
         )
     ).all()
     night = {run.id for run, _, _ in rows if run.policy_session_id == past.id}
+    entries = [
+        e for e in leaderboard_entries(campaign, list(rows))
+        if e.stage == VERIFY and e.run_id in night
+    ]
+    production = [dict(e.config) for e in entries if e.is_baseline]
     verdicts = [
         HistoryVerdict(
             config=dict(e.config),
@@ -1547,9 +1552,9 @@ async def _history_entry(
             value=e.score,
             vs_production=None if e.is_baseline else e.vs_baseline,
             holds_redlines=e.holds_redlines,
+            same_as_production=not e.is_baseline and dict(e.config) in production,
         )
-        for e in leaderboard_entries(campaign, list(rows))
-        if e.stage == VERIFY and e.run_id in night
+        for e in entries
     ]
     digest = None
     if past.digest:
