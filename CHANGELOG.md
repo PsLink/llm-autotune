@@ -91,6 +91,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An engine that dies during startup on Kubernetes now fails its run.** A
+  Deployment restarts a dead engine, and each restart reset the ready timeout's
+  clock, so a config that died after ten minutes of loading (an out-of-memory at
+  CUDA-graph capture exits 0) looped on its cards indefinitely. A container
+  restarted before its pod was ever ready is now a `crash_loop`, with its exit
+  code and restart count.
+
 - **Force stop on a policy campaign no longer wedges the worker.** Stopping a
   policy's launch also stops the benchmarks on it, and each of those had a
   stop request of its own; the second stop raised on the already-ended run,
