@@ -189,6 +189,10 @@ class BenchmarkSuite(BaseModel):
     slug: str
     approx_minutes: int
     dataset_build_id: str = ""
+    # (1.3) What the benchmark sends, module by module, from its locked params:
+    # [{scenario, module, family, params, reads_as}] (app/measures/workload.py).
+    # Empty when the benchmark platform could not be asked.
+    workload: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ManifestServices(BaseModel):
@@ -220,6 +224,9 @@ class SessionManifest(BaseModel):
     contenders: ManifestContenders
     services: ManifestServices
     prior: dict[str, Any] = Field(default_factory=dict)
+    # (1.3) The measures catalogue (docs/api/measures.md): the names, units,
+    # directions and statistics a benchmark's `measures` are reported in.
+    measures: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # -- heartbeat --------------------------------------------------------------------
@@ -398,12 +405,34 @@ class BenchmarkSummary(BaseModel):
     breaches: list[str] = Field(default_factory=list)
 
 
+class ScenarioMeasures(BaseModel):
+    """One module's results as measures (docs/api/measures.md)."""
+
+    scenario: str  # the module's instance key: `replay`, `perf_guidellm_sweep#2`
+    module: str
+    kind: str  # sweep | single | replay | quality
+    # Which level the operating point is (`c8`; null for anything but a
+    # sweep), and how it was chosen.
+    operating_level: str | None = None
+    operating_rule: str = ""
+    # Measure key (`ttft_ms@p99`, `ttft_ms@p90[32k_64k]`) → value, at the
+    # operating point. Absent keys were not reported — never 0.
+    operating: dict[str, float] = Field(default_factory=dict)
+    # A sweep's other points: `peak` and each `c<N>`.
+    points: dict[str, dict[str, float]] = Field(default_factory=dict)
+    # Every measure key this module can report at all.
+    supports: list[str] = Field(default_factory=list)
+
+
 class BenchmarkOut(BaseModel):
     id: int
     status: str  # queued|health_check|benching|succeeded|failed|killed
     suite: str = "screen"
     summary: BenchmarkSummary | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
+    # (1.3) The same results as measures, one entry per module. `metrics` keeps
+    # the raw LLMBench keys.
+    measures: list[ScenarioMeasures] = Field(default_factory=list)
     failure_class: str = ""
     error: str = ""
     config: dict[str, Any] = Field(default_factory=dict)

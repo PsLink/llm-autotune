@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   translate each module's keys; a sweep is read at its highest-throughput
   level that met its SLO. Saving refuses a malformed reference, and preflight
   refuses one the benchmark never reports. Raw keys keep working unchanged.
+  Policies (contract 1.3) get the same: every benchmark result carries
+  `measures` per module, and the manifest carries the catalogue and what each
+  benchmark suite sends (`workload`), so a policy can read a replay and a
+  sweep alike without knowing either module.
 
 - **A policy night validates production next to its finalists, side by side.**
   The final measurement launches production and every registered contender

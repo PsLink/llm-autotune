@@ -76,6 +76,19 @@ mixed freely:
   redlines the same way as their raw-key forms.
 - `GET /api/objectives/metrics` returns the catalogue as `measures`.
 
+## For a policy
+
+The policy API (contract 1.3) speaks measures too:
+
+- `GET /api/policy/v1/benchmarks/{id}` returns `measures`, one entry per
+  module, with its operating point, its other points and every key it can
+  report.
+- The session manifest carries the catalogue (`measures`) and, for each
+  benchmark suite, its `workload`: what each module sends and what its
+  measures describe.
+
+See [the policy contract](policy-contract.md#benchmarks).
+
 ## The operating point
 
 A scenario's measures describe one operating point unless a reference names

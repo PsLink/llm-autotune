@@ -255,6 +255,53 @@ async def test_releasing_an_engine_mid_benchmark_stops_its_benchmark(night):
     assert (await policy.get(f"/benchmarks/{bench_id}")).json()["status"] == "killed"
 
 
+async def test_a_benchmark_answers_in_measures_and_the_manifest_says_what_they_mean(
+    night, monkeypatch
+):
+    import json
+    from pathlib import Path
+
+    from app.api import policy_sessions
+    from app.core.config import get_settings
+    from app.evaluation import llmbench
+
+    supervisor, driver, http = night
+    replay = json.loads((Path(__file__).parent / "data/measures/replay.json").read_text())
+    policy = await _boot(supervisor, driver, http)
+
+    slug = (await policy.get("/session")).json()["services"]["benchmarks"]["screen"]["slug"]
+    modules = [{
+        "module_name": "replay", "order_index": 0,
+        "params": {"concurrency": 16, "max_samples": 400, "api_key": "sk-secret"},
+    }]
+    monkeypatch.setattr(
+        llmbench.LLMBenchClient, "list_benchmarks",
+        lambda self: [{"slug": slug, "modules": modules}],
+    )
+    monkeypatch.setattr(policy_sessions, "_workloads", {})
+    monkeypatch.setattr(get_settings(), "llmbench_replay_module", "replay")
+    manifest = (await policy.get("/session")).json()
+    assert {"name", "unit", "better", "meaning"} <= set(manifest["measures"][0])
+    (workload,) = manifest["services"]["benchmarks"]["screen"]["workload"]
+    assert workload["family"] == "replay" and "no levels" in workload["reads_as"]
+    assert workload["params"] == {"concurrency": 16, "max_samples": 400}  # never a credential
+
+    supervisor.bench = StubEvaluator(replay["metrics"])
+    run_id = await _serving_launch(supervisor, policy)  # tp 2: two cards
+    bench_id = (
+        await policy.post(f"/launches/{run_id}/benchmarks", json={"suite": "screen"})
+    ).json()["id"]
+    supervisor.tick()
+    supervisor.tick()
+    (scenario,) = (await policy.get(f"/benchmarks/{bench_id}")).json()["measures"]
+    assert scenario["kind"] == "replay" and scenario["operating_level"] is None
+    assert scenario["operating"]["output_tpm_per_gpu"] == (
+        replay["metrics"]["replay.output_tpm"] / 2
+    )
+    assert scenario["operating"]["success_rate"] == replay["metrics"]["replay.uptime"]
+    assert "ttft_ms@p90[32k_64k]" in scenario["supports"]
+
+
 async def test_a_whole_night_start_to_verdict(night):
     supervisor, driver, http = night
     policy = await _boot(supervisor, driver, http)

@@ -142,13 +142,19 @@ the response is always current.
   "services": {
     "launch": true,
     "benchmarks": {
-      "screen": {"slug": "autotune-screen-v1", "approx_minutes": 10, "dataset_build_id": "b-20260818"}
+      "screen": {"slug": "autotune-screen-v1", "approx_minutes": 10, "dataset_build_id": "b-20260818",
+                 "workload": [{"scenario": "replay", "module": "replay", "family": "replay",
+                               "params": {"concurrency": 16, "max_samples": 400},
+                               "reads_as": "Recorded production requests, replayed at one fixed concurrency: …"}]}
     },
     "state": true,
     "diagnostics": true
   },
 
-  "prior": {"contenders": []}
+  "prior": {"contenders": []},
+
+  "measures": [{"name": "output_tpm_per_gpu", "label": "Output tokens/min per GPU", "unit": "tokens/min",
+                "better": "higher", "group": "throughput", "meaning": "…", "stats": []}, "…"]
 }
 ```
 
@@ -194,6 +200,15 @@ Field notes:
   assume a service; read the menu.
 - **`prior`** — validated contenders and verdicts from this campaign's earlier
   nights, so you can warm-start.
+- **`services.benchmarks.<suite>.workload`** (1.3) — what the suite sends, one
+  entry per module in benchmark order: its family, the params that shape the
+  numbers (never a credential), and in `reads_as` what its measures describe —
+  for example, that a replay has no concurrency levels. Empty when the
+  benchmark platform could not be asked.
+- **`measures`** (1.3) — the [measure catalogue](measures.md): every
+  measure's unit, direction (`better`), meaning and statistics. A benchmark's
+  `measures` (below) use these names, so a policy can render and compare any
+  module's results without knowing the module.
 
 ---
 
@@ -414,8 +429,24 @@ GET /api/policy/v1/benchmarks/57
 → {"status": "succeeded",
    "summary": {"objective_value": 1234.5, "feasible": true,
                "constraints": [-120.0], "breaches": []},
-   "metrics": {"perf_guidellm_sweep.output_tpm_card_norm": 1234.5, "…": "…"}}
+   "metrics": {"perf_guidellm_sweep.output_tpm_card_norm": 1234.5, "…": "…"},
+   "measures": [{"scenario": "perf_guidellm_sweep", "module": "perf_guidellm_sweep", "kind": "sweep",
+                 "operating_level": "c16",
+                 "operating_rule": "the level with the highest total throughput that met the SLO",
+                 "operating": {"output_tpm_per_gpu": 154.3, "ttft_ms@p99": 812.0, "success_rate": 1.0, "…": 0},
+                 "points": {"peak": {"…": 0}, "c1": {"…": 0}, "c16": {"…": 0}},
+                 "supports": ["itl_ms@p50", "…"]}]}
 ```
+
+`measures` (1.3) is the same result in [measures](measures.md), one entry per
+module. Read it in preference to `metrics`: a measure means the same thing
+whichever module reported it, while a raw key does not (a replay's
+`output_tps_mean` is one request's speed; a sweep's is the whole level's).
+`operating` is the scenario's operating point: for a sweep, the level with the
+highest total throughput that met its SLO (`operating_level`); for anything
+else, the whole run (`operating_level` is null). A key absent from `operating`
+was not reported — never read it as 0. `supports` lists every key the module
+can report at all.
 
 `suite` names an entry from `services.benchmarks`. Tonight's menu tells you
 each suite's approximate duration and pinned dataset. (v1 offers `screen`;
@@ -593,7 +624,9 @@ from their specs, time permitting. Either way the machine's own guarantees
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
 - **1.3** (additive): diagnostics (`POST /configs/check`, launch logs and
-  environments, full benchmark results), `policy.params`, and forbidden
+  environments, full benchmark results), [measures](measures.md) on every
+  benchmark plus the catalogue and each suite's workload in the manifest,
+  `policy.params`, and forbidden
   parameters plus the command-line round trip. The last two are new
   refusals: a 1.2 policy that never changes a forbidden parameter or sends a
   list value runs unchanged, and one that does now gets a `422` that names

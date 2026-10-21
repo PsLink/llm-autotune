@@ -17,6 +17,7 @@ handler:
     command line — all three answered in advance by POST /configs/check.
 """
 
+import asyncio
 import logging
 import re
 from datetime import UTC, datetime
@@ -68,6 +69,9 @@ from app.db.models import (
     RunStatus,
 )
 from app.hardware import is_node_pool
+from app.measures import reader_for
+from app.measures.catalog import catalogue as measure_catalogue
+from app.measures.workload import describe as describe_workload
 from app.objective import direction, redlines, target_metric
 from app.reporting.run_log import read_run_log
 from app.schemas.agent import EnvironmentPart, ResultsPart
@@ -96,6 +100,7 @@ from app.schemas.policy import (
     ManifestTime,
     PlanIn,
     PolicyEventIn,
+    ScenarioMeasures,
     ServingIn,
     SessionManifest,
     TrialIn,
@@ -402,6 +407,72 @@ async def _waiting_reason(db: AsyncSession, run: Run) -> str:
     return str((payload or {}).get("reason") or "")
 
 
+def _measures_out(result: Result, candidate: Candidate | None) -> list[ScenarioMeasures]:
+    reader = reader_for(result.metrics, result.raw, candidate.config if candidate else None)
+    return [
+        ScenarioMeasures(
+            scenario=sc.key,
+            module=sc.module,
+            kind=sc.kind,
+            operating_level=sc.operating_level or None,
+            operating_rule=sc.operating_rule,
+            operating=sc.operating,
+            points={k: v for k, v in sc.points.items() if k != "operating"},
+            supports=sorted(sc.supports),
+        )
+        for sc in reader.scenarios
+    ]
+
+
+# What a benchmark sends, per slug: the benchmark platform is asked once per
+# few minutes, not on every manifest read, and a manifest waits for it only
+# briefly (a late answer still fills the cache for the next read).
+_WORKLOAD_TTL_S = 300.0
+_WORKLOAD_WAIT_S = 5.0
+_workloads: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def _screen_workload(slug: str) -> list[dict[str, Any]]:
+    """Best effort: an unreachable benchmark platform leaves it empty."""
+    import time
+
+    if not slug:
+        return []
+    cached = _workloads.get(slug)
+    if cached and time.monotonic() - cached[0] < _WORKLOAD_TTL_S:
+        return cached[1]
+    try:
+        from app.evaluation.llmbench import LLMBenchClient
+
+        # One try: a manifest read must not ride out a benchmark platform outage.
+        benchmark = next(
+            (b for b in LLMBenchClient(max_attempts=1).list_benchmarks() if b.get("slug") == slug),
+            None,
+        )
+    except Exception:
+        logger.warning("could not describe benchmark %s for a policy manifest", slug)
+        # Remembered too, so an unreachable platform is not asked on every read.
+        _workloads[slug] = (time.monotonic(), [])
+        return []
+    settings = get_settings()
+    out = describe_workload(
+        (benchmark or {}).get("modules") or [],
+        aliases=dict(settings.llmbench_module_families or {}),
+        replay_names=(settings.llmbench_replay_module,),
+    )
+    _workloads[slug] = (time.monotonic(), out)
+    return out
+
+
+async def _screen_workload_soon(slug: str) -> list[dict[str, Any]]:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_screen_workload, slug), timeout=_WORKLOAD_WAIT_S
+        )
+    except TimeoutError:
+        return []
+
+
 async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None) -> BenchmarkOut:
     mapping = {
         RunStatus.PENDING.value: "queued",
@@ -413,6 +484,7 @@ async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None
     }
     summary = None
     metrics: dict[str, Any] = {}
+    measures: list[ScenarioMeasures] = []
     result = (
         await db.execute(
             select(Result)
@@ -428,6 +500,10 @@ async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None
             breaches=list(result.breaches or []),
         )
         metrics = dict(result.metrics or {})
+        try:
+            measures = _measures_out(result, candidate)
+        except Exception:
+            logger.exception("could not read benchmark %s as measures", run.id)
     from app.staging import stage_of
 
     return BenchmarkOut(
@@ -436,6 +512,7 @@ async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None
         suite=VERIFY if candidate is not None and stage_of(candidate) == VERIFY else SCREEN,
         summary=summary,
         metrics=metrics,
+        measures=measures,
         failure_class=run.failure_class or "",
         error=(run.error or "")[:2000],
         config=(candidate.config if candidate else {}),
@@ -584,12 +661,14 @@ async def manifest(
                     slug=screen_slug,
                     approx_minutes=_SCREEN_APPROX_MINUTES,
                     dataset_build_id=campaign.dataset_build_id or "",
+                    workload=await _screen_workload_soon(screen_slug),
                 )
             },
             state=True,
             diagnostics=True,
         ),
         prior=prior,
+        measures=measure_catalogue(),
     )
 
 
