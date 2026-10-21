@@ -1809,6 +1809,8 @@ class Supervisor:
                 # A delegated launch is FOR the policy, not for a benchmark:
                 # healthy means hold it here until released. Benchmarks of it
                 # are separate EXTERNAL runs pointed at this endpoint.
+                if handle is not None:
+                    run.engine_incarnation = driver.incarnation(handle) or ""
                 self._transition(session, run, RunStatus.SERVING)
                 return
             try:
@@ -1855,6 +1857,25 @@ class Supervisor:
                 return
             if driver.state(handle) == DeploymentState.CRASHED:
                 self._capture_failure(session, run, handle)
+                return
+            # A substrate that restarts a dead engine (a Deployment) serves
+            # again under the same name, so the engine never reads CRASHED: it
+            # is a new process, cold, and not the one launched and measured.
+            if run.engine_incarnation:
+                now = driver.incarnation(handle)
+                if now is not None and now != run.engine_incarnation:
+                    log_text = ""
+                    try:
+                        log_text = driver.logs(handle, tail=self.settings.log_lines)
+                    except Exception:
+                        logger.exception("log read for restarted run %d failed", run.id)
+                    cause = classify_failure(log_text)
+                    self._capture_failure(
+                        session, run, handle,
+                        failure_class=cause if cause != "unknown" else "engine_restarted",
+                        error="the engine restarted while serving (its container or pod "
+                        "was replaced), so it is no longer the engine that was launched",
+                    )
 
     def _advance_baseline(self, session: Session, run: Run) -> None:
         """A run against an endpoint the platform did not launch: health-check

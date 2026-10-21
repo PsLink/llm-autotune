@@ -242,6 +242,29 @@ async def test_a_benchmark_stops_when_the_engine_under_it_crashes(night):
     assert supervisor.bench.cancelled, "the LLMBench submission was left running"
 
 
+async def test_an_engine_its_substrate_restarted_ends_its_benchmark(night):
+    """A Deployment brings a dead engine back under the same name, so it never
+    reads as crashed: the platform tells by the process it serves from."""
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    supervisor.bench = EndlessEvaluator()
+    run_id = await _serving_launch(supervisor, policy)
+    bench = await policy.post(f"/launches/{run_id}/benchmarks", json={"suite": "screen"})
+    bench_id = bench.json()["id"]
+    supervisor.tick()
+    supervisor.tick()
+    supervisor.tick()
+    assert (await policy.get(f"/launches/{run_id}")).json()["status"] == "serving"
+
+    driver.restarts[f"autotune-run-{run_id}"] = 1
+    supervisor.tick()
+    launch = (await policy.get(f"/launches/{run_id}")).json()
+    assert launch["status"] == "failed" and launch["failure_class"] == "engine_restarted"
+    assert "restarted while serving" in launch["error"]
+    bench = (await policy.get(f"/benchmarks/{bench_id}")).json()
+    assert bench["status"] == "failed" and f"launch {run_id}" in bench["error"]
+
+
 async def test_releasing_an_engine_mid_benchmark_stops_its_benchmark(night):
     supervisor, driver, http = night
     policy = await _boot(supervisor, driver, http)
@@ -272,7 +295,7 @@ async def test_a_benchmark_answers_in_measures_and_the_manifest_says_what_they_m
     slug = (await policy.get("/session")).json()["services"]["benchmarks"]["screen"]["slug"]
     modules = [{
         "module_name": "replay", "order_index": 0,
-        "params": {"concurrency": 16, "max_samples": 400, "api_key": "sk-secret"},
+        "params_json": {"concurrency": 16, "max_samples": 400, "api_key": "sk-secret"},
     }]
     monkeypatch.setattr(
         llmbench.LLMBenchClient, "list_benchmarks",

@@ -87,6 +87,10 @@ CONFIG_FAILURES = frozenset(
 #   terminated         a clean SIGTERM: a stop, a window cutoff, a redeploy.
 #   released           we took the run back (pause); see RELEASED above.
 #   unknown            by definition unclassified.
+#   engine_restarted   a serving engine came back as a new process (its pod
+#                      replaced or its container restarted) and its log names
+#                      no cause: an eviction and an unexplained crash look
+#                      the same from here.
 
 
 def classify_failure(log_text: str) -> str:
@@ -94,8 +98,21 @@ def classify_failure(log_text: str) -> str:
     replace/extend this later — the interface is just log text in, class out."""
     lowered = log_text.lower()
     rules: list[tuple[str, tuple[str, ...]]] = [
+        # First: an engine refuses its arguments before it does anything else,
+        # so a log that says so failed for that reason, whatever else it
+        # mentions (its own args dump names nccl options, for one).
+        ("bad_config", ("unrecognized arguments", "invalid argument", "error: argument")),
         ("oom", ("cuda out of memory", "outofmemoryerror", "out of memory")),
-        ("nccl", ("nccl", "communicator")),
+        # NCCL's own error spellings, not the word: a startup banner or an
+        # args dump (`enable_nccl_nvls=False`) mentions it on every launch.
+        (
+            "nccl",
+            (
+                "nccl error", "ncclsystemerror", "ncclinternalerror", "ncclunhandledcudaerror",
+                "ncclinvalidusage", "ncclremoteerror", "nccl failure", "nccl timeout",
+                "nccl watchdog", "communicator was aborted", "nccl communicator",
+            ),
+        ),
         # Before port_conflict: the GPU-busy message is worded to avoid the
         # "already in use" needle so the two never cross-classify.
         ("gpu_busy", ("gpu busy on", "gpus busy on")),
@@ -109,7 +126,6 @@ def classify_failure(log_text: str) -> str:
                 "manifest unknown",
             ),
         ),
-        ("bad_config", ("unrecognized arguments", "invalid argument", "error: argument")),
         ("model_load", ("no such file", "not a valid model", "safetensors")),
         ("ssh_timeout", ("timed out after",)),
         ("image_pull", ("image_pull:", "pulling from", "manifest for", "denied")),

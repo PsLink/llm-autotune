@@ -758,6 +758,11 @@ class Run(Base):
     launch_run_id: Mapped[int | None] = mapped_column(
         ForeignKey("runs.id"), nullable=True, index=True
     )
+    # Which engine process a policy's launch is serving from, as the substrate
+    # names it (driver.incarnation), recorded when it starts serving. A pod a
+    # Deployment replaced or a container it restarted serves again under the
+    # same name; this is how the worker tells it is not the engine launched.
+    engine_incarnation: Mapped[str] = mapped_column(String(500), default="")
     # A policy's DELETE /launches/{id} lands here; the worker turns it into a
     # teardown + SUCCEEDED on its next tick. Column rather than an Event so
     # GET /launches/{id} can honestly say "releasing".

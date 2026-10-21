@@ -1263,6 +1263,13 @@ async def put_contenders(
         # is the safer night: better an old best-so-far than none.
         return ContendersEcho(accepted=[], rejected=rejected)
 
+    # One update at a time per session: two PUTs a moment apart (two trials
+    # finishing together) would both read no current list and both insert,
+    # and the next PUT would supersede the pair. The second waits here and
+    # then reads what the first wrote.
+    await db.execute(
+        select(PolicySession.id).where(PolicySession.id == session.id).with_for_update()
+    )
     current = (
         await db.execute(
             select(PolicyContender).where(

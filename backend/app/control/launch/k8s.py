@@ -944,6 +944,25 @@ class K8sDriver(DeploymentDriver):
                     any_crashed = True
         return DeploymentState.CRASHED if any_crashed else DeploymentState.STARTING
 
+    def incarnation(self, handle: DeploymentHandle) -> str | None:
+        """Every pod of the run with its containers' restart count. A
+        Deployment brings a dead engine back under the same name, so a pod
+        uid or a restart count that changed means a new engine process."""
+        try:
+            pods = self.api.list("pods", self._run_selector(handle))
+        except Exception:
+            return None
+        parts = []
+        for pod in pods:
+            uid = (pod.get("metadata") or {}).get("uid") or ""
+            restarts = sum(
+                int(c.get("restartCount") or 0)
+                for c in (pod.get("status") or {}).get("containerStatuses") or []
+            )
+            if uid:
+                parts.append(f"{uid}:{restarts}")
+        return ",".join(sorted(parts)) or None
+
     def logs(self, handle: DeploymentHandle, tail: int = 200) -> str:
         return self.api.logs(self._run_selector(handle), tail=tail)
 

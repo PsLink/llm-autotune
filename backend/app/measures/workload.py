@@ -46,7 +46,7 @@ _SAYS: dict[str, str] = {
 def describe(modules: list[dict[str, Any]], aliases: dict[str, str] | None = None,
              replay_names: tuple[str, ...] = ()) -> list[dict[str, Any]]:
     """One entry per module of a benchmark (LLMBench's `modules` list, each
-    with `module_name`, `params`, `order_index`), in benchmark order."""
+    with `module_name`, `params_json`, `order_index`), in benchmark order."""
     from app.evaluation.llmbench import instance_keys
 
     ordered = sorted((m for m in modules or [] if isinstance(m, dict)),
@@ -56,7 +56,9 @@ def describe(modules: list[dict[str, Any]], aliases: dict[str, str] | None = Non
     for key, module in zip(keys, ordered, strict=True):
         name = str(module.get("module_name") or "")
         family = family_of(name, replay_names, aliases)
-        params = module.get("params") or {}
+        # LLMBench lists a module's params as `params_json`; `params` is the
+        # spelling of a benchmark document being written.
+        params = module.get("params_json") or module.get("params") or {}
         wanted = _PARAMS.get(family, ())
         entry: dict[str, Any] = {
             "scenario": key,

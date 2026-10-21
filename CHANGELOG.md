@@ -82,6 +82,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A policy launch whose engine Kubernetes restarted is failed, not left
+  serving.** A Deployment brings a dead engine back under the same name (a
+  crashed container restarted, a deleted or evicted pod recreated), so the
+  launch never read as crashed and a benchmark ran on against a cold engine.
+  The worker records the pod and restart count a launch started serving from
+  and fails it (`engine_restarted`, or the cause its log names) when they
+  change, which also stops its benchmarks.
+- **Two contender updates a moment apart no longer register the list twice.**
+  Each read no current list and inserted its own; the next update then
+  superseded both. Updates are now serialized per session.
+- **A refused engine flag is classified `bad_config`, not `nccl`.** The
+  engine's own argument dump mentions NCCL options on every launch; the
+  argument error is now checked first and NCCL is matched by its error
+  messages.
+- The screen workload in a policy manifest lists the benchmark's params
+  (LLMBench names them `params_json`).
+
 - **A benchmark stops when the engine under it crashes.** A policy's benchmark
   of one of its launches ran on against a dead engine for as long as
   LLMBench's timeouts allowed (over an hour on a replay), and the policy
