@@ -105,7 +105,9 @@ def summarize(
     comparison time (app.objective.sort_key). Negating minimize-objectives
     here would make the stored number disagree with the one in the report.
     """
-    metrics = metrics or {}
+    # A metrics dict, or a measures Reader (app.measures) answering measure
+    # references as well as raw keys.
+    metrics = metrics if metrics is not None else {}
     value = _numeric(metrics.get(target_metric(objective)))
 
     results = evaluate_redlines(objective, metrics)
@@ -143,7 +145,11 @@ def summary_of(result: Any, objective: dict[str, Any] | None) -> ResultSummary:
             constraints=constraints_from_stored(getattr(result, "constraints", None)),
             breaches=list(stored_breaches or []),
         )
-    return summarize(objective, getattr(result, "metrics", None))
+    from app.measures import reader_for
+
+    return summarize(
+        objective, reader_for(getattr(result, "metrics", None), getattr(result, "raw", None))
+    )
 
 
 def is_better(a: float | None, b: float | None, objective: dict | None) -> bool:

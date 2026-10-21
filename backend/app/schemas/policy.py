@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT_VERSION = "1.2"
+CONTRACT_VERSION = "1.3"
 
 # Inbound payloads from policy containers: unknown fields are the future, not
 # an error.
@@ -43,13 +43,19 @@ class PolicySettings(BaseModel):
     # pin it, for a model whose first night has nothing to learn from yet.
     approx_minutes_each: int | None = Field(default=None, ge=5, le=240)
     model_startup_minutes: int | None = Field(default=None, ge=0, le=120)
-    # Overrides the derived default (max_contenders * per-contender + 15).
+    # Overrides the derived default: the validation launches, side by side on
+    # the GPU budget, in rounds of one contender's time, + 15.
     validation_reserve_minutes: int | None = Field(default=None, ge=5, le=720)
-    # Cards this session holds on its machine. None = the whole box, the
-    # default for a night that has the machine to itself. Set (together with
-    # `share_machine` on the campaign) to take only a slice — the cards the
-    # widest candidate needs — so several sessions can share one node.
+    # The night's GPU budget: how many cards the session holds at once, which
+    # every launch it makes (search trials, repeats, validation) shares. A
+    # launch takes as many as its config uses (tp × dp × pp), so the budget,
+    # not a count of launches, is what limits parallelism. None = the whole
+    # machine on a box the night has to itself; on a node pool, the cards of
+    # the widest config in the space (one launch at a time).
     cards: int | None = Field(default=None, ge=1, le=64)
+    # Measure production with the validation benchmark next to the contenders,
+    # so the verdict says whether they beat it under the same conditions.
+    validate_production: bool = True
     heartbeat_timeout_s: int | None = Field(default=None, ge=30, le=3600)
     # Productivity watchdog: a SEARCHING session with nothing running and no
     # delegated request for this long earns a strike; `search_idle_strikes`
@@ -58,19 +64,43 @@ class PolicySettings(BaseModel):
     # forgets to signal "exhausted" or livelocks while still heartbeating.
     search_idle_timeout_s: int | None = Field(default=None, ge=30, le=3600)
     search_idle_strikes: int = Field(default=3, ge=1, le=10)
+    # Parameters the policy may not change (fnmatch globs over canonical
+    # keys), enforced at every launch, benchmark and contender. None = the
+    # platform default (space.DEFAULT_FORBIDDEN_PARAMS: flags that change
+    # answers rather than speed); [] = nothing forbidden.
+    forbidden_params: list[str] | None = Field(default=None, max_length=200)
+    # Knobs for the policy itself (an agent's model name, effort, budget…),
+    # handed over verbatim in the manifest as `policy.params`. The platform
+    # never reads them.
+    params: dict[str, Any] = Field(default_factory=dict)
 
-    def reserve_minutes(self, per_contender: int) -> int:
+    def forbidden(self) -> list[str]:
+        """The forbidden-parameter patterns in force for this campaign."""
+        from app.control.search.space import DEFAULT_FORBIDDEN_PARAMS
+
+        if self.forbidden_params is None:
+            return list(DEFAULT_FORBIDDEN_PARAMS)
+        return [p.strip() for p in self.forbidden_params if p.strip()]
+
+    def validation_launches(self) -> int:
+        """Validation runs at the end of the night: the contenders, and
+        production next to them."""
+        return self.max_contenders + (1 if self.validate_production else 0)
+
+    def reserve_minutes(self, per_contender: int, rounds: int | None = None) -> int:
         """Validation time held back at the end of the window, given what one
-        contender costs (policy_lifecycle.contender_minutes)."""
+        contender costs (policy_lifecycle.contender_minutes) and how many
+        rounds the launches take side by side on the GPU budget (one launch
+        per round when unknown)."""
         if self.validation_reserve_minutes is not None:
             return self.validation_reserve_minutes
-        return self.max_contenders * per_contender + 15
+        return (rounds or self.validation_launches()) * per_contender + 15
 
 
 # -- registry (human-facing, JWT) -----------------------------------------------
 
 
-class PolicyIn(BaseModel):
+class PolicyBase(BaseModel):
     name: str = Field(min_length=2, max_length=128)
     description: str = ""
     image: str = Field(min_length=1, max_length=255)
@@ -84,15 +114,27 @@ class PolicyIn(BaseModel):
     # it never reads them, and on k8s the mount would pin a placement-free
     # controller pod to a weights-bearing node.
     needs_model: bool = False
+    # Plain env, shown to anyone who can read the registry and rendered into
+    # the container's launch command. Secrets go in `secret_env`.
     env: dict[str, str] = Field(default_factory=dict)
     ports: int = Field(default=4, ge=1, le=16)
 
 
-class PolicyOut(PolicyIn):
+class PolicyIn(PolicyBase):
+    # Write-only env for credentials (an agent policy's LLM API key):
+    # encrypted at rest, never returned, redacted from the launch command.
+    # None keeps what is stored; a key with an empty value keeps its stored
+    # value; a key left out is removed; {} clears them all.
+    secret_env: dict[str, str] | None = None
+
+
+class PolicyOut(PolicyBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     owner_id: int
     created_at: datetime | None = None
+    # The names of the secret variables, never their values.
+    secret_env_keys: list[str] = Field(default_factory=list)
 
 
 # -- the manifest (policy-facing) -------------------------------------------------
@@ -147,31 +189,44 @@ class BenchmarkSuite(BaseModel):
     slug: str
     approx_minutes: int
     dataset_build_id: str = ""
+    # (1.3) What the benchmark sends, module by module, from its locked params:
+    # [{scenario, module, family, params, reads_as}] (app/measures/workload.py).
+    # Empty when the benchmark platform could not be asked.
+    workload: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ManifestServices(BaseModel):
     launch: bool = True
     benchmarks: dict[str, BenchmarkSuite] = Field(default_factory=dict)
     state: bool = True
+    # 1.3: engine logs, structured benchmark results, run environments, and
+    # the configs/check dry run.
+    diagnostics: bool = False
 
 
 class SessionManifest(BaseModel):
     contract: dict[str, str] = Field(default_factory=lambda: {"version": CONTRACT_VERSION})
     session_id: int
     campaign_id: int
-    policy: dict[str, str]
+    # name, image, version — and (1.3) `params`, the campaign's knobs for it.
+    policy: dict[str, Any]
     model: ManifestModel
     hardware: ManifestHardware
     objective: dict[str, ManifestObjective]
     search_space: dict[str, Any]
-    space_policy: dict[str, str] = Field(
-        default_factory=lambda: {"deviations": "allowed_if_declared"}
+    # `deviations` says how strictly the declared space binds; (1.3)
+    # `forbidden` lists the parameter patterns the policy may not change.
+    space_policy: dict[str, Any] = Field(
+        default_factory=lambda: {"deviations": "allowed_if_declared", "forbidden": []}
     )
     production: dict[str, Any] = Field(default_factory=dict)
     time: ManifestTime
     contenders: ManifestContenders
     services: ManifestServices
     prior: dict[str, Any] = Field(default_factory=dict)
+    # (1.3) The measures catalogue (docs/api/measures.md): the names, units,
+    # directions and statistics a benchmark's `measures` are reported in.
+    measures: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # -- heartbeat --------------------------------------------------------------------
@@ -350,15 +405,71 @@ class BenchmarkSummary(BaseModel):
     breaches: list[str] = Field(default_factory=list)
 
 
+class ScenarioMeasures(BaseModel):
+    """One module's results as measures (docs/api/measures.md)."""
+
+    scenario: str  # the module's instance key: `replay`, `perf_guidellm_sweep#2`
+    module: str
+    kind: str  # sweep | single | replay | quality
+    # Which level the operating point is (`c8`; null for anything but a
+    # sweep), and how it was chosen.
+    operating_level: str | None = None
+    operating_rule: str = ""
+    # Measure key (`ttft_ms@p99`, `ttft_ms@p90[32k_64k]`) → value, at the
+    # operating point. Absent keys were not reported — never 0.
+    operating: dict[str, float] = Field(default_factory=dict)
+    # A sweep's other points: `peak` and each `c<N>`.
+    points: dict[str, dict[str, float]] = Field(default_factory=dict)
+    # Every measure key this module can report at all.
+    supports: list[str] = Field(default_factory=list)
+
+
 class BenchmarkOut(BaseModel):
     id: int
     status: str  # queued|health_check|benching|succeeded|failed|killed
     suite: str = "screen"
     summary: BenchmarkSummary | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
+    # (1.3) The same results as measures, one entry per module. `metrics` keeps
+    # the raw LLMBench keys.
+    measures: list[ScenarioMeasures] = Field(default_factory=list)
     failure_class: str = ""
     error: str = ""
     config: dict[str, Any] = Field(default_factory=dict)
+    deviations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# -- configs/check (1.3) ------------------------------------------------------------
+
+
+class ConfigCheckIn(BaseModel):
+    model_config = _lenient
+
+    engine_args: dict[str, Any]
+
+
+class ConfigProblem(BaseModel):
+    # placement | forbidden | not_renderable | round_trip | bad_key | safety
+    kind: str
+    param: str = ""
+    message: str
+
+
+class ConfigCheckOut(BaseModel):
+    """What a launch of this config would meet, without spending one.
+
+    `ok` is false when a launch, benchmark or contender with this config would
+    be refused (`problems`). `warnings` never refuse anything: flags the
+    platform's catalog does not know (the engine may still accept them) and
+    how the config steps outside the declared space (`deviations`).
+    """
+
+    ok: bool
+    config: dict[str, Any] = Field(default_factory=dict)
+    cards: int = 0
+    command: list[str] = Field(default_factory=list)
+    problems: list[ConfigProblem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     deviations: list[dict[str, Any]] = Field(default_factory=list)
 
 

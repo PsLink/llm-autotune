@@ -8,7 +8,7 @@ This document is the narrative version: what the calls mean, and what each side
 guarantees. For the one-page summary see [policy-api.md](policy-api.md); the interactive reference that
 always matches the running build is **`/api/docs`**, section *policy sessions*.
 For real responses from a finished session see the
-Contract version: **1.2** (`/api/policy/v1`; see [Evolution](#evolution)).
+Contract version: **1.3** (`/api/policy/v1`; see [Evolution](#evolution)).
 
 ---
 
@@ -27,7 +27,10 @@ and measures it with the full replay, the same way for every campaign, so the
 verdict never depends on how you would have served it. (The one exception: a
 contender the platform cannot launch — a spec on a *different* engine image
 because you serve your own engines — is one it asks *you* to serve.) That
-measurement — never your own — is the campaign's verdict. Then you exit, the
+measurement — never your own — is the campaign's verdict. Production is
+measured the same way, at the same time, so the verdict says whether a
+contender beats it under the same conditions; validation launches run side by
+side, as many as the night's GPU budget holds. Then you exit, the
 container is removed, and production is restored exactly as it is after any
 other night.
 
@@ -60,6 +63,11 @@ AUTOTUNE_API_KEY      atk_…   (session-scoped; dies with the session)
 AUTOTUNE_SESSION_ID   17
 ```
 
+Any variables registered with the policy come too: its plain `env`, and its
+`secret_env` (1.3) for credentials such as an agent policy's LLM API key,
+which the platform stores encrypted, never returns, and redacts from the
+container's recorded launch command.
+
 Send the key on every request as `X-API-Key`. It is valid for **this session
 only**: it cannot touch other campaigns, other machines, or other sessions,
 and it expires shortly after the session ends. Everything you do is audited as
@@ -86,7 +94,8 @@ the response is always current.
   "contract": {"version": "1.0"},
   "session_id": 17,
   "campaign_id": 42,
-  "policy": {"name": "my-policy", "image": "registry/my-policy:1.3.0", "version": "1.3.0"},
+  "policy": {"name": "my-policy", "image": "registry/my-policy:1.3.0", "version": "1.3.0",
+             "params": {"model": "my-llm"}},
 
   "model": {
     "engine": "sglang",
@@ -114,7 +123,8 @@ the response is always current.
   },
 
   "search_space": {"base": {}, "grid": {}, "tied": [], "range": {}, "conditions": {}},
-  "space_policy": {"deviations": "allowed_if_declared"},
+  "space_policy": {"deviations": "allowed_if_declared",
+                   "forbidden": ["quantization*", "kv_cache_dtype", "context_length", "…"]},
 
   "production": {"engine_args": {}, "launch_command": "docker run …"},
 
@@ -132,19 +142,29 @@ the response is always current.
   "services": {
     "launch": true,
     "benchmarks": {
-      "screen": {"slug": "autotune-screen-v1", "approx_minutes": 10, "dataset_build_id": "b-20260818"}
+      "screen": {"slug": "autotune-screen-v1", "approx_minutes": 10, "dataset_build_id": "b-20260818",
+                 "workload": [{"scenario": "replay", "module": "replay", "family": "replay",
+                               "params": {"concurrency": 16, "max_samples": 400},
+                               "reads_as": "Recorded production requests, replayed at one fixed concurrency: …"}]}
     },
-    "state": true
+    "state": true,
+    "diagnostics": true
   },
 
-  "prior": {"contenders": []}
+  "prior": {"contenders": []},
+
+  "measures": [{"name": "output_tpm_per_gpu", "label": "Output tokens/min per GPU", "unit": "tokens/min",
+                "better": "higher", "group": "throughput", "meaning": "…", "stats": []}, "…"]
 }
 ```
 
 Field notes:
 
-- **`hardware`** — the cards and host ports that are yours tonight. Use no
-  others. Engines you serve yourself must bind `0.0.0.0:<one of these ports>`
+- **`hardware`** — the cards and host ports that are yours tonight: the
+  night's **GPU budget** (the campaign's `policy_settings.cards`). Every launch
+  you make shares it, each taking as many cards as its config uses, so the
+  budget — not a count of launches — is what limits how much runs at once. Use
+  no others. Engines you serve yourself must bind `0.0.0.0:<one of these ports>`
   (the container runs on the host network). If `gpus_visible_in_container` is
   true the cards are already visible to your process.
   With `pool: true` (1.2) the machine is a Kubernetes node pool, and
@@ -157,6 +177,12 @@ Field notes:
   vocabulary (see [Config format](#config-format)). `space_policy` says how strictly it
   binds you: `allowed_if_declared` means you may step outside it — an unknown
   flag, a value off the grid — provided your `plan` says so.
+- **`policy.params`** (1.3) — the campaign's knobs for *your* policy (an
+  agent's model name, its effort, a budget), set in the campaign's policy
+  settings and handed over verbatim. The platform never reads them; your
+  README says what you accept.
+- **`space_policy.forbidden`** (1.3) — parameters you may not change (see
+  [Config format](#config-format)).
 - **`objective`** — per suite: the metric the platform will reduce results to,
   its direction, and the redlines a config must hold. Your trials are scored
   with exactly this, so you never need to re-implement it.
@@ -174,6 +200,15 @@ Field notes:
   assume a service; read the menu.
 - **`prior`** — validated contenders and verdicts from this campaign's earlier
   nights, so you can warm-start.
+- **`services.benchmarks.<suite>.workload`** (1.3) — what the suite sends, one
+  entry per module in benchmark order: its family, the params that shape the
+  numbers (never a credential), and in `reads_as` what its measures describe —
+  for example, that a replay has no concurrency levels. Empty when the
+  benchmark platform could not be asked.
+- **`measures`** (1.3) — the [measure catalogue](measures.md): every
+  measure's unit, direction (`better`), meaning and statistics. A benchmark's
+  `measures` (below) use these names, so a policy can render and compare any
+  module's results without knowing the module.
 
 ---
 
@@ -302,6 +337,28 @@ back**. The echo is the truth: it is what gets hashed for dedup and history,
 and the SDK computes the same form locally so you can dedup before spending a
 launch.
 
+Two more rules (1.3) make every measured config one that can be deployed:
+
+- **Forbidden parameters.** `space_policy.forbidden` lists parameters (fnmatch
+  globs over canonical keys) you may not change. The benchmarks measure speed,
+  not answers, so the default list is the flags that change what the
+  deployment returns or can do: KV-cache and weight precision, context length,
+  chat template, tool-call and reasoning parsers, default sampling, tokenizer.
+  You may keep the value the space's `base` gives such a parameter, and a
+  parameter the campaign's own space sweeps is never forbidden. A campaign can
+  replace the list (`policy_settings.forbidden_params`; empty = nothing
+  forbidden).
+- **The command-line round trip.** A config must come back unchanged after
+  being rendered to the engine's command line and parsed back — exactly what
+  every launch and every captured deployment goes through. So values are
+  scalars: a string, a number or a boolean. A list or an object, an empty
+  string, or a value starting with `--` cannot make the trip; give a JSON flag
+  its value as one JSON string.
+
+Both are refusals (`422`) at `POST /launches`, `POST /benchmarks` and
+`PUT /contenders` (where the entry is echoed in `rejected`), and both are
+reported without refusing by `POST /configs/check` below.
+
 ---
 
 ## Services
@@ -372,8 +429,24 @@ GET /api/policy/v1/benchmarks/57
 → {"status": "succeeded",
    "summary": {"objective_value": 1234.5, "feasible": true,
                "constraints": [-120.0], "breaches": []},
-   "metrics": {"perf_guidellm_sweep.output_tpm_card_norm": 1234.5, "…": "…"}}
+   "metrics": {"perf_guidellm_sweep.output_tpm_card_norm": 1234.5, "…": "…"},
+   "measures": [{"scenario": "perf_guidellm_sweep", "module": "perf_guidellm_sweep", "kind": "sweep",
+                 "operating_level": "c16",
+                 "operating_rule": "the level with the highest total throughput that met the SLO",
+                 "operating": {"output_tpm_per_gpu": 154.3, "ttft_ms@p99": 812.0, "success_rate": 1.0, "…": 0},
+                 "points": {"peak": {"…": 0}, "c1": {"…": 0}, "c16": {"…": 0}},
+                 "supports": ["itl_ms@p50", "…"]}]}
 ```
+
+`measures` (1.3) is the same result in [measures](measures.md), one entry per
+module. Read it in preference to `metrics`: a measure means the same thing
+whichever module reported it, while a raw key does not (a replay's
+`output_tps_mean` is one request's speed; a sweep's is the whole level's).
+`operating` is the scenario's operating point: for a sweep, the level with the
+highest total throughput that met its SLO (`operating_level`); for anything
+else, the whole run (`operating_level` is null). A key absent from `operating`
+was not reported — never read it as 0. `supports` lists every key the module
+can report at all.
 
 `suite` names an entry from `services.benchmarks`. Tonight's menu tells you
 each suite's approximate duration and pinned dataset. (v1 offers `screen`;
@@ -435,6 +508,57 @@ GET /api/policy/v1/state
 Per campaign, not per session: night 2 reads what night 1 wrote. The platform
 never looks inside.
 
+### Diagnostics (1.3)
+
+When the manifest's `services.diagnostics` is true. Everything the platform
+records about your own launches and benchmarks, to read back — the evidence a
+search learns from:
+
+```http
+POST /api/policy/v1/configs/check
+{"engine_args": {"tp_size": 2, "quantization": "fp8"}}
+→ {"ok": false, "config": {…canonical…}, "cards": 2,
+   "command": ["--quantization", "fp8", "--tp-size", "2"],
+   "problems": [{"kind": "forbidden", "param": "quantization", "message": "…"}],
+   "warnings": [], "deviations": [{"param": "quantization", "kind": "unknown", …}]}
+```
+
+A dry run: the canonical echo, the engine arguments it renders to, and
+everything a launch would refuse (`problems`: `placement`, `forbidden`,
+`not_renderable`, `round_trip`, `bad_key`, `safety`), without spending one.
+Never `422`s. `warnings` refuse nothing: flags the platform's catalog does not
+know (the engine may still accept them; a typo only fails at launch).
+
+```http
+GET /api/policy/v1/launches/31/log?tail=500&grep=out%20of%20memory&context=5
+```
+
+The engine's log, as plain text: live from its container while it runs, the
+saved copy after. `grep` is a case-insensitive regular expression (or a plain
+substring if it is not one), `context` lines either side of each match.
+Startup errors, OOM traces and the engine's own throughput lines are here.
+
+```http
+GET /api/policy/v1/launches/31/environment
+→ {"engine_version": "0.5.3", "torch_version": "2.8.0", "cuda_version": "12.8",
+   "image_digest": "lmsysorg/sglang@sha256:…", "card_type": "H100", …}
+```
+
+What the launch actually ran on, recorded once its engine is up. Copy it into
+a contender's `launch_spec.environment`: that is what makes a verdict
+promotable.
+
+```http
+GET /api/policy/v1/benchmarks/57/results
+GET /api/policy/v1/benchmarks/57/results/raw
+```
+
+The benchmark in full: every scenario, each concurrency level's metrics
+(throughput per card, TTFT and ITL percentiles, …), the best level that met
+the gate, and `status` (`measured`, `failed`, `running`, `queued`). `/raw` is
+the benchmark platform's own payload as harvested (`409` until there is one).
+These are the same documents the agent report API serves to people.
+
 ### Events
 
 ```http
@@ -485,7 +609,7 @@ from their specs, time permitting. Either way the machine's own guarantees
 | `401` | Bad or expired token | The session is over for you; exit. |
 | `409` | The phase forbids it (launch after finalize, bench that cannot finish before the deadline, contender update after freeze, `serving` for a contender that was not commanded) | Re-read the heartbeat command and follow it. |
 | `410` | Session reached a terminal state | Exit. |
-| `422` | Config rejected for safety (cards, malformed values) — message says why | Fix the config; every config faces the same validation. |
+| `422` | Config rejected: safety (cards, malformed values), a forbidden parameter, or a value that cannot round-trip through a command line — the message says which | Fix the config; every config faces the same validation. `POST /configs/check` tells you without trying. |
 | `429` | No free cards/ports inside your allocation | Release something, or wait. |
 
 ---
@@ -499,6 +623,14 @@ from their specs, time permitting. Either way the machine's own guarantees
   `search_idle_strikes`) and a recorded `search_end_reason`. A 1.0 image keeps
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
+- **1.3** (additive): diagnostics (`POST /configs/check`, launch logs and
+  environments, full benchmark results), [measures](measures.md) on every
+  benchmark plus the catalogue and each suite's workload in the manifest,
+  `policy.params`, and forbidden
+  parameters plus the command-line round trip. The last two are new
+  refusals: a 1.2 policy that never changes a forbidden parameter or sends a
+  list value runs unchanged, and one that does now gets a `422` that names
+  the parameter.
 - **1.2** (additive, non-breaking): Kubernetes node pools. The manifest's
   `hardware` gained `pool`, `node_count` and `node_gpu_max`, and a launch can
   report `queued` again, with `waiting_reason` and `waiting_since`, while the
@@ -514,7 +646,6 @@ from their specs, time permitting. Either way the machine's own guarantees
   the matching capability. An image built against contract 1.0 keeps working
   untouched.
 - Planned service entries you may see appear on the menu over time:
-  `diagnostics` (pull engine logs and raw per-module benchmark JSON),
   additional benchmark suites (the platform's mini replay), `datasets`
   (bring-your-own-dataset for *search* — verdicts stay on the platform-pinned
   dataset), `secrets` (scoped credentials for LLM-agent policies).
@@ -535,7 +666,8 @@ from their specs, time permitting. Either way the machine's own guarantees
 ## What is *not* guaranteed
 
 - That every contender gets validated — a night that runs out of clock
-  validates in rank order and marks the rest `skipped`.
+  validates in rank order (production first, then the contenders, side by
+  side as the budget allows) and marks the rest `skipped`.
 - That a benchmark you request completes — the window's hard cutoff kills
   running work, and `EvaluatorBusy` nights exist. Design your loop to treat a
   lost measurement as a lost measurement, not a crisis.

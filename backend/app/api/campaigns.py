@@ -55,7 +55,7 @@ from app.evaluation.benchmarks import BenchmarkRefused
 from app.evaluation.llmbench import LLMBenchClient
 from app.evaluation.ranking import leaderboard_entries
 from app.metrics_catalog import DEFAULT_VERIFY_TARGET_METRIC
-from app.objective import target_metric
+from app.objective import redlines, target_metric
 from app.reporting import render_campaign_report
 from app.reporting.activity import render_activity
 from app.schemas.core import (
@@ -638,6 +638,7 @@ def _benchmark_checks(
         pf.benchmark_check(
             "benchmark", "Benchmark", body.benchmark_slug, catalog,
             target_metric(body.objective),
+            [r.get("metric", "") for r in redlines(body.objective)],
         )
     ]
     if body.verify_benchmark_slug:
@@ -1041,7 +1042,19 @@ async def force_stop(
             )
         # Then the classic pause.
 
-    campaign.status = CampaignStatus.PAUSED.value
+    if campaign.status == CampaignStatus.DONE.value:
+        # Already over — the session it was waiting on may have ended it a
+        # moment ago. Stop still ends whatever is left running; it never
+        # reopens a finished campaign as paused.
+        pass
+    elif campaign.policy_id and sched.from_campaign(campaign) is None:
+        # A one-off policy night has nothing to resume into: its window has one
+        # session, and that session is being ended. It is done, as the end of
+        # its session would make it anyway.
+        campaign.status = CampaignStatus.DONE.value
+        session.add(Event(actor=user.username, kind="campaign_done", campaign_id=campaign_id))
+    else:
+        campaign.status = CampaignStatus.PAUSED.value
     # Cleared, or the next tick would read the override and wake it again.
     campaign.override_until = None
 

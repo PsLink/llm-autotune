@@ -11,19 +11,29 @@ handler:
     timestamp it honours; `policy_sessions.status` is never written here.
   * Nothing a policy sends is silently rewritten. Configs are canonicalized
     (base merged, inactive params pruned) and echoed back; out-of-space
-    parameters become recorded deviations, not rejections; the only 422s are
-    safety (the same validate_config the platform's own expansion faces).
+    parameters become recorded deviations, not rejections. The only 422s are
+    safety (the same validate_config the platform's own expansion faces), a
+    forbidden parameter changed, and a value that cannot round-trip through a
+    command line — all three answered in advance by POST /configs/check.
 """
 
+import asyncio
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.loader import load_run
+from app.agent.parts import environment_part, results_part
 from app.control.baseline import resolve_baseline
+from app.control.engine_command import PLACEMENT_FLAGS, round_trip_problems
+from app.control.engines.base import render_args
+from app.control.engines.flags import known_flags, normalize_args
 from app.control.orchestrator.policy_lifecycle import (
     PENDING_CONTENDER_STATES,
     command_for,
@@ -33,7 +43,7 @@ from app.control.orchestrator.policy_lifecycle import (
 )
 from app.control.search.base import CandidateConfig
 from app.control.search.space import deviations as space_deviations
-from app.control.search.space import prune_inactive
+from app.control.search.space import forbidden_hits, prune_inactive
 from app.control.search.validation import ValidationContext, cards_used, validate_config
 from app.core.auth import PolicyCaller, get_policy_session
 from app.core.config import get_settings
@@ -59,12 +69,20 @@ from app.db.models import (
     RunStatus,
 )
 from app.hardware import is_node_pool
+from app.measures import reader_for, scenarios_out
+from app.measures.catalog import catalogue as measure_catalogue
+from app.measures.workload import describe as describe_workload
 from app.objective import direction, redlines, target_metric
+from app.reporting.run_log import read_run_log
+from app.schemas.agent import EnvironmentPart, ResultsPart
 from app.schemas.policy import (
     CONTRACT_VERSION,
     BenchmarkOut,
     BenchmarkSuite,
     BenchmarkSummary,
+    ConfigCheckIn,
+    ConfigCheckOut,
+    ConfigProblem,
     ContenderOut,
     ContendersEcho,
     ContendersPut,
@@ -82,6 +100,7 @@ from app.schemas.policy import (
     ManifestTime,
     PlanIn,
     PolicyEventIn,
+    ScenarioMeasures,
     ServingIn,
     SessionManifest,
     TrialIn,
@@ -140,23 +159,35 @@ def _canonical(config: dict[str, Any], campaign: Campaign) -> dict[str, Any]:
     return prune_inactive(merged, space)
 
 
-def _reject_placement(config: dict[str, Any]) -> None:
-    from app.control.engine_command import PLACEMENT_FLAGS
-
-    offending = sorted(set(config) & set(PLACEMENT_FLAGS))
-    if offending:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"placement is the platform's: remove {', '.join(offending)}",
-        )
-
-
-def _validated(
+def _config_problems(
     config: dict[str, Any], campaign: Campaign, machine: Machine | None
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Canonical config + deviations, or a 422 for the safety failures."""
-    _reject_placement(config)
+) -> tuple[dict[str, Any], list[ConfigProblem]]:
+    """The canonical config, and every reason a launch of it would be refused.
+
+    Shared by the refusals (`_validated`) and the dry run (`POST
+    /configs/check`), so the two can never disagree about a config.
+    """
+    problems = [
+        ConfigProblem(
+            kind="placement", param=key,
+            message=f"{key} is placement, which the platform sets: remove it",
+        )
+        for key in sorted(set(config) & set(PLACEMENT_FLAGS))
+    ]
     canonical = _canonical(config, campaign)
+    for hit in forbidden_hits(
+        canonical, campaign.search_space or {}, settings_of(campaign).forbidden(),
+        campaign.engine,
+    ):
+        problems.append(ConfigProblem(
+            kind="forbidden", param=hit["param"],
+            message=f"{hit['param']} is forbidden for this campaign (matches "
+            f"{hit['pattern']!r}): leave it at the campaign's value",
+        ))
+    for found in round_trip_problems(
+        {k: v for k, v in canonical.items() if k not in PLACEMENT_FLAGS}, campaign.engine
+    ):
+        problems.append(ConfigProblem(**found))
     error = validate_config(
         canonical,
         ValidationContext(
@@ -164,8 +195,43 @@ def _validated(
         ),
     )
     if error:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, error)
+        problems.append(ConfigProblem(kind="safety", message=error))
+    return canonical, problems
+
+
+def _validated(
+    config: dict[str, Any], campaign: Campaign, machine: Machine | None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Canonical config + deviations, or a 422 saying everything that is wrong
+    with it: placement, a forbidden parameter, a value that cannot round-trip
+    through a command line, or a safety failure."""
+    canonical, problems = _config_problems(config, campaign, machine)
+    if problems:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(p.message for p in problems)
+        )
     return canonical, space_deviations(canonical, campaign.search_space or {})
+
+
+async def _validated_or_audit(
+    db: AsyncSession,
+    caller: PolicyCaller,
+    config: dict[str, Any],
+    campaign: Campaign,
+    machine: Machine | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """`_validated`, with a refusal kept in the campaign's activity log: a
+    refused config never becomes a trial, so without this the only trace of
+    what a policy tried and was told no is the policy's own log."""
+    try:
+        return _validated(config, campaign, machine)
+    except HTTPException as exc:
+        _audit(
+            db, caller, "policy_config_refused",
+            payload={"config": config, "reason": str(exc.detail)[:1000]},
+        )
+        await db.commit()
+        raise
 
 
 async def _live_session_runs(db: AsyncSession, session: PolicySession) -> list[Run]:
@@ -341,6 +407,60 @@ async def _waiting_reason(db: AsyncSession, run: Run) -> str:
     return str((payload or {}).get("reason") or "")
 
 
+def _measures_out(result: Result, candidate: Candidate | None) -> list[ScenarioMeasures]:
+    reader = reader_for(result.metrics, result.raw, candidate.config if candidate else None)
+    return [ScenarioMeasures(**s) for s in scenarios_out(reader.scenarios)]
+
+
+# What a benchmark sends, per slug: the benchmark platform is asked once per
+# few minutes, not on every manifest read, and a manifest waits for it only
+# briefly (a late answer still fills the cache for the next read).
+_WORKLOAD_TTL_S = 300.0
+_WORKLOAD_WAIT_S = 5.0
+_workloads: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def _screen_workload(slug: str) -> list[dict[str, Any]]:
+    """Best effort: an unreachable benchmark platform leaves it empty."""
+    import time
+
+    if not slug:
+        return []
+    cached = _workloads.get(slug)
+    if cached and time.monotonic() - cached[0] < _WORKLOAD_TTL_S:
+        return cached[1]
+    try:
+        from app.evaluation.llmbench import LLMBenchClient
+
+        # One try: a manifest read must not ride out a benchmark platform outage.
+        benchmark = next(
+            (b for b in LLMBenchClient(max_attempts=1).list_benchmarks() if b.get("slug") == slug),
+            None,
+        )
+    except Exception:
+        logger.warning("could not describe benchmark %s for a policy manifest", slug)
+        # Remembered too, so an unreachable platform is not asked on every read.
+        _workloads[slug] = (time.monotonic(), [])
+        return []
+    settings = get_settings()
+    out = describe_workload(
+        (benchmark or {}).get("modules") or [],
+        aliases=dict(settings.llmbench_module_families or {}),
+        replay_names=(settings.llmbench_replay_module,),
+    )
+    _workloads[slug] = (time.monotonic(), out)
+    return out
+
+
+async def _screen_workload_soon(slug: str) -> list[dict[str, Any]]:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_screen_workload, slug), timeout=_WORKLOAD_WAIT_S
+        )
+    except TimeoutError:
+        return []
+
+
 async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None) -> BenchmarkOut:
     mapping = {
         RunStatus.PENDING.value: "queued",
@@ -352,6 +472,7 @@ async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None
     }
     summary = None
     metrics: dict[str, Any] = {}
+    measures: list[ScenarioMeasures] = []
     result = (
         await db.execute(
             select(Result)
@@ -367,6 +488,10 @@ async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None
             breaches=list(result.breaches or []),
         )
         metrics = dict(result.metrics or {})
+        try:
+            measures = _measures_out(result, candidate)
+        except Exception:
+            logger.exception("could not read benchmark %s as measures", run.id)
     from app.staging import stage_of
 
     return BenchmarkOut(
@@ -375,6 +500,7 @@ async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None
         suite=VERIFY if candidate is not None and stage_of(candidate) == VERIFY else SCREEN,
         summary=summary,
         metrics=metrics,
+        measures=measures,
         failure_class=run.failure_class or "",
         error=(run.error or "")[:2000],
         config=(candidate.config if candidate else {}),
@@ -474,6 +600,7 @@ async def manifest(
             "name": policy.name if policy else "",
             "image": policy.image if policy else "",
             "version": policy.version if policy else "",
+            "params": dict(knobs.params),
         },
         model=ManifestModel(
             engine=campaign.engine,
@@ -499,6 +626,7 @@ async def manifest(
         ),
         objective={SCREEN: _objective(SCREEN), VERIFY: _objective(VERIFY)},
         search_space=campaign.search_space or {},
+        space_policy={"deviations": "allowed_if_declared", "forbidden": knobs.forbidden()},
         production=production,
         time=ManifestTime(
             started_at=session.started_at,
@@ -521,11 +649,14 @@ async def manifest(
                     slug=screen_slug,
                     approx_minutes=_SCREEN_APPROX_MINUTES,
                     dataset_build_id=campaign.dataset_build_id or "",
+                    workload=await _screen_workload_soon(screen_slug),
                 )
             },
             state=True,
+            diagnostics=True,
         ),
         prior=prior,
+        measures=measure_catalogue(),
     )
 
 
@@ -692,7 +823,7 @@ async def request_launch(
         await db.commit()
         return _launch_out(existing, await db.get(Candidate, existing.candidate_id))
 
-    canonical, dev = _validated(body.engine_args, campaign, machine)
+    canonical, dev = await _validated_or_audit(db, caller, body.engine_args, campaign, machine)
     needed = cards_used(canonical)
     # A machine with no cards (a CPU-only slice: kind, the demo's mock
     # engine) gives the session none, and its launches ask for none whatever
@@ -815,6 +946,7 @@ async def bench_launch(
         service_port=0,
         policy_session_id=session.id,
         idempotency_key=idempotency_key,
+        launch_run_id=parent.id,
         started_at=datetime.now(UTC),
     )
     db.add(run)
@@ -853,7 +985,7 @@ async def bench_external(
         return await _benchmark_out(db, existing, await db.get(Candidate, existing.candidate_id))
 
     _require_self_serving_is_reachable(machine)
-    canonical, dev = _validated(body.engine_args, campaign, machine)
+    canonical, dev = await _validated_or_audit(db, caller, body.engine_args, campaign, machine)
     candidate = await _make_candidate(db, campaign, canonical, dev)
     run = Run(
         campaign_id=campaign.id,
@@ -949,6 +1081,134 @@ async def cancel_benchmark(
     return await _benchmark_out(db, run, await db.get(Candidate, run.candidate_id))
 
 
+# -- diagnostics (1.3) -----------------------------------------------------------------
+
+
+@router.post("/configs/check", response_model=ConfigCheckOut)
+async def check_config(
+    body: ConfigCheckIn,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Everything a launch of this config would meet — refusals, the canonical
+    echo, the rendered command, catalog warnings, deviations — without
+    spending a launch. Never 422s: the answer is the point."""
+    _session, campaign, machine = await _context(db, caller)
+    canonical, problems = _config_problems(body.engine_args, campaign, machine)
+    known = known_flags(campaign.engine)
+    normalized, _ = normalize_args(campaign.engine, canonical)
+    # Only what the policy chose: a key the campaign itself sets to this value
+    # (the base config) is the operator's, and repeating its warning on every
+    # check buries the ones about the policy's own flags.
+    base, _ = normalize_args(campaign.engine, (campaign.search_space or {}).get("base") or {})
+    warnings = [
+        f"{key} is not in the platform's {campaign.engine} flag catalog — the engine "
+        "may still accept it; a typo fails only at launch"
+        for key in sorted(normalized)
+        if known and key not in known and not (key in base and base[key] == normalized[key])
+    ]
+    command: list[str] = []
+    if not any(p.kind in ("not_renderable", "bad_key") for p in problems):
+        command = render_args(canonical, campaign.engine)
+    return ConfigCheckOut(
+        ok=not problems,
+        config=canonical,
+        cards=cards_used(canonical),
+        command=command,
+        problems=problems,
+        warnings=warnings,
+        deviations=space_deviations(canonical, campaign.search_space or {}),
+    )
+
+
+def _filter_log(text: str, grep: str | None, context: int, tail: int) -> str:
+    """The last `tail` lines of a log, or of the lines matching `grep` (a
+    case-insensitive regex, or a plain substring when it is not one) with
+    `context` lines either side."""
+    lines = text.splitlines()
+    if grep:
+        try:
+            pattern = re.compile(grep, re.IGNORECASE)
+            hit = pattern.search
+        except re.error:
+            needle = grep.lower()
+
+            def hit(line: str) -> bool:
+                return needle in line.lower()
+
+        keep: set[int] = set()
+        for index, line in enumerate(lines):
+            if hit(line):
+                keep.update(range(max(0, index - context), min(len(lines), index + context + 1)))
+        picked: list[str] = []
+        previous = -2
+        for index in sorted(keep):
+            if index != previous + 1 and picked:
+                picked.append("--")
+            picked.append(lines[index])
+            previous = index
+        lines = picked
+    return "\n".join(lines[-tail:])
+
+
+@router.get("/launches/{run_id}/log", response_class=PlainTextResponse)
+async def launch_log(
+    run_id: int,
+    tail: int = Query(default=500, ge=1, le=20000),
+    grep: str | None = Query(default=None, max_length=200),
+    context: int = Query(default=0, ge=0, le=50),
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """The engine's log: live from its container while it runs, the saved copy
+    after. Startup errors, OOM traces and the engine's own throughput lines
+    are here — the evidence a failed or slow launch leaves."""
+    run = await _session_run(db, caller, run_id, RunKind.POLICY_LAUNCH.value)
+    return _filter_log(await read_run_log(db, run), grep, context, tail)
+
+
+@router.get("/launches/{run_id}/environment", response_model=EnvironmentPart)
+async def launch_environment(
+    run_id: int,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """What the launch actually ran on: engine, torch and CUDA versions, image
+    digest, card. Recorded once the engine is up; fill a contender's
+    `launch_spec.environment` from it to make its verdict promotable."""
+    run = await _session_run(db, caller, run_id, RunKind.POLICY_LAUNCH.value)
+    bundle = await load_run(db, run.id)
+    return environment_part(bundle)
+
+
+@router.get("/benchmarks/{run_id}/results", response_model=ResultsPart)
+async def benchmark_results(
+    run_id: int,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """The benchmark in full: every scenario, every concurrency level, latency
+    percentiles, the best level that met the gate. `status` says whether it is
+    measured yet."""
+    run = await _session_run(db, caller, run_id, RunKind.EXTERNAL.value)
+    bundle = await load_run(db, run.id)
+    return results_part(bundle)
+
+
+@router.get("/benchmarks/{run_id}/results/raw")
+async def benchmark_results_raw(
+    run_id: int,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """The benchmark platform's own result payload, exactly as harvested."""
+    run = await _session_run(db, caller, run_id, RunKind.EXTERNAL.value)
+    bundle = await load_run(db, run.id)
+    if bundle is None or bundle.result is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"benchmark {run_id} has no result yet")
+    return bundle.result.raw or {}
+
+
 # -- contenders ---------------------------------------------------------------------
 
 
@@ -1003,6 +1263,13 @@ async def put_contenders(
         # is the safer night: better an old best-so-far than none.
         return ContendersEcho(accepted=[], rejected=rejected)
 
+    # One update at a time per session: two PUTs a moment apart (two trials
+    # finishing together) would both read no current list and both insert,
+    # and the next PUT would supersede the pair. The second waits here and
+    # then reads what the first wrote.
+    await db.execute(
+        select(PolicySession.id).where(PolicySession.id == session.id).with_for_update()
+    )
     current = (
         await db.execute(
             select(PolicyContender).where(
@@ -1012,13 +1279,22 @@ async def put_contenders(
         )
     ).scalars().all()
 
-    # Idempotent no-op: a policy that re-declares the same best on a cadence
-    # (rank + config unchanged) should not churn the ledger — no supersede, no
-    # new rows, no event. Keeps the contender history to real changes.
+    # Same contenders (rank + config unchanged): no supersede, no new rows, no
+    # event — the ledger keeps to real changes. But the evidence is refreshed
+    # in place: a policy re-declares the same best after measuring it again,
+    # and a verdict or report built on the first measurement alone would read
+    # an outdated number.
     def _sig(rows: list[PolicyContender]) -> list[tuple[int, str]]:
         return sorted((r.rank, r.config_hash) for r in rows)
 
     if _sig(current) == _sig(accepted_rows):
+        fresh = {(r.rank, r.config_hash): r for r in accepted_rows}
+        for row in current:
+            update = fresh[(row.rank, row.config_hash)]
+            row.evidence = update.evidence
+            row.trial_ids = update.trial_ids
+            row.launch_spec = update.launch_spec
+        await db.commit()
         return ContendersEcho(
             accepted=[ContenderOut.model_validate(r) for r in current], rejected=rejected
         )

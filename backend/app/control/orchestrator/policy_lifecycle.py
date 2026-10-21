@@ -21,6 +21,7 @@ from typing import Any
 
 from app.control.orchestrator import timing
 from app.control.orchestrator.lifecycle import as_utc, now
+from app.control.search.validation import cards_used, widest_cards
 from app.core.config import get_settings
 from app.db.models import (
     Campaign,
@@ -29,6 +30,7 @@ from app.db.models import (
     PolicySession,
     PolicySessionStatus,
 )
+from app.hardware import is_node_pool
 from app.schemas.policy import PolicySettings
 
 # Contenders the platform still intends to validate.
@@ -91,8 +93,33 @@ def search_deadline(campaign: Campaign, machine: Machine | None) -> datetime | N
     hard = hard_deadline(campaign, machine)
     if hard is None:
         return None
-    reserve = settings_of(campaign).reserve_minutes(contender_minutes(campaign))
+    reserve = settings_of(campaign).reserve_minutes(
+        contender_minutes(campaign), validation_rounds(campaign, machine)
+    )
     return hard - timedelta(minutes=reserve)
+
+
+def gpu_budget(campaign: Campaign, machine: Machine | None) -> int:
+    """The cards a session of this campaign holds at once: the campaign's GPU
+    budget, else the whole machine on an exclusive box, else (a node pool)
+    the widest config in the space."""
+    knobs = settings_of(campaign)
+    if knobs.cards:
+        return knobs.cards
+    if machine is not None and not is_node_pool(machine) and machine.gpu_count:
+        return machine.gpu_count
+    return max(widest_cards(campaign.search_space or {}), 1)
+
+
+def validation_rounds(campaign: Campaign, machine: Machine | None) -> int:
+    """How many contender-lengths validation takes when its launches run side
+    by side on the GPU budget. Each launch is sized like production (the base
+    config), the best guess before the contenders exist."""
+    knobs = settings_of(campaign)
+    per_launch = max(cards_used((campaign.search_space or {}).get("base") or {}), 1)
+    budget = max(gpu_budget(campaign, machine), per_launch)
+    side_by_side = max(budget // per_launch, 1)
+    return -(-knobs.validation_launches() // side_by_side)
 
 
 def deadlines(

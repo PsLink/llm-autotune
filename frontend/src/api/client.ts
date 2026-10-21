@@ -485,6 +485,9 @@ export interface RunDetail extends Run {
     feasible: boolean
     breaches: string[]
     created_at: string
+    /** The campaign objectives' names (measures or raw keys) as this result
+     *  reads them; null = not reported. Run detail only. */
+    named?: Record<string, number | null>
   }[]
 }
 
@@ -595,13 +598,16 @@ export interface CatalogParam {
 export interface MetricSpec {
   key: string
   label: string
-  better: 'higher' | 'lower'
+  /** null for a count or a workload fact, which is neither. */
+  better: 'higher' | 'lower' | null
   help: string
   unit: string
   headline: boolean
   /** Which benchmark reports it. Two benchmarks share no metric names, so an
    *  objective mixing groups names keys one of them will never return. */
   group: string
+  /** A platform measure (docs/api/measures.md) rather than a raw LLMBench key. */
+  measure?: boolean
 }
 
 /** A limit a run must stay inside to be eligible at all, however fast it was. */
@@ -842,6 +848,8 @@ export interface Policy {
   /** Mount the campaign's weights at /model. */
   needs_model: boolean
   env: Record<string, string>
+  /** Names of the encrypted secret variables; their values are never returned. */
+  secret_env_keys?: string[]
   ports: number
   created_at: string | null
 }

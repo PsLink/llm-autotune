@@ -25,7 +25,8 @@ Objective shape (stored on the campaign, all fields optional):
 from dataclasses import dataclass
 from typing import Any
 
-from app.metrics_catalog import DEFAULT_TARGET_METRIC, default_direction
+from app.metrics_catalog import DEFAULT_TARGET_METRIC
+from app.metrics_catalog import default_direction as _catalog_direction
 
 OPERATORS = {
     "<=": lambda a, b: a <= b,
@@ -76,6 +77,20 @@ def direction(objective: dict | None) -> str:
     return default_direction(target_metric(objective))
 
 
+def default_direction(name: str) -> str:
+    """Which way is better for a target: a measure says so in the catalogue,
+    a raw key in the metrics catalog (maximize when neither knows)."""
+    from app.measures import is_measure_ref, lookup, parse
+
+    if is_measure_ref(name):
+        try:
+            spec = lookup(parse(name).measure)
+        except ValueError:
+            spec = None
+        return "minimize" if spec is not None and spec.better == "lower" else "maximize"
+    return _catalog_direction(name)
+
+
 def sort_key(value: float | None, objective: dict | None) -> tuple[bool, float]:
     """Ranking key — first element pushes missing values to the bottom."""
     if value is None:
@@ -112,7 +127,9 @@ def evaluate_redlines(
         metric = redline.get("metric")
         op = redline.get("op", "<=")
         limit = redline.get("value")
-        actual = metrics.get(metric)
+        # A plain metrics dict, or a measures Reader that also answers measure
+        # references (app.measures.Reader) — both have `.get`.
+        actual = metrics.get(metric) if metric else None
         compare = OPERATORS.get(op)
         if compare is None or metric is None or limit is None:
             results.append(RedlineResult(str(metric), str(op), limit, actual, ok=False))

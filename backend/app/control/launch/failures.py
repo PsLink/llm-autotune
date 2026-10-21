@@ -21,6 +21,9 @@ INFRASTRUCTURE_FAILURES = frozenset(
         "gone",
         "orphaned",
         "killed_externally",
+        # A serving engine's pod was replaced (deleted, evicted, preempted):
+        # the process did not die of its config, the cluster moved it.
+        "engine_replaced",
         # Another service grabbed the port between placement and launch. The
         # config is blameless, and the next attempt gets a fresh port.
         "port_conflict",
@@ -73,6 +76,8 @@ CONFIG_FAILURES = frozenset(
         "nccl",
         "segfault",
         "model_load",
+        # A serving engine's process exited and its substrate restarted it.
+        "engine_crashed",
     }
 )
 
@@ -94,8 +99,21 @@ def classify_failure(log_text: str) -> str:
     replace/extend this later — the interface is just log text in, class out."""
     lowered = log_text.lower()
     rules: list[tuple[str, tuple[str, ...]]] = [
+        # First: an engine refuses its arguments before it does anything else,
+        # so a log that says so failed for that reason, whatever else it
+        # mentions (its own args dump names nccl options, for one).
+        ("bad_config", ("unrecognized arguments", "invalid argument", "error: argument")),
         ("oom", ("cuda out of memory", "outofmemoryerror", "out of memory")),
-        ("nccl", ("nccl", "communicator")),
+        # NCCL's own error spellings, not the word: a startup banner or an
+        # args dump (`enable_nccl_nvls=False`) mentions it on every launch.
+        (
+            "nccl",
+            (
+                "nccl error", "ncclsystemerror", "ncclinternalerror", "ncclunhandledcudaerror",
+                "ncclinvalidusage", "ncclremoteerror", "nccl failure", "nccl timeout",
+                "nccl watchdog", "communicator was aborted", "nccl communicator",
+            ),
+        ),
         # Before port_conflict: the GPU-busy message is worded to avoid the
         # "already in use" needle so the two never cross-classify.
         ("gpu_busy", ("gpu busy on", "gpus busy on")),
@@ -109,7 +127,6 @@ def classify_failure(log_text: str) -> str:
                 "manifest unknown",
             ),
         ),
-        ("bad_config", ("unrecognized arguments", "invalid argument", "error: argument")),
         ("model_load", ("no such file", "not a valid model", "safetensors")),
         ("ssh_timeout", ("timed out after",)),
         ("image_pull", ("image_pull:", "pulling from", "manifest for", "denied")),
@@ -118,6 +135,25 @@ def classify_failure(log_text: str) -> str:
         if any(needle in lowered for needle in needles):
             return failure_class
     return "unknown"
+
+
+def restart_kind(before: str, now: str) -> str:
+    """How a serving engine came back, from two incarnations (`uid:restarts`
+    per pod, see DeploymentDriver.incarnation): "crashed" when a pod it was
+    serving from is still there with more restarts (the process exited and
+    was restarted in place), else "replaced" (a different pod)."""
+
+    def parse(text: str) -> dict[str, int]:
+        out = {}
+        for part in filter(None, text.split(",")):
+            uid, _, count = part.rpartition(":")
+            out[uid] = int(count) if count.isdigit() else 0
+        return out
+
+    was, is_ = parse(before), parse(now)
+    if any(uid in is_ and is_[uid] > count for uid, count in was.items()):
+        return "crashed"
+    return "replaced"
 
 
 def classify_exit(exit_code: int | None, oom_killed: bool) -> str | None:

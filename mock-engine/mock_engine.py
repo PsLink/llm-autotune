@@ -17,6 +17,9 @@ search_space.base / grid:
     --mock-latency-ms N         time to the first token (default 20)
     --mock-token-ms N           time between streamed tokens (default 1)
     --mock-max-output-tokens N  cap on tokens per reply (default 256)
+    --mock-landscape sglang     let real sglang flags move the numbers (landscape.py):
+                                KV capacity, batch limits, CUDA graphs, attention
+                                backend, OOM edges — something for a search to find
 
 Streaming is real: `"stream": true` answers server-sent events, one token per
 chunk, so a benchmark that times the first token and the gaps between tokens
@@ -32,6 +35,8 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from landscape import Landscape, StartupError, parse_flags
 
 OOM_LOG = (
     "torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.50 GiB "
@@ -51,8 +56,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--mock-latency-ms", type=float, default=20.0)
     parser.add_argument("--mock-token-ms", type=float, default=1.0)
     parser.add_argument("--mock-max-output-tokens", type=int, default=256)
+    parser.add_argument("--mock-landscape", default="")
     args, unknown = parser.parse_known_args(argv)
-    if unknown:
+    args.engine_flags = unknown
+    if unknown and not args.mock_landscape:
         print(f"[mock-engine] ignoring flags: {unknown}", flush=True)
     return args
 
@@ -75,6 +82,7 @@ class Handler(BaseHTTPRequestHandler):
     token_ms = 5.0
     max_output_tokens = 256
     request_count = 0
+    landscape: Landscape | None = None
 
     def _json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload).encode()
@@ -96,6 +104,9 @@ class Handler(BaseHTTPRequestHandler):
             )
         elif self.path in ("/health", "/health_generate"):
             self._json({"status": "ok"})
+        elif self.path == "/get_server_info" and self.landscape is not None:
+            self._json({**self.landscape.args, "max_total_num_tokens": self.landscape.kv_capacity,
+                        "served_model_name": self.served_model_name})
         else:
             self._json({"error": "not found"}, status=404)
 
@@ -131,6 +142,24 @@ class Handler(BaseHTTPRequestHandler):
             "total_tokens": prompt_tokens + n_tokens,
         }
 
+        landscape = self.landscape
+        if landscape is not None:
+            footprint = prompt_tokens + n_tokens
+            landscape.admit(footprint)
+            try:
+                landscape.prefill(prompt_tokens)
+                if request_body.get("stream"):
+                    include_usage = bool((request_body.get("stream_options") or {}).get("include_usage"))
+                    self._stream(request_id, chat, tokens, usage if include_usage else None)
+                else:
+                    for _ in range(n_tokens - 1):
+                        time.sleep(landscape.step_ms() / 1000)
+                        landscape.token_out()
+                    self._reply(request_id, chat, tokens, usage)
+            finally:
+                landscape.release(footprint)
+            return
+
         time.sleep(self.latency_ms / 1000)  # "prefill": the time to the first token
         if request_body.get("stream"):
             include_usage = bool((request_body.get("stream_options") or {}).get("include_usage"))
@@ -138,6 +167,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         time.sleep(self.token_ms / 1000 * (n_tokens - 1))  # "decode", all at once
+        self._reply(request_id, chat, tokens, usage)
+
+    def _reply(self, request_id: str, chat: bool, tokens: list[str], usage: dict) -> None:
         content = "".join(tokens).rstrip()
         if chat:
             choice = {"index": 0, "message": {"role": "assistant", "content": content},
@@ -184,7 +216,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk({"role": "assistant", "content": ""}, None))
             for i, tok in enumerate(tokens):
                 if i:
-                    time.sleep(self.token_ms / 1000)
+                    if self.landscape is not None:
+                        time.sleep(self.landscape.step_ms() / 1000)
+                        self.landscape.token_out()
+                    else:
+                        time.sleep(self.token_ms / 1000)
                 self.wfile.write(chunk({"content": tok}, None))
                 self.wfile.flush()
             self.wfile.write(chunk({}, "stop"))
@@ -221,15 +257,30 @@ def main(mode: str = "sglang", argv: list[str] | None = None) -> None:
         print("[mock-engine] fatal: simulated startup failure", file=sys.stderr, flush=True)
         sys.exit(1)
 
+    landscape = None
+    if args.mock_landscape:
+        try:
+            landscape = Landscape(parse_flags(args.engine_flags), args.mock_token_ms)
+        except StartupError as exc:
+            print("[mock-engine] loading weights...", flush=True)
+            time.sleep(min(args.mock_startup_seconds, 2))
+            print(str(exc), file=sys.stderr, flush=True)
+            sys.exit(1)
+        print(landscape.server_args_line(), flush=True)
+
     # Simulate weight loading: the port opens only after the delay, exactly the
     # STARTING window the supervisor sees on real launches.
-    print(f"[mock-engine] loading weights ({args.mock_startup_seconds}s)...", flush=True)
-    time.sleep(args.mock_startup_seconds)
+    startup = args.mock_startup_seconds + (landscape.startup_extra if landscape else 0.0)
+    print(f"[mock-engine] loading weights ({startup}s)...", flush=True)
+    time.sleep(startup)
 
     Handler.served_model_name = args.served_model_name
     Handler.latency_ms = args.mock_latency_ms
     Handler.token_ms = args.mock_token_ms
     Handler.max_output_tokens = max(1, args.mock_max_output_tokens)
+    Handler.landscape = landscape
+    if landscape is not None:
+        landscape.start_logger()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
 

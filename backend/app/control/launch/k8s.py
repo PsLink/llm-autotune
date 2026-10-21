@@ -944,6 +944,25 @@ class K8sDriver(DeploymentDriver):
                     any_crashed = True
         return DeploymentState.CRASHED if any_crashed else DeploymentState.STARTING
 
+    def incarnation(self, handle: DeploymentHandle) -> str | None:
+        """Every pod of the run with its containers' restart count. A
+        Deployment brings a dead engine back under the same name, so a pod
+        uid or a restart count that changed means a new engine process."""
+        try:
+            pods = self.api.list("pods", self._run_selector(handle))
+        except Exception:
+            return None
+        parts = []
+        for pod in pods:
+            uid = (pod.get("metadata") or {}).get("uid") or ""
+            restarts = sum(
+                int(c.get("restartCount") or 0)
+                for c in (pod.get("status") or {}).get("containerStatuses") or []
+            )
+            if uid:
+                parts.append(f"{uid}:{restarts}")
+        return ",".join(sorted(parts)) or None
+
     def logs(self, handle: DeploymentHandle, tail: int = 200) -> str:
         return self.api.logs(self._run_selector(handle), tail=tail)
 
@@ -977,14 +996,17 @@ class K8sDriver(DeploymentDriver):
             pods = self.api.list("pods", self._run_selector(handle))
         except Exception:
             return (None, False)
-        for pod in pods:
-            statuses = (pod.get("status") or {}).get("containerStatuses") or []
-            for container in statuses:
-                terminated = (container.get("state") or {}).get("terminated")
-                if terminated:
-                    code = terminated.get("exitCode")
-                    oom = terminated.get("reason") == "OOMKilled"
-                    return (code if isinstance(code, int) else None, oom)
+        for key in ("state", "lastState"):
+            # A container the cluster restarted runs again: its exit is the
+            # last state, not the current one.
+            for pod in pods:
+                statuses = (pod.get("status") or {}).get("containerStatuses") or []
+                for container in statuses:
+                    terminated = (container.get(key) or {}).get("terminated")
+                    if terminated:
+                        code = terminated.get("exitCode")
+                        oom = terminated.get("reason") == "OOMKilled"
+                        return (code if isinstance(code, int) else None, oom)
         return (None, False)
 
     def failure_reason(self, handle: DeploymentHandle) -> tuple[str, str] | None:

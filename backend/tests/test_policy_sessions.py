@@ -28,6 +28,7 @@ from app.db.models import (
     ApiKey,
     Campaign,
     CampaignStatus,
+    Candidate,
     ContenderStatus,
     Machine,
     MachineState,
@@ -41,7 +42,7 @@ from app.db.models import (
     User,
 )
 from app.main import app
-from tests.fakes import CompletingDriver, StubEvaluator
+from tests.fakes import CompletingDriver, EndlessEvaluator, StubEvaluator
 
 _counter = count()
 
@@ -208,6 +209,144 @@ async def _boot(supervisor, driver, http) -> FakePolicy:
     return policy
 
 
+async def _serving_launch(supervisor, policy) -> int:
+    launched = await policy.post(
+        "/launches", json={"engine_args": {"tp_size": 2}, "gpu_indices": [0, 1]}
+    )
+    assert launched.status_code == 201, launched.text
+    for _ in range(3):
+        supervisor.tick()
+    assert (await policy.get(f"/launches/{launched.json()['id']}")).json()["status"] == "serving"
+    return launched.json()["id"]
+
+
+async def test_a_benchmark_stops_when_the_engine_under_it_crashes(night):
+    """LLMBench cannot tell a dead engine from a slow one: the platform, which
+    launched it, ends the benchmark with the launch."""
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    supervisor.bench = EndlessEvaluator()
+    run_id = await _serving_launch(supervisor, policy)
+    bench = await policy.post(f"/launches/{run_id}/benchmarks", json={"suite": "screen"})
+    bench_id = bench.json()["id"]
+    supervisor.tick()
+    supervisor.tick()
+    assert (await policy.get(f"/benchmarks/{bench_id}")).json()["status"] == "benching"
+
+    driver.crashed.add(f"autotune-run-{run_id}")
+    supervisor.tick()
+    assert (await policy.get(f"/launches/{run_id}")).json()["status"] == "failed"
+    bench = (await policy.get(f"/benchmarks/{bench_id}")).json()
+    assert bench["status"] == "failed"
+    assert f"launch {run_id}" in bench["error"]
+    assert supervisor.bench.cancelled, "the LLMBench submission was left running"
+
+
+async def _benching_launch(supervisor, driver, http):
+    policy = await _boot(supervisor, driver, http)
+    supervisor.bench = EndlessEvaluator()
+    run_id = await _serving_launch(supervisor, policy)
+    bench = await policy.post(f"/launches/{run_id}/benchmarks", json={"suite": "screen"})
+    for _ in range(3):
+        supervisor.tick()
+    assert (await policy.get(f"/launches/{run_id}")).json()["status"] == "serving"
+    return policy, run_id, bench.json()["id"]
+
+
+async def test_an_engine_that_died_and_was_restarted_in_place_is_a_crash(night):
+    """A Deployment brings a dead engine back under the same name, so it never
+    reads as crashed: the platform tells by the process it serves from."""
+    supervisor, driver, http = night
+    policy, run_id, bench_id = await _benching_launch(supervisor, driver, http)
+    driver.restarts[f"autotune-run-{run_id}"] = 1
+    supervisor.tick()
+    launch = (await policy.get(f"/launches/{run_id}")).json()
+    assert launch["status"] == "failed" and launch["failure_class"] == "engine_crashed"
+    assert "exited while serving" in launch["error"]
+    bench = (await policy.get(f"/benchmarks/{bench_id}")).json()
+    assert bench["status"] == "failed" and f"launch {run_id}" in bench["error"]
+
+
+async def test_an_engine_whose_pod_the_cluster_replaced_is_not_the_configs_fault(night):
+    supervisor, driver, http = night
+    policy, run_id, bench_id = await _benching_launch(supervisor, driver, http)
+    driver.replacements[f"autotune-run-{run_id}"] = 1
+    supervisor.tick()
+    launch = (await policy.get(f"/launches/{run_id}")).json()
+    assert launch["status"] == "failed" and launch["failure_class"] == "engine_replaced"
+    assert "not to blame" in launch["error"]
+    assert (await policy.get(f"/benchmarks/{bench_id}")).json()["status"] == "failed"
+
+
+def test_how_an_engine_came_back_is_read_from_its_incarnations():
+    from app.control.launch.failures import restart_kind
+
+    assert restart_kind("a:0", "a:1") == "crashed"
+    assert restart_kind("a:0", "b:0") == "replaced"
+    assert restart_kind("a:0", "a:0,b:0") == "replaced"  # a second pod beside it
+    assert restart_kind("a:2", "a:3,b:0") == "crashed"
+
+
+async def test_releasing_an_engine_mid_benchmark_stops_its_benchmark(night):
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    supervisor.bench = EndlessEvaluator()
+    run_id = await _serving_launch(supervisor, policy)
+    bench = await policy.post(f"/launches/{run_id}/benchmarks", json={"suite": "screen"})
+    bench_id = bench.json()["id"]
+    supervisor.tick()
+    await http.delete(f"/api/policy/v1/launches/{run_id}", headers={"X-API-Key": policy.token})
+    supervisor.tick()
+    assert (await policy.get(f"/benchmarks/{bench_id}")).json()["status"] == "killed"
+
+
+async def test_a_benchmark_answers_in_measures_and_the_manifest_says_what_they_mean(
+    night, monkeypatch
+):
+    import json
+    from pathlib import Path
+
+    from app.api import policy_sessions
+    from app.core.config import get_settings
+    from app.evaluation import llmbench
+
+    supervisor, driver, http = night
+    replay = json.loads((Path(__file__).parent / "data/measures/replay.json").read_text())
+    policy = await _boot(supervisor, driver, http)
+
+    slug = (await policy.get("/session")).json()["services"]["benchmarks"]["screen"]["slug"]
+    modules = [{
+        "module_name": "replay", "order_index": 0,
+        "params_json": {"concurrency": 16, "max_samples": 400, "api_key": "sk-secret"},
+    }]
+    monkeypatch.setattr(
+        llmbench.LLMBenchClient, "list_benchmarks",
+        lambda self: [{"slug": slug, "modules": modules}],
+    )
+    monkeypatch.setattr(policy_sessions, "_workloads", {})
+    monkeypatch.setattr(get_settings(), "llmbench_replay_module", "replay")
+    manifest = (await policy.get("/session")).json()
+    assert {"name", "unit", "better", "meaning"} <= set(manifest["measures"][0])
+    (workload,) = manifest["services"]["benchmarks"]["screen"]["workload"]
+    assert workload["family"] == "replay" and "no levels" in workload["reads_as"]
+    assert workload["params"] == {"concurrency": 16, "max_samples": 400}  # never a credential
+
+    supervisor.bench = StubEvaluator(replay["metrics"])
+    run_id = await _serving_launch(supervisor, policy)  # tp 2: two cards
+    bench_id = (
+        await policy.post(f"/launches/{run_id}/benchmarks", json={"suite": "screen"})
+    ).json()["id"]
+    supervisor.tick()
+    supervisor.tick()
+    (scenario,) = (await policy.get(f"/benchmarks/{bench_id}")).json()["measures"]
+    assert scenario["kind"] == "replay" and scenario["operating_level"] is None
+    assert scenario["operating"]["output_tpm_per_gpu"] == (
+        replay["metrics"]["replay.output_tpm"] / 2
+    )
+    assert scenario["operating"]["success_rate"] == replay["metrics"]["replay.uptime"]
+    assert "ttft_ms@p90[32k_64k]" in scenario["supports"]
+
+
 async def test_a_whole_night_start_to_verdict(night):
     supervisor, driver, http = night
     policy = await _boot(supervisor, driver, http)
@@ -365,13 +504,21 @@ async def test_a_dead_policy_still_gets_its_verdict(night):
     assert row.status == PolicySessionStatus.VALIDATING.value
     assert row.failure_class == "container_died"
 
-    # The platform launches the claim itself and measures it.
-    supervisor.tick()  # fallback run created (policy is dead, no serve command)
+    # The platform launches the claim itself and measures it — and production
+    # next to it, as the reference the verdict is judged against.
+    supervisor.tick()  # both runs created (policy is dead, no serve command)
     async with http.db() as session:
-        fallback = (
-            await session.execute(select(Run).where(Run.kind == RunKind.EXPERIMENT.value))
-        ).scalars().one()
-        assert fallback.policy_session_id == row.id
+        runs = (
+            await session.execute(
+                select(Run).where(Run.kind == RunKind.EXPERIMENT.value).order_by(Run.id)
+            )
+        ).scalars().all()
+        assert [r.policy_session_id for r in runs] == [row.id, row.id]
+        kinds = []
+        for r in runs:
+            candidate = await session.get(Candidate, r.candidate_id)
+            kinds.append(candidate.is_baseline)
+        assert kinds == [True, False]  # production first, then the contender
     for _ in range(4):  # launch -> ready -> health+bench -> verdict
         supervisor.tick()
     supervisor.tick()  # contender resolved; session closes
@@ -803,7 +950,8 @@ async def _force_stop(http):
 async def test_force_stop_aborts_a_policy_that_never_started(night):
     supervisor, driver, http = night
     row = await _starting(supervisor, driver, http)
-    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
+    # A one-off night has nothing to resume into: Stop ends it.
+    assert (await _force_stop(http))["status"] == CampaignStatus.DONE.value
     supervisor.tick()
     row = await _session_row(http)
     assert row.status == PolicySessionStatus.ABORTED.value
@@ -811,7 +959,7 @@ async def test_force_stop_aborts_a_policy_that_never_started(night):
     supervisor.tick()
     async with http.db() as session:
         sessions = (await session.execute(select(func.count(PolicySession.id)))).scalar()
-    assert sessions == 1, "a paused campaign starts no new session"
+    assert sessions == 1, "a stopped campaign starts no new session"
 
 
 async def test_force_stop_finalizes_a_search_and_a_second_press_aborts(night):
@@ -822,8 +970,34 @@ async def test_force_stop_finalizes_a_search_and_a_second_press_aborts(night):
     row = await _session_row(http)
     assert row.finalize_requested_at is not None and row.abort_requested_at is None
 
-    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
+    assert (await _force_stop(http))["status"] == CampaignStatus.DONE.value
     assert (await _session_row(http)).abort_requested_at is not None
+
+
+async def test_stop_after_the_session_ended_leaves_the_campaign_done(night):
+    """Abort the session, let the worker end it (a one-off night is then
+    done), then press Stop: it used to reopen the campaign as paused."""
+    supervisor, driver, http = night
+    await _boot(supervisor, driver, http)
+    async with http.db() as session:
+        row = (await session.execute(select(PolicySession))).scalars().one()
+        row.abort_requested_at = datetime.now(UTC)
+        await session.commit()
+    supervisor.tick()
+    assert (await _session_row(http)).status == PolicySessionStatus.ABORTED.value
+    async with http.db() as session:
+        assert (await session.get(Campaign, 1)).status == CampaignStatus.DONE.value
+    assert (await _force_stop(http))["status"] == CampaignStatus.DONE.value
+
+
+async def test_stop_pauses_a_recurring_policy_campaign(night):
+    """A nightly campaign has later nights: Stop holds it for a person."""
+    supervisor, driver, http = night
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.daily_start, campaign.daily_end = "22:00", "06:00"
+        await session.commit()
+    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
 
 
 def test_a_validation_run_takes_the_cards_its_config_uses():
@@ -841,3 +1015,99 @@ def test_a_validation_run_takes_the_cards_its_config_uses():
     assert _validation_cards(session, {"tp_size": 4, "dp_size": 2}, []) == list(range(8))
     # A card-less session (a CPU-only slice) launches with none.
     assert _validation_cards(SimpleNamespace(gpu_indices=[]), {"tp_size": 2}, []) == []
+
+
+async def _validating_with(http, supervisor, driver, policy, contenders):
+    put = await policy.put("/contenders", {"contenders": contenders})
+    assert put.status_code == 200
+    assert len(put.json()["accepted"]) == len(contenders), put.json()
+    row = await _session_row(http)
+    driver.workload_states[row.container_name] = WorkloadState.EXITED
+    supervisor.tick()
+    row = await _session_row(http)
+    assert row.status == PolicySessionStatus.VALIDATING.value
+    return row
+
+
+async def _validation_runs(http):
+    async with http.db() as session:
+        return (
+            await session.execute(
+                select(Run).where(Run.kind == RunKind.EXPERIMENT.value).order_by(Run.id)
+            )
+        ).scalars().all()
+
+
+_TWO = [
+    {"rank": 1, "launch_spec": {"engine_args": {"tp_size": 2}, "image": "sglang:test"}},
+    {"rank": 2, "launch_spec": {"engine_args": {"tp_size": 2, "chunked_prefill_size": 4096},
+                                "image": "sglang:test"}},
+]
+
+
+async def _allow_two(http, **extra):
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.policy_settings = {
+            **(campaign.policy_settings or {}), "max_contenders": 2, **extra,
+        }
+        await session.commit()
+
+
+async def test_validation_launches_side_by_side_on_the_gpu_budget(night):
+    # Production and both contenders fit the 8-card box at once: one tick
+    # starts all three, each on its own cards.
+    supervisor, driver, http = night
+    await _allow_two(http)
+    policy = await _boot(supervisor, driver, http)
+    await _validating_with(http, supervisor, driver, policy, _TWO)
+    supervisor.tick()
+    runs = await _validation_runs(http)
+    assert len(runs) == 3
+    cards = [set(r.gpu_indices or []) for r in runs]
+    assert all(cards) and not (cards[0] & cards[1] or cards[0] & cards[2] or cards[1] & cards[2])
+    assert len({r.service_port for r in runs}) == 3
+
+
+async def test_a_small_gpu_budget_validates_one_after_another(night):
+    # Two cards: production first, the contenders wait for its cards.
+    supervisor, driver, http = night
+    await _allow_two(http, cards=2)
+    policy = await _boot(supervisor, driver, http)
+    await _validating_with(http, supervisor, driver, policy, _TWO)
+    supervisor.tick()
+    runs = await _validation_runs(http)
+    assert len(runs) == 1
+    async with http.db() as session:
+        assert (await session.get(Candidate, runs[0].candidate_id)).is_baseline
+
+
+async def test_production_validation_can_be_turned_off(night):
+    supervisor, driver, http = night
+    await _allow_two(http, validate_production=False)
+    policy = await _boot(supervisor, driver, http)
+    await _validating_with(http, supervisor, driver, policy, _TWO)
+    supervisor.tick()
+    runs = await _validation_runs(http)
+    assert len(runs) == 2
+    async with http.db() as session:
+        assert not any([(await session.get(Candidate, r.candidate_id)).is_baseline for r in runs])
+
+
+async def test_re_declaring_the_same_contender_refreshes_its_evidence(night):
+    # A policy measures its best again and re-declares it unchanged: no new
+    # row, no supersede — but the evidence the verdict rests on is the new one.
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    spec = {"engine_args": {"tp_size": 2}, "image": "sglang:test"}
+    first = await policy.put("/contenders", {"contenders": [
+        {"rank": 1, "launch_spec": spec, "evidence": {"values": [100.0], "measurements": 1}}]})
+    again = await policy.put("/contenders", {"contenders": [
+        {"rank": 1, "launch_spec": spec,
+         "evidence": {"values": [100.0, 96.0], "measurements": 2}}]})
+    assert first.status_code == again.status_code == 200
+    assert again.json()["accepted"][0]["id"] == first.json()["accepted"][0]["id"]
+    async with http.db() as session:
+        rows = (await session.execute(select(PolicyContender))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].evidence == {"values": [100.0, 96.0], "measurements": 2}

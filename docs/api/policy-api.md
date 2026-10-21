@@ -116,6 +116,20 @@ Use these only if you need them.
 - **Record a message.** `POST /events` posts a short status line to the run's
   timeline, for operators to read.
 
+- **Look closer (contract 1.3).** What the platform recorded about your own
+  launches and benchmarks, for a search that learns from more than one score:
+  - `POST /configs/check` — what a launch of these settings would meet: the
+    normalized settings, the engine arguments they become, and anything that
+    would be refused. Costs no launch.
+  - `GET /launches/{id}/log` — the engine's log (`tail`, `grep`, `context`):
+    startup errors, out-of-memory traces, the engine's own throughput lines.
+  - `GET /launches/{id}/environment` — engine, torch and CUDA versions and the
+    image digest the engine actually ran. Copy it into a contender's
+    `environment`.
+  - `GET /benchmarks/{id}/results` — the benchmark in full: every concurrency
+    level, latency percentiles, the best level that met the limits.
+    `/results/raw` is the benchmark platform's own payload.
+
 ---
 
 ## The final result
@@ -137,8 +151,16 @@ port — the platform supplies those. Send your settings; the platform normalize
 them and returns the exact form it will use.
 
 You may try a setting outside the ones your assignment lists, as long as your plan
-declares it — it is recorded, not rejected. The only hard rejections are for
-safety: a config that does not fit the GPUs, or a malformed value.
+declares it — it is recorded, not rejected. The hard rejections are:
+
+- **Safety**: a config that does not fit the GPUs, or a malformed value.
+- **Forbidden settings**: the assignment lists settings you may not change
+  (`space_policy.forbidden`) — by default the ones that change what the model
+  answers rather than how fast, such as KV-cache precision, context length,
+  chat template or parsers. You may keep the campaign's own value.
+- **Settings that cannot be deployed**: every value must survive being written
+  as the engine's command line and read back — a string, a number or a
+  boolean. A list or an object cannot; give a JSON setting as one JSON string.
 
 ---
 
@@ -148,7 +170,7 @@ safety: a config that does not fit the GPUs, or a malformed value.
 | --- | --- | --- |
 | `401` | Token is no longer valid | The session is over for you; exit. |
 | `409` | Not permitted at this point (e.g. launching after being told to stop) | Re-read your last heartbeat instruction and follow it. |
-| `422` | Settings rejected as unsafe (do not fit the GPUs, or malformed) | Fix the settings and retry. |
+| `422` | Settings rejected: unsafe, forbidden, or not deployable — the message says which | Fix the settings and retry; `POST /configs/check` tells you first. |
 | `429` | No free GPUs or ports at the moment | Wait, or release something you hold. |
 
 The SDK, [`policies/autotune_policy`](https://github.com/modelsphere/llm-autotune-policies/tree/main/autotune_policy), implements

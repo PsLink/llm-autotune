@@ -8,7 +8,9 @@
  *
  *  Only the swept keys are shown: a campaign's config is mostly a fixed base
  *  (context length, parsers, cache settings) with one or two knobs moving, and
- *  printing all of it hides the thing being compared.
+ *  printing all of it hides the thing being compared. Of those, only the ones
+ *  this config sets: a policy changes a few keys of many per config, and a
+ *  row of dashes hides the one it did change.
  */
 const props = defineProps<{
   config: Record<string, unknown>
@@ -19,6 +21,8 @@ const props = defineProps<{
 }>()
 
 const baseline = () => props.config?.__baseline__ as string | undefined
+const setKeys = () =>
+  props.keys.filter((k) => props.config?.[k] !== undefined && props.config?.[k] !== null)
 </script>
 
 <template>
@@ -28,10 +32,11 @@ const baseline = () => props.config?.__baseline__ as string | undefined
   </span>
 
   <span v-else-if="keys.length" class="wrap">
-    <span v-for="key in keys" :key="key" class="chip">
+    <span v-for="key in setKeys()" :key="key" class="chip">
       <span class="chip-key mono">{{ key }}</span>
-      <span class="chip-val mono">{{ config[key] ?? '—' }}</span>
+      <span class="chip-val mono">{{ config[key] }}</span>
     </span>
+    <span v-if="!setKeys().length" class="muted">defaults</span>
     <span v-if="cards" class="muted cards">{{ cards }} GPU{{ cards === 1 ? '' : 's' }}</span>
   </span>
 

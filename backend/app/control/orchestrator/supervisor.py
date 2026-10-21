@@ -37,10 +37,11 @@ from app.control.launch.failures import (
     classify_failure,
     is_infrastructure,
     is_transient_placement,
+    restart_kind,
 )
 from app.control.orchestrator import schedule as sched
 from app.control.orchestrator import timing
-from app.control.orchestrator.container_logs import Snapshots, clip
+from app.control.orchestrator.container_logs import Snapshots, clip, read_text, with_head
 from app.control.orchestrator.groups import members_by_rank
 from app.control.orchestrator.lifecycle import (
     USER_STOP_ERROR,
@@ -123,6 +124,7 @@ from app.evaluation import (
 )
 from app.evaluation.aggregate import summary_of
 from app.hardware import is_node_pool, record_capacity
+from app.measures import reader_for
 from app.objective import sort_key
 from app.staging import (
     SCREEN,
@@ -1808,6 +1810,8 @@ class Supervisor:
                 # A delegated launch is FOR the policy, not for a benchmark:
                 # healthy means hold it here until released. Benchmarks of it
                 # are separate EXTERNAL runs pointed at this endpoint.
+                if handle is not None:
+                    run.engine_incarnation = driver.incarnation(handle) or ""
                 self._transition(session, run, RunStatus.SERVING)
                 return
             try:
@@ -1854,6 +1858,43 @@ class Supervisor:
                 return
             if driver.state(handle) == DeploymentState.CRASHED:
                 self._capture_failure(session, run, handle)
+                return
+            # A substrate that restarts a dead engine (a Deployment) serves
+            # again under the same name, so the engine never reads CRASHED: it
+            # is a new process, cold, and not the one launched and measured.
+            if run.engine_incarnation:
+                now = driver.incarnation(handle)
+                if now is not None and now != run.engine_incarnation:
+                    self._fail_restarted(session, run, driver, handle, now)
+
+    def _fail_restarted(self, session: Session, run: Run, driver, handle, now: str) -> None:
+        """A serving engine came back as a new process. Which way decides
+        whose fault it was: a process that exited and was restarted in its pod
+        died (of its config, as far as anyone can tell); a pod replaced by the
+        cluster was moved, and the config is blameless."""
+        if restart_kind(run.engine_incarnation, now) == "replaced":
+            self._capture_failure(
+                session, run, handle, failure_class="engine_replaced",
+                error="the engine's pod was replaced while serving (deleted, evicted or "
+                "preempted by the cluster), so it is no longer the engine that was launched; "
+                "the config is not to blame",
+            )
+            return
+        code, oom = driver.exit_info(handle)
+        log_text = ""
+        try:
+            log_text = driver.logs(handle, tail=self.settings.log_lines)
+        except Exception:
+            logger.exception("log read for restarted run %d failed", run.id)
+        cause = "oom" if oom else classify_failure(log_text)
+        if cause == "unknown":
+            cause = classify_exit(code, oom) or "engine_crashed"
+        how = f"exit code {code}" if code is not None else "exit code not reported"
+        self._capture_failure(
+            session, run, handle, failure_class=cause,
+            error=f"the engine process exited while serving ({how}"
+            f"{', OOM-killed' if oom else ''}) and the cluster restarted it",
+        )
 
     def _advance_baseline(self, session: Session, run: Run) -> None:
         """A run against an endpoint the platform did not launch: health-check
@@ -2196,6 +2237,49 @@ class Supervisor:
         # offers back every member, not just the master.
         if cleaned:
             self._release_run_machines(session, run)
+        if run.kind == RunKind.POLICY_LAUNCH.value:
+            self._stop_benchmarks_of(session, run)
+
+    def _stop_benchmarks_of(self, session: Session, launch: Run) -> None:
+        """Stop what is still benchmarking an engine that just stopped.
+
+        LLMBench cannot tell a dead engine from a slow one — a replay against a
+        crashed endpoint runs out its own timeouts, an hour or more, and the
+        policy waits on it as if it were measuring. The platform launched the
+        engine, so it is the one that knows: the benchmark ends with the launch,
+        failed with the launch's own reason when the engine crashed.
+        """
+        live = session.scalars(
+            select(Run).where(
+                Run.launch_run_id == launch.id,
+                Run.status.not_in([s.value for s in TERMINAL_RUN_STATES]),
+            )
+        ).all()
+        for bench in live:
+            if bench.llmbench_submission_id:
+                try:
+                    self.bench.cancel(bench.llmbench_submission_id)
+                except Exception:
+                    logger.exception(
+                        "cancelling benchmark %d of launch %d failed", bench.id, launch.id
+                    )
+            if launch.status == RunStatus.FAILED.value:
+                bench.failure_class = launch.failure_class or "engine_crashed"
+                self._finish(
+                    session, bench, RunStatus.FAILED,
+                    error=f"the engine under test stopped mid-benchmark (launch {launch.id}): "
+                    f"{(launch.error or launch.failure_class or 'crashed')[:300]}",
+                )
+            else:
+                self._finish(
+                    session, bench, RunStatus.KILLED,
+                    error=f"the engine under test was released mid-benchmark (launch {launch.id})",
+                )
+            self._event(
+                session, "benchmark_stopped_with_launch",
+                campaign_id=bench.campaign_id, run_id=bench.id,
+                payload={"launch": launch.id, "launch_status": launch.status},
+            )
 
     def _begin_teardown(self, session: Session, run: Run) -> bool:
         """Start tearing a run's container down; return whether it is already
@@ -2387,11 +2471,14 @@ class Supervisor:
         pointing at an empty file."""
         if not log_text.strip():
             return
-        log_text = clip(log_text, self.settings.log_file_max_bytes)
+        log_path = os.path.join(self.settings.run_log_dir, f"run-{run.id}.log")
+        log_text = clip(
+            with_head(read_text(run.log_path or log_path) or (run.log_tail or ""), log_text),
+            self.settings.log_file_max_bytes,
+        )
         # In the row first: the file below is on this worker's disk, which the
         # API can read only when the two share a volume.
         run.log_tail = log_text[-LOG_TAIL_CHARS:]
-        log_path = os.path.join(self.settings.run_log_dir, f"run-{run.id}.log")
         try:
             os.makedirs(self.settings.run_log_dir, exist_ok=True)
             with open(log_path, "w", encoding="utf-8") as f:
@@ -2528,9 +2615,12 @@ class Supervisor:
         # None, which every reader downstream takes to mean "this run measured
         # nothing" — the expensive stage would produce no usable evidence at all.
         if source == "llmbench":
-            stored = summarize(
-                _stage_objective(run.campaign, stage_of_run(run)), outcome.metrics
-            ).as_dict()
+            # Through a Reader, so an objective may name measures
+            # (output_tpm_per_gpu, ttft_ms@p99) as well as raw LLMBench keys.
+            reader = reader_for(
+                outcome.metrics, outcome.raw, run.candidate.config if run.candidate else None
+            )
+            stored = summarize(_stage_objective(run.campaign, stage_of_run(run)), reader).as_dict()
             result.objective_value = stored["objective_value"]
             result.feasible = stored["feasible"]
             result.constraints = stored["constraints"]

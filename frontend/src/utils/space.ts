@@ -124,6 +124,19 @@ export function sweptKeysOf(space: SpaceShape | null | undefined): string[] {
   return axesOf(space).flatMap((axis) => axis.keys)
 }
 
+/** The parameters that differ between any two of these configs, sorted. A
+ *  policy may change parameters the declared space never names; a view that
+ *  shows only the space's keys renders those configs as all-default. A key a
+ *  config leaves out differs from one that sets it. */
+export function variedKeysOf(configs: Record<string, unknown>[]): string[] {
+  const seen = new Map<string, Set<string>>()
+  const keys = new Set(configs.flatMap((c) => Object.keys(c ?? {})))
+  for (const key of keys) {
+    seen.set(key, new Set(configs.map((c) => JSON.stringify((c ?? {})[key] ?? null))))
+  }
+  return [...keys].filter((k) => seen.get(k)!.size > 1).sort()
+}
+
 /** Upper bound on the candidate count from the axes alone.
  *
  *  Deliberately labelled "at most": conditions prune parameters, which merges

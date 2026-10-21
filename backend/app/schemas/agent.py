@@ -18,6 +18,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.policy import ScenarioMeasures
+
 SCHEMA_VERSION = 1
 
 # -- parts -----------------------------------------------------------------
@@ -246,6 +248,9 @@ class ResultsPart(BaseModel):
     objective_value: float | None = None
     headline: ResultsHeadline = Field(default_factory=ResultsHeadline)
     scenarios: list[ScenarioOut] = Field(default_factory=list)
+    # The same results in the platform's measures (docs/api/measures.md): one
+    # vocabulary whichever module reported a number. Prefer these when writing.
+    measures: list[ScenarioMeasures] = Field(default_factory=list)
     quality: list[QualityOut] = Field(default_factory=list)
     verdicts: list[VerdictOut] = Field(default_factory=list)
     modules: list[ModuleStatusOut] = Field(default_factory=list)

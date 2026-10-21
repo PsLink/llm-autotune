@@ -18,6 +18,7 @@ Sources, so nobody has to rediscover them:
 
 from __future__ import annotations
 
+import logging
 import re
 import shlex
 from datetime import datetime
@@ -59,6 +60,9 @@ from app.schemas.agent import (
     ScenarioOut,
     VerdictOut,
 )
+from app.schemas.policy import ScenarioMeasures
+
+logger = logging.getLogger(__name__)
 
 _LEVEL_KEY = re.compile(r"^c(\d+)$")
 _TERMINAL_FAILED = {RunStatus.FAILED.value, RunStatus.KILLED.value}
@@ -584,6 +588,20 @@ def _quality_floors(campaign) -> dict[str, float]:
     return floors
 
 
+def _measures(b: RunBundle, metrics: dict[str, Any], reports: list[dict]) -> list[ScenarioMeasures]:
+    from app.measures import measures_of, scenarios_out
+
+    try:
+        cards = cards_of(b) or None
+    except Exception:
+        cards = None
+    try:
+        return [ScenarioMeasures(**s) for s in scenarios_out(measures_of(metrics, reports, cards))]
+    except Exception:
+        logger.exception("run %s: results not readable as measures", b.run.id)
+        return []
+
+
 def results_part(b: RunBundle) -> ResultsPart:
     status = results_status(b)
     links = links_for(b.run.id)
@@ -742,6 +760,7 @@ def results_part(b: RunBundle) -> ResultsPart:
         ),
         headline=headline,
         scenarios=scenarios,
+        measures=_measures(b, metrics, reports),
         quality=quality,
         verdicts=verdicts,
         modules=modules,

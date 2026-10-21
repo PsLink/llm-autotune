@@ -9,6 +9,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Measures: one vocabulary for benchmark results** (`docs/api/measures.md`).
+  An objective, a redline or the Hub gate can name `output_tpm_per_gpu`,
+  `ttft_ms@p99`, `success_rate` or `replay/ttft_ms@p90[32k_64k]` instead of
+  the LLMBench module key behind it, whose name, meaning and statistics differ
+  from module to module (a replay's `output_tps_mean` is one request's speed,
+  a sweep's is a whole level's; `*_card_norm` is per eight cards). Adapters
+  translate each module's keys; a sweep is read at its highest-throughput
+  level that met its SLO. Saving refuses a malformed reference, and preflight
+  refuses one the benchmark never reports. Raw keys keep working unchanged.
+  Policies (contract 1.3) get the same: every benchmark result carries
+  `measures` per module, and the manifest carries the catalogue and what each
+  benchmark suite sends (`workload`), so a policy can read a replay and a
+  sweep alike without knowing either module. The objective editor lists
+  measures first (raw keys after them, and any reference can be typed), the
+  campaign page labels a measure objective by its catalogue entry, and the
+  report API's results carry `measures` too.
+
+- **A policy night validates production next to its finalists, side by side.**
+  The final measurement launches production and every registered contender
+  at once, as many as the night's GPU budget holds, instead of one contender
+  after another — so the verdict says, like for like, whether a contender
+  beats production, and the validation reserve shrinks to the rounds the
+  launches take. The report quotes "vs production" on the validation
+  benchmark when production was measured on it. On by default
+  (`policy_settings.validate_production`).
+- **Engine and policy logs keep their start.** A log is read as its last
+  lines every few minutes, each save replacing the last, so on a long run the
+  start — the resolved server arguments, what the engine auto-enabled, its
+  startup warnings — scrolled away and could not be found later. A save now
+  keeps the first lines from the earliest read ahead of the latest end, and a
+  log over the size cap keeps its start as well as its end.
+- **GPU budget.** `policy_settings.cards` is the night's GPU budget, shared by
+  every launch (trials, repeats, validation), each taking the cards its config
+  uses. It is now a field in the campaign form.
+
+- **Policy contract 1.3: a policy can see what happened, and is told what it
+  may not change.** For its own launches and benchmarks a policy can now read
+  the engine log (`GET /launches/{id}/log`, with `tail`/`grep`/`context`), the
+  environment the engine ran (`/launches/{id}/environment`) and the full
+  benchmark results, every concurrency level included
+  (`/benchmarks/{id}/results`, `/results/raw`). `POST /configs/check` is a dry
+  run that answers what a launch would meet without spending one. The manifest
+  carries `policy.params`, a campaign's own knobs for its policy (set under
+  Advanced in the campaign form), and `services.diagnostics`.
+- **Forbidden parameters for policy campaigns.** The benchmarks measure speed,
+  not answers, so by default a policy may not change the flags that change
+  what a deployment returns: KV-cache and weight precision, context length,
+  chat template, parsers, default sampling, tokenizer. It may keep the
+  campaign's own value, and anything the campaign's search space sweeps is
+  allowed. The list is editable per campaign (Advanced in the campaign form).
+- **Every policy config must round-trip through a command line**: rendered to
+  engine arguments and parsed back, it must come out the same. A list or an
+  object value, an empty string, or a value starting with `--` is refused
+  before a launch is spent on it. Refused configs are kept in the campaign's
+  activity log.
+- **A performance landscape in the mock engine** (`--mock-landscape sglang`):
+  real sglang flags move its numbers — KV capacity, batch limits, CUDA-graph
+  coverage, attention backend, speculative decoding, out-of-memory edges, a
+  little noise — so a search policy can be tested end to end without a GPU.
+- **Secret variables for a policy** (Policies page, `secret_env` on
+  `/api/policies`): for credentials such as an agent policy's LLM API key.
+  Stored encrypted, never returned (only their names, `secret_env_keys`),
+  passed to the container, and redacted from its launch command.
 - **Check an API key from the API keys page**: the page shows the one call
   that tells you who a key acts as (`GET /api/auth/me` with `X-API-Key`), ready
   to copy, and a field to try a key from the page. The new-key dialog shows the
@@ -18,6 +81,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reports.sections` (above the list), so a plugin can write reports from there.
 
 ### Fixed
+
+- **A policy launch whose engine Kubernetes restarted is failed, not left
+  serving.** A Deployment brings a dead engine back under the same name (a
+  crashed container restarted, a deleted or evicted pod recreated), so the
+  launch never read as crashed and a benchmark ran on against a cold engine.
+  The worker records the pod and restart count a launch started serving from
+  and fails it when they change, which also stops its benchmarks: an engine
+  restarted in its pod died (`engine_crashed`, or the cause its log or exit
+  names, such as `oom`); one whose pod the cluster replaced was moved
+  (`engine_replaced`, an infrastructure failure the config is not blamed for).
+- **Two contender updates a moment apart no longer register the list twice.**
+  Each read no current list and inserted its own; the next update then
+  superseded both. Updates are now serialized per session.
+- **A refused engine flag is classified `bad_config`, not `nccl`.** The
+  engine's own argument dump mentions NCCL options on every launch; the
+  argument error is now checked first and NCCL is matched by its error
+  messages.
+- A run's detail shows the values its objective names when they are
+  measures (`success_rate`, `ttft_ms@p99`); it showed "not reported", looking
+  them up among the raw benchmark keys. Results carry `named`.
+- A campaign's boards and run lists label configs by every parameter its runs
+  changed, not only the declared space's: a policy's best configs that differ
+  outside the space read as all-default.
+- The screen workload in a policy manifest lists the benchmark's params
+  (LLMBench names them `params_json`).
+
+- **A benchmark stops when the engine under it crashes.** A policy's benchmark
+  of one of its launches ran on against a dead engine for as long as
+  LLMBench's timeouts allowed (over an hour on a replay), and the policy
+  waited on it as if it were measuring. A benchmark now records the launch it
+  measures, and ends with it: failed with the launch's own reason when the
+  engine crashed, killed when it was released. Migration
+  `015_run_launch_link`.
+- **Stop no longer reopens a finished campaign as paused.** Stopping a policy
+  campaign whose session had just ended set it to paused, over the done its
+  session's end had set. Stop now leaves a done campaign done, and ends a
+  one-off policy night as done (it has no later night to resume into); a
+  nightly campaign is still paused for a person.
 
 - **Account and API keys in the user menu open again.** Clicking them did
   nothing: the menu's links cancel their own click so the menu can navigate,
@@ -103,6 +204,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant without a role `other` rather than `optimized`, and hashes each
   variant file's content instead of its bytes, so the catalog's formatting does
   not break it.
+
+### Security
+
+- **A policy's environment no longer has to hold credentials.** Its `env` is
+  shown on the Policies page and was written into the container's launch
+  command, which the session page displays; anything secret now belongs in
+  `secret_env`.
 
 ## [0.3.0] - 2026-10-15
 

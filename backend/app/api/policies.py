@@ -56,6 +56,15 @@ async def list_policies(
     return [PolicyOut.model_validate(row) for row in rows]
 
 
+@router.get("/policies/defaults")
+async def policy_defaults(_user: User = Depends(get_current_user)):
+    """What a policy campaign gets when its settings leave a knob unset — for
+    the campaign form to show before anyone overrides it."""
+    from app.control.search.space import DEFAULT_FORBIDDEN_PARAMS
+
+    return {"forbidden_params": list(DEFAULT_FORBIDDEN_PARAMS)}
+
+
 @router.post("/policies", response_model=PolicyOut, status_code=status.HTTP_201_CREATED)
 async def create_policy(
     body: PolicyIn,
@@ -67,7 +76,8 @@ async def create_policy(
     ).scalar_one_or_none()
     if existing is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"policy '{body.name}' already exists")
-    policy = Policy(owner_id=user.id, **body.model_dump())
+    policy = Policy(owner_id=user.id, **body.model_dump(exclude={"secret_env"}))
+    policy.set_secret_env(body.secret_env or {})
     db.add(policy)
     db.add(
         Event(actor=user.username, kind="policy_registered", payload={"name": body.name})
@@ -87,8 +97,10 @@ async def update_policy(
     policy = await db.get(Policy, policy_id)
     if policy is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such policy")
-    for key, value in body.model_dump().items():
+    for key, value in body.model_dump(exclude={"secret_env"}).items():
         setattr(policy, key, value)
+    if body.secret_env is not None:
+        policy.set_secret_env(body.secret_env)
     db.add(
         Event(actor=user.username, kind="policy_updated", payload={"name": policy.name})
     )

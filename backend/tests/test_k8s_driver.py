@@ -660,3 +660,37 @@ def test_extra_volumes_stay_paired_with_their_mounts():
     mounts = {m["name"]: m["mountPath"] for m in pod["containers"][0]["volumeMounts"]}
     assert by_name["vol-0"] == "/mnt/disk0/models/qwen" and mounts["vol-0"] == "/model"
     assert by_name["vol-1"] == "/zz/host-cache" and mounts["vol-1"] == "/aa/container-cache"
+
+
+def test_a_replaced_pod_or_a_restarted_container_is_a_new_incarnation():
+    settings = _clone(k8s_workload_kind="deployment")
+    api = FakeK8sApi(settings)
+    driver = _driver(settings, api)
+    handle, _ = driver.launch(_spec())
+
+    def pod(uid, restarts):
+        return {"metadata": {"uid": uid},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}],
+                           "containerStatuses": [{"restartCount": restarts}]}}
+
+    assert driver.incarnation(handle) is None  # nothing running yet
+    api.pods = [pod("a", 0)]
+    first = driver.incarnation(handle)
+    assert driver.incarnation(handle) == first  # the same engine, asked again
+    api.pods = [pod("a", 1)]  # crashed and restarted in place: still READY
+    assert driver.state(handle) == DeploymentState.READY
+    assert driver.incarnation(handle) != first
+    api.pods = [pod("b", 0)]  # deleted or evicted, recreated by the Deployment
+    assert driver.incarnation(handle) not in (first, "a:1")
+
+
+def test_a_restarted_containers_exit_is_its_last_state():
+    settings = _clone(k8s_workload_kind="deployment")
+    api = FakeK8sApi(settings)
+    driver = _driver(settings, api)
+    handle, _ = driver.launch(_spec())
+    api.pods = [{"status": {"containerStatuses": [{
+        "state": {"running": {}}, "restartCount": 1,
+        "lastState": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}},
+    }]}}]
+    assert driver.exit_info(handle) == (137, True)

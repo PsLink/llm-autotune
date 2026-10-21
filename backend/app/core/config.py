@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # (`<module>.score_card_norm`, `<module>.dataset_id`…). "replay" in
     # LLMBench; set it only for a build of LLMBench that names it otherwise.
     llmbench_replay_module: str = "replay"
+    # A build of LLMBench whose modules go by other names maps each onto the
+    # family whose metrics it reports (app/measures/adapters.py), as JSON:
+    # {"my_sweep": "perf_guidellm_sweep"}. Families: perf_guidellm_sweep,
+    # perf_guidellm, replay, agentic, opencompass, functional_acceptance,
+    # tool_call_success, hallucination, case_truncation.
+    llmbench_module_families: dict[str, str] = {}
     # The VictoriaLogs store of the gateway's request logs that replay datasets
     # are collected from (Automatic Tuning ▸ Datasets), as LLMBench's pods reach
     # it, e.g. http://victorialogs.logging:9428. Pre-fills the dataset form;

@@ -272,6 +272,13 @@ Resolutions, from coarse to fine:
 - `scenarios[].levels[]` is the per-concurrency group from the raw
   submission (`c1`, `c2`, …), the full metric set at that level. This is
   what the report's tables and charts are made of.
+- `measures` is the same results in the platform's [measures](measures.md),
+  one entry per module: its operating point, its other points (each sweep
+  level, `peak`) and every key it can report. A measure means the same in
+  every module, so prefer it when writing about a number: a replay's
+  `output_tps_mean` is one request's speed, a sweep's is the whole level's.
+  A sweep's operating point is its highest-throughput level that met its SLO,
+  which can differ from the level LLMBench reported.
 - `metrics` is the flat dict exactly as stored (`module.level.metric`), for
   agents that already know a key.
 - `raw` is the LLMBench payload, untouched, behind a link rather than inline

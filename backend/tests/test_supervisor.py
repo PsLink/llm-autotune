@@ -14,6 +14,7 @@ from app.control.launch.base import (
     DeploymentState,
     LaunchSpec,
 )
+from app.control.orchestrator.container_logs import GAP_MARK, with_head
 from app.control.orchestrator.supervisor import Supervisor
 from app.control.search import CandidateConfig
 from app.db.base import Base
@@ -523,7 +524,8 @@ def test_a_running_engines_log_is_kept_and_outlives_its_pod(tmp_path, monkeypatc
 
 
 def test_a_saved_log_is_bounded(tmp_path, monkeypatch):
-    """An engine can print gigabytes; what is kept is its end, cut at a line."""
+    """An engine can print gigabytes; what is kept is its start (what it
+    resolved and enabled) and its end (what it did last), cut at lines."""
     supervisor, factory = make_supervisor(instant_ready=True, bench=BenchFailedEvaluator())
     monkeypatch.setattr(supervisor.settings, "run_log_dir", str(tmp_path))
     monkeypatch.setattr(supervisor.settings, "log_file_max_bytes", 1000)
@@ -538,9 +540,26 @@ def test_a_saved_log_is_bounded(tmp_path, monkeypatch):
         run = session.scalars(select(Run)).first()
         with open(run.log_path, encoding="utf-8") as f:
             kept = f.read()
-    assert kept.startswith("(earlier lines dropped)\nline ")
+    assert kept.startswith("line 00000 ")
+    assert GAP_MARK in kept
     assert kept.endswith("the crash\n")
-    assert len(kept.encode()) <= 1000 + len("(earlier lines dropped)\n")
+    assert len(kept.encode()) <= 1000
+
+
+def test_a_log_read_again_keeps_its_start():
+    """Each read returns only the last lines; once the engine has logged more
+    than that, its start lives only in the earlier save."""
+    first = "server_args=ServerArgs(tp=2)\nAuto-enabling fusion\nready\n"
+    assert with_head("", first) == first
+    later = "Decode batch 900\nDecode batch 901\n"
+    merged = with_head(first, later)
+    assert merged.startswith("server_args=ServerArgs(tp=2)\nAuto-enabling fusion")
+    assert merged.endswith("Decode batch 901\n")
+    # Still the whole log: kept as it is.
+    assert with_head(first, first + "Decode batch 1\n") == first + "Decode batch 1\n"
+    # A third read keeps the same start, not the second read's.
+    third = with_head(merged, "Decode batch 2000\n")
+    assert third.startswith("server_args=") and third.count(GAP_MARK) == 1
 
 
 def test_external_kill_classified_from_exit_code():

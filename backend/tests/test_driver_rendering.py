@@ -90,3 +90,17 @@ def test_failure_classification():
         == "image_missing"
     )
     assert classify_failure("something exotic") == "unknown"
+
+
+def test_a_refused_flag_is_a_bad_config_whatever_else_the_log_mentions():
+    # sglang prints its arguments, nccl options included, before it parses
+    # the rest of the command line.
+    log = (
+        "server_args=ServerArgs(tp_size=2, enable_nccl_nvls=False, ...)\n"
+        "launch_server.py: error: unrecognized arguments: --speculative-num-topk 1\n"
+    )
+    assert classify_failure(log) == "bad_config"
+    assert classify_failure("enable_nccl_nvls=False\nKilled") == "unknown"
+    assert classify_failure("torch.distributed.DistBackendError: NCCL error in: ...") == "nccl"
+    watchdog = "[Rank 1] Watchdog caught collective operation timeout: NCCL timeout"
+    assert classify_failure(watchdog) == "nccl"

@@ -44,10 +44,11 @@ import { campaignToYaml } from '../utils/campaignYaml'
 import { copyText } from '../utils/clipboard'
 import { all, useFirstLoad } from '../utils/load'
 import { usePoll } from '../utils/poll'
-import { sweptKeysOf, type SpaceShape } from '../utils/space'
+import { sweptKeysOf, variedKeysOf, type SpaceShape } from '../utils/space'
 import { campaignStatus, failureLabel, isLive, runLabel, runStatus } from '../utils/status'
 import { absoluteTime, clockTime, duration, exactTime, relativeTime } from '../utils/time'
 import { toYaml } from '../utils/yaml'
+import { metricOptions, specFor } from '../utils/measures'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -234,7 +235,7 @@ interface DeclaredObjective {
 function describe(raw: unknown, fallbackKey: string) {
   const declared = (raw ?? {}) as DeclaredObjective
   const key = declared.target_metric || fallbackKey
-  const spec = metricSpecs.value.find((m) => m.key === key)
+  const spec = specFor(key, metricSpecs.value)
   const direction = declared.direction || (spec?.better === 'lower' ? 'minimize' : 'maximize')
   return {
     // Campaigns created before objectives were named carry no name; fall back
@@ -329,6 +330,9 @@ const runVerdict = computed(() => {
     breaches: result.breaches ?? [],
     redlines: spec.redlines,
     metrics: result.metrics ?? {},
+    // The objective's names as the run was judged: a measure is not a key
+    // of the raw metrics.
+    named: (result.named ?? {}) as Record<string, number | null>,
   }
 })
 
@@ -340,7 +344,7 @@ const runKeyMetrics = computed(() => {
   const wanted = [v.key, ...v.redlines.map((r) => r.metric)]
   return wanted
     .filter((k, i) => wanted.indexOf(k) === i)
-    .map((key) => ({ key, value: v.metrics[key] }))
+    .map((key) => ({ key, value: key in v.named ? v.named[key] : v.metrics[key] }))
 })
 
 function fmtMetric(value: unknown): string {
@@ -1011,7 +1015,13 @@ const space = computed<SpaceShape>(() => (campaign.value?.search_space ?? {}) as
  *  read by the same function every other view of a space uses. This page once
  *  had its own copy that never looked at `range`, so a range-based sweep
  *  rendered twenty distinct configurations as two repeated lines. */
-const sweptKeys = computed<string[]>(() => sweptKeysOf(space.value))
+const sweptKeys = computed<string[]>(() => {
+  // The declared axes first, then whatever else the runs actually changed: a
+  // policy's best configs may differ only outside the declared space.
+  const declared = sweptKeysOf(space.value)
+  const varied = variedKeysOf(candidates.value.map((c) => (c.config ?? {}) as Record<string, unknown>))
+  return [...declared, ...varied.filter((k) => !declared.includes(k))]
+})
 
 const baseConfig = computed<Record<string, unknown>>(() => space.value.base ?? {})
 
@@ -1188,7 +1198,7 @@ onMounted(() => {
   const linked = Number(route.query.run)
   if (linked) void openRun({ id: linked } as Run)
   api.get('/objectives/metrics').then(({ data }) => {
-    metricSpecs.value = data.metrics
+    metricSpecs.value = metricOptions(data)
     if (data.default_verify_target_metric) defaultVerifyMetric.value = data.default_verify_target_metric
   })
   poll.start()

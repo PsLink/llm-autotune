@@ -408,6 +408,14 @@ class DeploymentDriver(ABC):
         (e.g. an external SIGKILL). Default: unknown."""
         return (None, False)
 
+    def incarnation(self, handle: DeploymentHandle) -> str | None:
+        """Which engine process is behind a handle: a value that changes when
+        the substrate restarts or replaces it (a crashed container restarted
+        in place, a deleted or evicted pod recreated). None when the substrate
+        cannot say, or nothing is running. Default: cannot say — a substrate
+        that never restarts an engine reports its death as CRASHED instead."""
+        return None
+
     def failure_reason(self, handle: DeploymentHandle) -> tuple[str, str] | None:
         """Why a run is wedged, as (failure_class, human message), when the
         substrate can say without a log — a pod that never started (bad mount,

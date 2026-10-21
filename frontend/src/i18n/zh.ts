@@ -335,7 +335,7 @@ const zh: typeof en = {
       candidates: '候选配置',
     },
     verifiedOn: '真实流量 replay 结果',
-    finalists: 'policy 的决赛候选（平台复测）',
+    finalists: '候选配置验证',
     finalistsHint: '平台重新启动 policy 选出的最佳配置，并用本 campaign 自己的 benchmark '
       + '逐一复测。胜者由这次测量决定，policy 从不给自己的结果打分。',
     screening: '全部候选',

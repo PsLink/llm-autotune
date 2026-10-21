@@ -327,6 +327,12 @@ async def test_results_come_at_four_resolutions(stack):
     assert scenario["levels"][0]["metrics"]["ttft_p50_ms"] == 340
     assert scenario["metrics"]["reported_concurrency"] == 8
     assert res["quality"][0]["scores"] == {"gsm8k": 0.93}
+    # The same results in measures, which name a number the same in every module.
+    sweep = next(m for m in res["measures"] if m["scenario"] == SWEEP)
+    # c8 is what LLMBench reported, but it missed the SLO: measures read c4.
+    assert sweep["kind"] == "sweep" and sweep["operating_level"] == "c4"
+    assert sweep["points"]["c1"]["ttft_ms@p50"] == 340
+    assert next(m for m in res["measures"] if m["scenario"] == "opencompass")["kind"] == "quality"
     roles = {(v["module"], v["metric"]): v for v in res["verdicts"]}
     assert roles[(SWEEP, "uptime")]["ok"] is True and roles[(SWEEP, "uptime")]["min"] == 0.99
     assert roles[("opencompass", "gsm8k")]["role"] == "quality_floor"

@@ -535,6 +535,11 @@ class ResultOut(BaseModel):
     feasible: bool = False
     breaches: list[str] = Field(default_factory=list)
     created_at: datetime
+    # Every name the campaign's objectives use (target and redlines, both
+    # stages) as this result reads it: a measure (`success_rate`,
+    # `ttft_ms@p99`) resolved the way the run was judged, a raw key verbatim.
+    # None = not reported. Filled by the run detail; empty elsewhere.
+    named: dict[str, float | None] = Field(default_factory=dict)
 
 
 class LeaderboardEntry(BaseModel):

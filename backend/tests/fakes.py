@@ -41,6 +41,13 @@ class NullDriver(DeploymentDriver):
         # Per-container stdout a test can inject, so the death-log capture path
         # has something to read (a real `docker logs` on a crashed container).
         self.workload_logs: dict[str, str] = {}
+        # Engine containers a test has crashed: they report CRASHED until gone.
+        self.crashed: set[str] = set()
+        # Engine containers a test has restarted in place (`restarts`) or
+        # whose pod it has had replaced (`replacements`): both are part of
+        # their incarnation, as a pod's restart count and uid are on k8s.
+        self.restarts: dict[str, int] = {}
+        self.replacements: dict[str, int] = {}
 
     def launch(self, spec):
         self._gone.discard(spec.container_name)  # a relaunch resurrects it
@@ -53,10 +60,16 @@ class NullDriver(DeploymentDriver):
     def state(self, handle) -> DeploymentState:
         if handle.container_name in self._gone:
             return DeploymentState.GONE
+        if handle.container_name in self.crashed:
+            return DeploymentState.CRASHED
         return self._up_state()
 
     def logs(self, handle, tail: int = 200) -> str:
         return self.workload_logs.get(handle.container_name, "")
+
+    def incarnation(self, handle) -> str | None:
+        name = handle.container_name
+        return f"{name}-pod{self.replacements.get(name, 0)}:{self.restarts.get(name, 0)}"
 
     def teardown(self, handle) -> None:
         self.torn_down.append(handle.container_name)
@@ -124,6 +137,23 @@ class StubEvaluator(Evaluator):
 
     def poll(self, external_ref) -> EvalOutcome:
         return EvalOutcome(status=EvalStatus.PASSED, metrics=dict(self.metrics))
+
+
+class EndlessEvaluator(StubEvaluator):
+    """A benchmark that never finishes on its own — what LLMBench does against
+    an engine that died under it — and records what was cancelled."""
+
+    name = "endless"
+
+    def __init__(self):
+        super().__init__()
+        self.cancelled: list[str] = []
+
+    def poll(self, external_ref) -> EvalOutcome:
+        return EvalOutcome(status=EvalStatus.RUNNING)
+
+    def cancel(self, external_ref) -> None:
+        self.cancelled.append(external_ref)
 
 
 

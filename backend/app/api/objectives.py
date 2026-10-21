@@ -6,13 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import get_current_user
 from app.db.base import get_async_session
 from app.db.models import Event, Objective, User
+from app.measures import RefError, is_measure_ref, parse
+from app.measures.catalog import catalogue as measure_catalogue
+from app.measures.catalog import options as measure_options
 from app.metrics_catalog import (
     DEFAULT_TARGET_METRIC,
     DEFAULT_VERIFY_TARGET_METRIC,
     METRICS,
-    default_direction,
 )
-from app.objective import OPERATORS
+from app.objective import OPERATORS, default_direction
 from app.schemas.core import ObjectiveCreate, ObjectiveOut
 
 router = APIRouter(prefix="/objectives", tags=["objectives"])
@@ -24,6 +26,12 @@ async def metrics(_: User = Depends(get_current_user)):
     an improvement — so the editor can default sensibly."""
     return {
         "metrics": METRICS,
+        # The platform's own vocabulary (docs/api/measures.md): what an
+        # objective should name. `metrics` above are raw LLMBench keys, still
+        # accepted.
+        "measures": measure_catalogue(),
+        # The measures as pickable references, in the shape of `metrics`.
+        "measure_options": measure_options(),
         "operators": sorted(OPERATORS),
         "default_target_metric": DEFAULT_TARGET_METRIC,
         "default_verify_target_metric": DEFAULT_VERIFY_TARGET_METRIC,
@@ -166,6 +174,12 @@ def _validate(body: ObjectiveCreate) -> None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "direction must be maximize|minimize"
         )
+    for name in [body.target_metric, *(r.metric for r in body.redlines)]:
+        if name and is_measure_ref(name):
+            try:
+                parse(name)
+            except RefError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     for redline in body.redlines:
         if redline.op not in OPERATORS:
             raise HTTPException(
