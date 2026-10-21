@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Policy history (contract 1.4).** A policy's state stays within its campaign,
+  so a second campaign on the same model started knowing nothing. A policy can
+  now file what a night learned (`PUT /session/digest`: a summary, scoped
+  lessons, constraints, open questions), and read other campaigns' nights
+  (`GET /history`): each digest with the conditions the platform recorded
+  (model, engine, image, GPU type, cards, benchmark, objective, forbidden
+  parameters) and the night's validated verdicts against production. Same
+  owner only; matched by engine and, by default, model.
+
 - **Measures: one vocabulary for benchmark results** (`docs/api/measures.md`).
   An objective, a redline or the Hub gate can name `output_tpm_per_gpu`,
   `ttft_ms@p99`, `success_rate` or `replay/ttft_ms@p90[32k_64k]` instead of

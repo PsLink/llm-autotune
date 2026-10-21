@@ -1396,6 +1396,10 @@ class PolicySession(Base):
     # The PUT /session/plan declaration: {"tuning": [...], "extras": [...],
     # "notes": ...}. The extras list is the allow-list for deviation badges.
     plan: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    # What the night learned, in the policy's words (PUT /session/digest);
+    # other campaigns read it through GET /history.
+    digest: Mapped[dict | None] = mapped_column(JsonCol, nullable=True)
+    digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finalize_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
