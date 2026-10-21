@@ -85,13 +85,22 @@ function pct(row: ScoreRow): string {
   return `${delta > 0 ? '+' : ''}${delta.toFixed(1)}%`
 }
 
+const isSet = (config: Record<string, unknown>, k: string) =>
+  config[k] !== undefined && config[k] !== null
+
+/** Every bar sets every swept key (a grid): values alone read cleanly under
+ *  one caption naming the keys. A policy's configs each set a few keys of
+ *  many, and "0.9" alone could be anyone's: those bars name their keys. */
+const dense = computed(() =>
+  props.sweptKeys.length > 0 && scored.value.every((r) =>
+    r.config.__baseline__ || props.sweptKeys.every((k) => isSet(r.config, k))))
+
 function summary(config: Record<string, unknown>): string {
   if (config.__baseline__) return 'production'
   const keys = props.sweptKeys.length ? props.sweptKeys : Object.keys(config)
-  return keys
-    .filter((k) => config[k] !== undefined && config[k] !== null)
-    .map((k) => String(config[k]))
-    .join(' · ')
+  const set = keys.filter((k) => isSet(config, k))
+  if (!set.length) return 'defaults'
+  return set.map((k) => (dense.value ? String(config[k]) : `${k}=${config[k]}`)).join(' · ')
 }
 
 function fmt(value: number): string {
@@ -104,9 +113,9 @@ function fmt(value: number): string {
     <div class="caption muted tiny">
       <!-- Each bar is labelled with values only; say once whose they are. The
            metric is named once, by the board above; the bars start at zero. -->
-      <span v-if="sweptKeys.length" class="mono">{{ sweptKeys.join(' · ') }}</span>
+      <span v-if="dense" class="mono">{{ sweptKeys.join(' · ') }}</span>
       <template v-if="hasBaseline">
-        <span v-if="sweptKeys.length" class="sep">·</span>
+        <span v-if="dense" class="sep">·</span>
         <span class="legend">
           <span class="chip k-better"><i class="dot" />better</span>
           <span class="chip k-baseline"><i class="dot" />baseline</span>
