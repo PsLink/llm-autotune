@@ -126,7 +126,7 @@ def _restarted_before_ready(container: dict) -> bool:
     config that dies after ten minutes loops on its cards all night. Runs
     have no liveness probe, so nothing else restarts a loading engine."""
     return int(container.get("restartCount") or 0) > 0 and bool(
-        ((container.get("lastState") or {}).get("terminated"))
+        (container.get("lastState") or {}).get("terminated")
     )
 
 
