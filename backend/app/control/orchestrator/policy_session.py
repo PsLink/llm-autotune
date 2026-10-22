@@ -57,6 +57,7 @@ from app.db.models import (
     CandidateKind,
     CandidateStatus,
     ContenderStatus,
+    LlmEndpoint,
     Machine,
     MachineState,
     Policy,
@@ -106,6 +107,21 @@ def redact_secrets(command: str, token: str, secrets: dict[str, str]) -> str:
         if value:
             out = out.replace(value, f"[{name} redacted]")
     return out
+
+
+def llm_endpoint_env(db, policy, *, secret: bool) -> dict[str, str]:
+    """The env the policy's LLM endpoint sets: its address and model
+    (secret=False), or its key (secret=True, redacted like the policy's own
+    secret env). {} when the policy names no endpoint, or it was deleted."""
+    if policy.llm_endpoint_id is None:
+        return {}
+    endpoint = db.get(LlmEndpoint, policy.llm_endpoint_id)
+    if endpoint is None:
+        return {}
+    if secret:
+        key = endpoint.api_key_value()
+        return {"LLM_API_KEY": key} if key else {}
+    return {"LLM_BASE_URL": endpoint.base_url.strip().rstrip("/"), "LLM_MODEL": endpoint.model}
 
 
 def policy_log_path(run_log_dir: str, session_id: int) -> str:
@@ -512,7 +528,7 @@ class PolicySessionEngine:
         )
 
         volumes = policy_volumes(campaign, policy)
-        secrets = policy.secret_env_values()
+        secrets = {**policy.secret_env_values(), **llm_endpoint_env(db, policy, secret=True)}
         spec = WorkloadSpec(
             name=session.container_name,
             machine=self.sup._machine_info(target),
@@ -524,6 +540,7 @@ class PolicySessionEngine:
                 # before it exits. The policy's own env can still set it.
                 "PYTHONUNBUFFERED": "1",
                 **(policy.env or {}),
+                **llm_endpoint_env(db, policy, secret=False),
                 **secrets,
                 "AUTOTUNE_API_URL": settings.public_api_url,
                 "AUTOTUNE_API_KEY": token,

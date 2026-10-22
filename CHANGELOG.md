@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Settings page (admins).** The platform's links to other systems are set in
+  the UI, over the install's values, and checked from the platform:
+  - **External platforms:** the VictoriaLogs store replay datasets are sampled
+    from (over `llmbench.victoriaLogsUrl`), and a model catalog server (over
+    `catalogIndexUrl`; its index is read at `<address>/index-v2.json`) with
+    its write key, stored encrypted.
+  - **LLM endpoints:** OpenAI-compatible endpoints, each registered once with
+    its model and key, with a test call. Report writing uses the one chosen in
+    Settings. A policy names one (`llm_endpoint_id` on `/policies`); at launch
+    it sets `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY`, over the same names
+    in the policy's env, and the key is redacted from the launch command.
+    Plugins get the report-writing endpoint from `reports_llm`.
+
+- **Publish to catalog.** With a catalog server and its write key set, the
+  catalog export writes straight to the server's API
+  (`POST /catalog-export/publish`), besides the zip download: a check of every
+  write first (dry run, nothing committed), then the commits. A new model goes
+  in one commit; for a model the server has, each new or changed variant, then
+  its `metadata.yaml`. A refused write stops the publish before anything is
+  committed. The server takes no report, so a publish records no `tuning`
+  entry.
+
 - **Policy history (contract 1.4).** A policy's state stays within its campaign,
   so a second campaign on the same model started knowing nothing. A policy can
   now file what a night learned (`PUT /session/digest`: a summary, scoped
@@ -157,6 +179,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also caught the `/api-keys` page, which then loaded as an API 404.
 
 ### Changed
+
+- **Catalog schemas** follow model-catalog `5b668ff`: a model's metadata no
+  longer needs `source` (a model with no weights, such as a mock server), and
+  a variant may run on no GPU (`requires.gpus: 0`) or as `engine: mock`.
 
 - **Export to model catalog writes the catalog's v2 layout**
   (`catalog.swiss/v2`): one variant file per run, `models/<name>/<id>.yaml`,

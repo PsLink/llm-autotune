@@ -8,13 +8,16 @@
  *  this tuning result; for a new model, the form asks for what its
  *  metadata.yaml needs (the Hugging Face repo id first) and drafts the rest.
  *  Every file is checked against the catalog's schemas and rules
- *  server-side. Nothing is pushed: download the zip, unpack it at the root of
- *  a model-catalog checkout and open the pull request.
+ *  server-side. Then either download the zip (unpack it at the root of a
+ *  model-catalog checkout and open the pull request), or, with a catalog
+ *  server and its write key set in Settings, publish straight to it: a dry
+ *  run of every write first, then the commits. Publishing sends no report
+ *  (the server takes none), so it records no tuning entry.
  *
  *  Plugins open it too, with their own runs (`candidates`).
  */
 import { computed, ref, watch } from 'vue'
-import { api, type CatalogExportPreview, type CatalogInput } from '../api/client'
+import { api, type CatalogExportPreview, type CatalogInput, type CatalogPublishResult } from '../api/client'
 import { apiErrorText } from '../utils/apiError'
 import { copyText } from '../utils/clipboard'
 import { useI18n } from '../i18n'
@@ -82,6 +85,9 @@ const downloading = ref(false)
 const error = ref('')
 const preview = ref<CatalogExportPreview | null>(null)
 const tab = ref('')
+/** The last publish: a dry run to confirm, or what was committed. */
+const published = ref<CatalogPublishResult | null>(null)
+const publishing = ref(false)
 
 watch(
   () => props.modelValue,
@@ -106,6 +112,7 @@ watch(
     advanced.value = []
     more.value = []
     preview.value = null
+    published.value = null
     error.value = ''
     tab.value = ''
     void load()
@@ -160,6 +167,7 @@ async function load() {
   }
   loading.value = true
   error.value = ''
+  published.value = null
   try {
     const { data } = await api.post<CatalogExportPreview>('/catalog-export/preview', body())
     preview.value = data
@@ -238,6 +246,27 @@ function statusText(v: CatalogExportPreview['variants'][number]) {
 }
 
 const variantFiles = computed(() => (preview.value?.files ?? []).filter((f) => f.kind !== 'report'))
+
+/** Check every write (dryRun), or, after a dry run that passed, commit them. */
+async function publish(dryRun: boolean) {
+  publishing.value = true
+  error.value = ''
+  try {
+    const message = `${preview.value?.name ?? 'model'}: measured on LLM AutoTune`
+    const { data } = await api.post<CatalogPublishResult>('/catalog-export/publish', {
+      ...body(), dry_run: dryRun, message,
+    })
+    published.value = data
+  } catch (e) {
+    error.value = apiErrorText(e, t('catalogExport.publish.failed'))
+    published.value = null
+  } finally {
+    publishing.value = false
+  }
+}
+
+const committed = computed(() => !!published.value && !published.value.dry_run && published.value.ok)
+const hasTuning = computed(() => (preview.value?.variants ?? []).some((v) => v.tuning === 'recorded'))
 
 async function download() {
   downloading.value = true
@@ -446,13 +475,44 @@ async function download() {
       </el-collapse>
     </template>
 
+    <div v-if="published" class="published">
+      <el-alert :type="published.ok ? (published.dry_run ? 'info' : 'success') : 'error'" :closable="false"
+        show-icon :title="published.dry_run
+          ? (published.ok ? t('catalogExport.publish.checked') : t('catalogExport.publish.refused'))
+          : (published.ok ? t('catalogExport.publish.done') : t('catalogExport.publish.failedMid'))">
+        <div class="tiny">{{ published.message }} · <span class="mono">{{ published.url }}</span></div>
+      </el-alert>
+      <ul class="list writes">
+        <li v-for="w in published.writes" :key="w.path + w.action">
+          <span :class="w.status === 'failed' ? 'bad' : ''">
+            {{ t(`catalogExport.publish.actions.${w.action}`) }}</span>
+          <span class="mono tiny"> {{ w.path }}</span>
+          <span v-if="w.version" class="muted tiny"> {{ w.version }}</span>
+          <span v-if="w.status === 'unchanged'" class="muted tiny"> · {{ t('catalogExport.publish.unchanged') }}</span>
+          <span v-if="w.commit" class="muted tiny mono"> · {{ w.commit.slice(0, 10) }}</span>
+          <div v-if="w.message" class="bad tiny">{{ w.message }}</div>
+        </li>
+      </ul>
+      <p v-if="published.ok && published.dry_run && hasTuning" class="muted tiny">
+        {{ t('catalogExport.publish.noReport') }}</p>
+    </div>
+
     <template #footer>
-      <span class="muted tiny footnote">{{ t('catalogExport.next') }}</span>
+      <span class="muted tiny footnote">{{ preview?.catalog_writable
+        ? t('catalogExport.publish.footnote', { url: preview.catalog_url }) : t('catalogExport.next') }}</span>
       <el-button @click="open = false">{{ t('common.close') }}</el-button>
       <el-button :loading="loading" :disabled="!ready" @click="load">{{ t('catalogExport.refresh') }}</el-button>
-      <el-button type="primary" :loading="downloading"
+      <el-button :type="preview?.catalog_writable ? 'default' : 'primary'" :loading="downloading"
         :disabled="!preview || loading || !preview.valid" @click="download">
         {{ t('catalogExport.download') }}</el-button>
+      <template v-if="preview?.catalog_writable">
+        <el-button v-if="published?.ok && published.dry_run" type="primary" :loading="publishing"
+          @click="publish(false)">
+          {{ t('catalogExport.publish.commit', { n: published.writes.length }) }}</el-button>
+        <el-button v-else type="primary" :loading="publishing"
+          :disabled="!preview.valid || loading || committed" @click="publish(true)">
+          {{ t('catalogExport.publish.button') }}</el-button>
+      </template>
     </template>
   </el-dialog>
 </template>
@@ -488,4 +548,7 @@ h4 { margin: 14px 0 6px; font-size: 13px; display: flex; align-items: center; ga
 }
 .footnote { margin-right: auto; float: left; max-width: 340px; text-align: left; line-height: 1.4; }
 .tiny { font-size: 11.5px; }
+.published { margin-top: 12px; }
+.writes { margin-top: 8px; }
+.bad { color: var(--el-color-danger); }
 </style>

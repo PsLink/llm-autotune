@@ -135,7 +135,7 @@ externalDatabase:
 # The model catalog's published index, which Export to model catalog reads to
 # tell a model the catalog already has from a new one. Point it at a mirror on
 # a cluster with no route to GitHub Pages, or set "" to treat every model as
-# new.
+# new. A catalog server an admin sets on the Settings page replaces it.
 catalogIndexUrl: "https://modelsphere.github.io/model-catalog/index-v2.json"
 
 # The benchmark platform every run is measured by. Point this at your LLMBench
@@ -159,6 +159,7 @@ llmbench:
   # (github.com/modelsphere/helm-charts) serves it when installed into the
   # `logging` namespace, as its README does. Empty = the dataset form asks.
   # LLMBench needs its collector on: datasets.enabled and datasetBuilder.enabled.
+  # An address an admin sets on the Settings page replaces it.
   victoriaLogsUrl: "http://victorialogs.logging:9428"
 
 # The GPU cluster runs land on.
