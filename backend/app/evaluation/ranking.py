@@ -29,8 +29,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.datasets import pinning
 from app.control.search.space import prune_inactive
+from app.datasets import pinning
 from app.db.models import is_baseline_candidate, is_baseline_config
 from app.evaluation.aggregate import summary_of
 from app.hardware import normalize_gpu_type

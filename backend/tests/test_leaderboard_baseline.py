@@ -203,13 +203,16 @@ async def test_a_policys_search_runs_on_productions_config_are_baseline_measurem
         ))
         await session.flush()
         configs = [dict(base), {**base, "kv_cache_dtype": "fp8_e4m3"}, dict(base)]
-        for i, (config, score) in enumerate(zip(configs, (100_000.0, 103_000.0, 102_000.0)), start=1):
+        scores = (100_000.0, 103_000.0, 102_000.0)
+        for i, (config, score) in enumerate(zip(configs, scores, strict=True), start=1):
             session.add(Candidate(id=i, campaign_id=1, config=config, config_hash=f"h{i}",
-                                  kind=CandidateKind.SEARCH.value, status=CandidateStatus.EXHAUSTED.value))
+                                  kind=CandidateKind.SEARCH.value,
+                                  status=CandidateStatus.EXHAUSTED.value))
             session.add(Run(id=i, campaign_id=1, candidate_id=i, machine_id=None,
                             kind=RunKind.EXTERNAL.value, status=RunStatus.SUCCEEDED.value))
             session.add(Result(run_id=i, source="llmbench", passed=True, score=score,
-                               metrics={TARGET: score}, objective_value=score, feasible=True, breaches=[]))
+                               metrics={TARGET: score}, objective_value=score, feasible=True,
+                               breaches=[]))
         await session.commit()
     board = (await client.get("/api/campaigns/1/leaderboard")).json()
     by_run = {e["run_id"]: e for e in board}
