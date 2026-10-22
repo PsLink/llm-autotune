@@ -27,6 +27,7 @@ import {
   type PolicySessionDetail,
   type Run,
   type RunDetail,
+  type RunLaunch,
 } from '../api/client'
 import CatalogExportDialog, { type CatalogCandidate } from '../components/CatalogExportDialog.vue'
 import InfoHint from '../components/InfoHint.vue'
@@ -281,6 +282,33 @@ const datasetPin = computed(() => {
  *  their scores share no scale and merging them would rank nothing. */
 const verifiedBoard = computed(() => leaderboard.value.filter((e) => e.stage === 'verify'))
 const screenBoard = computed(() => leaderboard.value.filter((e) => e.stage !== 'verify'))
+
+/** Production's config as the board measured it — the hover diffs each bar
+ *  against it. The validation's flagged production run first, else the
+ *  search's anchors. */
+const productionConfig = computed<Record<string, unknown> | null>(() => {
+  const base = verifiedBoard.value.find((e) => e.is_baseline) ?? screenBoard.value.find((e) => e.is_baseline)
+  return base && !base.config?.__baseline__ ? base.config : null
+})
+
+/** The one config the board recommends: the best validated finalist that held
+ *  its redlines, else the best such search result. */
+const winnerEntry = computed<LeaderboardEntry | null>(() => {
+  const pick = (rows: LeaderboardEntry[]) =>
+    rows.find((e) => !e.is_baseline && e.holds_redlines && e.comparable !== false) ?? null
+  return pick(verifiedBoard.value) ?? pick(screenBoard.value)
+})
+const winnerObjective = computed(() =>
+  winnerEntry.value?.stage === 'verify' ? verifyObjective.value : objective.value)
+/** What the winner changes from production — the keys worth reading. */
+const winnerChanged = computed(() => {
+  const w = winnerEntry.value
+  if (!w) return []
+  const prod = productionConfig.value ?? {}
+  const keys = new Set([...Object.keys(w.config), ...Object.keys(prod)])
+  return [...keys].filter((k) => !k.startsWith('__')
+    && JSON.stringify(w.config[k]) !== JSON.stringify(prod[k])).sort()
+})
 
 async function stopRun(run: Run) {
   try {
@@ -751,12 +779,42 @@ let openSeq = 0
 async function openRun(run: Run) {
   const seq = ++openSeq
   const detail = (await api.get(`/runs/${run.id}`)).data
-  const log = await fetchRunLog(run.id)
+  // A benchmark of a policy's launch owns no engine: its launch (the applied
+  // command, the pod) is the engine run it measured.
+  const launchOf = detail.launch_run_id ?? detail.id
+  const [log, launch] = await Promise.all([
+    fetchRunLog(run.id),
+    api.get(`/agent/v1/runs/${launchOf}/launch`).then((r) => r.data as RunLaunch).catch(() => null),
+  ])
   if (seq !== openSeq) return
   selectedRun.value = detail
   runLog.value = log
+  runLaunch.value = launch
+  launchTab.value = 'serve'
   drawerOpen.value = true
 }
+
+/** The launch tabs' contents, each one copyable as-is. */
+const runLaunch = ref<RunLaunch | null>(null)
+const launchTab = ref('serve')
+const launchYaml = computed(() => {
+  const l = runLaunch.value
+  if (!l) return ''
+  const c = l.config
+  return toYaml({
+    engine: c.engine, image: c.image, model_path: c.model_path,
+    served_model_name: c.served_model_name, gpu_type: c.gpu_type || undefined, cards: l.cards,
+    engine_args: c.engine_args,
+    ...(Object.keys(c.extra_env ?? {}).length ? { extra_env: c.extra_env } : {}),
+    ...(Object.keys(c.extra_volumes ?? {}).length ? { extra_volumes: c.extra_volumes } : {}),
+  })
+})
+/** What the platform actually applied — the launch's own record when the run
+ *  was a benchmark of it. */
+const appliedCommand = computed(() =>
+  runLaunch.value?.rendered.docker_command || selectedRun.value?.launch_command || '')
+const engineArgsJson = computed(() =>
+  JSON.stringify(runLaunch.value?.config.engine_args ?? selectedRun.value?.config ?? {}, null, 2))
 
 function downloadRunLog() {
   const r = selectedRun.value
@@ -1086,14 +1144,6 @@ function openCandidateRun(candidate: Candidate) {
   if (run) openRun(run)
 }
 
-/** Columns that would say "—" on every row are left out. */
-function hasCards(rows: LeaderboardEntry[]): boolean {
-  return rows.some((r) => !!r.card_type)
-}
-function hasBaseline(rows: LeaderboardEntry[]): boolean {
-  return rows.some((r) => r.is_baseline || r.vs_baseline != null)
-}
-
 /** 68586.56244036907 is twelve digits of a number whose last six are noise. */
 function fmtScore(value: number | null): string {
   if (value === null || value === undefined) return '—'
@@ -1106,16 +1156,6 @@ function fmtScore(value: number | null): string {
  *  two boards no longer show the comparison two different ways. */
 const fmtVsBaseline = fmtBaselineDelta
 const beatsBaseline = beatsBaselineRatio
-
-/** Did this run land on a different card than the baseline it is measured
- *  against? Per-card throughput is card-COUNT normalized, not card-TYPE, so an
- *  off-chip run carries no vs_baseline and ranks below the same-chip entries —
- *  the tag says why it is not being compared. */
-function offChip(row: LeaderboardEntry): boolean {
-  if (row.is_baseline || !row.card_type) return false
-  const baseline = leaderboard.value.find((e) => e.is_baseline && e.stage === row.stage)
-  return !!baseline?.card_type && baseline.card_type !== row.card_type
-}
 
 const progress = computed(() => {
   // The denominator is the LARGER of the declared space size and the candidate
@@ -1476,6 +1516,32 @@ onMounted(() => {
 
     <el-tabs>
       <el-tab-pane :label="t('campaign.tabs.leaderboard')">
+        <!-- The answer first: the one config the board says to run, with what
+             it changes from production and its commands a click away. The
+             bars below are the evidence; hover one for its config. -->
+        <div v-if="winnerEntry" class="winner-card">
+          <div class="winner-head">
+            <span class="winner-badge">{{ t('campaign.winner') }}</span>
+            <b class="winner-score mono">{{ fmtScore(winnerEntry.score) }}</b>
+            <span class="muted tiny">{{ winnerObjective.unit || winnerObjective.label }}</span>
+            <span v-if="winnerEntry.vs_baseline != null" class="mono"
+              :class="beatsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) ? 'better' : 'worse'">
+              {{ fmtVsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) }} {{ t('campaign.vsProduction') }}</span>
+            <el-tag size="small" effect="plain" :type="winnerEntry.stage === 'verify' ? 'warning' : 'info'">
+              {{ winnerEntry.stage === 'verify' ? t('campaign.validated') : t('campaign.screenOnly') }}</el-tag>
+            <el-tag v-if="winnerEntry.card_type" size="small" effect="plain" type="info">{{ winnerEntry.card_type }}</el-tag>
+            <span class="muted tiny">{{ t('campaign.run') }} #{{ winnerEntry.run_id }}</span>
+            <span class="winner-actions">
+              <el-button size="small" type="primary" plain @click="openBoardRow(winnerEntry)">
+                {{ t('campaign.launchConfig') }}</el-button>
+            </span>
+          </div>
+          <div class="winner-config">
+            <span class="muted tiny">{{ t('campaign.changesFromProduction') }}</span>
+            <ConfigChips v-if="winnerChanged.length" :config="winnerEntry.config" :keys="winnerChanged" />
+            <span v-else class="muted">{{ t('campaign.sameAsProduction') }}</span>
+          </div>
+        </div>
         <!-- The expensive stage first, in its own table: it decides the winner,
              and its scores come from a different benchmark in different units.
              One table sorted across both would be a ranking of nothing. -->
@@ -1506,55 +1572,8 @@ onMounted(() => {
             </InfoHint>
           </div>
           <ScoreBars :rows="verifiedBoard" :swept-keys="sweptKeys"
-            :direction="verifyObjective.direction" />
-          <el-table :data="verifiedBoard" class="clickable" @row-click="openBoardRow">
-            <el-table-column prop="run_id" :label="t('campaign.run')" width="80" />
-            <el-table-column :label="t('common.config')" min-width="280">
-              <template #default="{ row }">
-                <ConfigChips :config="row.config" :keys="sweptKeys" />
-              </template>
-            </el-table-column>
-            <el-table-column v-if="hasCards(verifiedBoard)" label="GPU" width="90">
-              <template #default="{ row }">
-                <el-tag v-if="row.card_type" size="small" effect="plain"
-                  :type="offChip(row) ? 'warning' : 'info'"
-                  :title="offChip(row)
-                    ? 'Ran on a different card than the baseline — not comparable per-card'
-                    : ''">{{ row.card_type }}</el-tag>
-                <span v-else class="muted">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="score" :label="verifyObjective.unit ? `${verifyObjective.label} (${verifyObjective.unit})` : verifyObjective.label"
-              min-width="170" sortable>
-              <template #default="{ row }">
-                <el-tag v-if="row.is_baseline" size="small" type="info" effect="plain"
-                  class="baseline-tag">{{ t('campaign.baselineRow') }}</el-tag>
-                {{ fmtScore(row.score) }}
-              </template>
-            </el-table-column>
-            <el-table-column v-if="hasBaseline(verifiedBoard)" :label="t('campaign.vsBaseline')" width="110">
-              <template #default="{ row }">
-                <span v-if="row.is_baseline" class="muted">—</span>
-                <span v-else-if="row.vs_baseline != null"
-                  :class="beatsBaseline(row.vs_baseline, verifyObjective.direction) ? 'better' : 'worse'">
-                  {{ fmtVsBaseline(row.vs_baseline, verifyObjective.direction) }}
-                </span>
-                <span v-else class="muted">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('campaign.redlines')" width="110" align="center">
-              <template #default="{ row }">
-                <el-tag v-if="row.comparable === false" type="warning" size="small"
-                  :title="row.dataset_build_id">{{ t('campaign.otherDataset') }}</el-tag>
-                <el-icon v-else-if="row.holds_redlines" class="held" :title="t('campaign.held')">
-                  <CircleCheckFilled /></el-icon>
-                <el-tooltip v-else placement="top"
-                  :content="row.breaches.join('; ') || t('campaign.crossed')">
-                  <el-icon class="crossed"><CircleCloseFilled /></el-icon>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-          </el-table>
+            :direction="verifyObjective.direction" :production="productionConfig"
+            :unit="verifyObjective.unit" @select="openBoardRow" />
         </template>
 
         <div class="board-head" :class="{ screening: verifiedBoard.length }">
@@ -1577,55 +1596,8 @@ onMounted(() => {
           </span>
         </div>
         <ScoreBars :rows="screenBoard" :swept-keys="sweptKeys"
-          :direction="objective.direction" />
-          <el-table v-if="screenBoard.length" :data="screenBoard" class="clickable" @row-click="openBoardRow">
-            <el-table-column prop="run_id" :label="t('campaign.run')" width="80" />
-            <el-table-column :label="t('common.config')" min-width="280">
-              <template #default="{ row }">
-                <ConfigChips :config="row.config" :keys="sweptKeys" />
-              </template>
-            </el-table-column>
-            <el-table-column v-if="hasCards(screenBoard)" label="GPU" width="90">
-              <template #default="{ row }">
-                <el-tag v-if="row.card_type" size="small" effect="plain"
-                  :type="offChip(row) ? 'warning' : 'info'"
-                  :title="offChip(row)
-                    ? 'Ran on a different card than the baseline — not comparable per-card'
-                    : ''">{{ row.card_type }}</el-tag>
-                <span v-else class="muted">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="score" :label="objective.unit ? `${objective.label} (${objective.unit})` : objective.label"
-              min-width="170" sortable>
-              <template #default="{ row }">
-                <el-tag v-if="row.is_baseline" size="small" type="info" effect="plain"
-                  class="baseline-tag">{{ t('campaign.baselineRow') }}</el-tag>
-                {{ fmtScore(row.score) }}
-              </template>
-            </el-table-column>
-            <el-table-column v-if="hasBaseline(screenBoard)" :label="t('campaign.vsBaseline')" width="110">
-              <template #default="{ row }">
-                <span v-if="row.is_baseline" class="muted">—</span>
-                <span v-else-if="row.vs_baseline != null"
-                  :class="beatsBaseline(row.vs_baseline, objective.direction) ? 'better' : 'worse'">
-                  {{ fmtVsBaseline(row.vs_baseline, objective.direction) }}
-                </span>
-                <span v-else class="muted">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('campaign.redlines')" width="110" align="center">
-              <template #default="{ row }">
-                <el-tag v-if="row.comparable === false" type="warning" size="small"
-                  :title="row.dataset_build_id">{{ t('campaign.otherDataset') }}</el-tag>
-                <el-icon v-else-if="row.holds_redlines" class="held" :title="t('campaign.held')">
-                  <CircleCheckFilled /></el-icon>
-                <el-tooltip v-else placement="top"
-                  :content="row.breaches.join('; ') || t('campaign.crossed')">
-                  <el-icon class="crossed"><CircleCloseFilled /></el-icon>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-          </el-table>
+          :direction="objective.direction" :production="productionConfig"
+          :unit="objective.unit" @select="openBoardRow" />
         <el-empty v-if="screenBoard.length === 0 && !verifiedBoard.length" :image-size="64"
           :description="t('campaign.noRuns')" />
       </el-tab-pane>
@@ -1872,27 +1844,44 @@ onMounted(() => {
         <h3>{{ t('common.config') }}</h3>
         <ConfigChips :config="selectedRun.config" :keys="sweptKeys" />
 
-        <el-collapse class="run-more">
-          <el-collapse-item :title="t('campaign.fullConfig')" name="config">
-            <pre class="mono block">{{ JSON.stringify(selectedRun.config, null, 2) }}</pre>
-          </el-collapse-item>
-          <el-collapse-item v-if="selectedRun.serve_command" name="serve">
-            <template #title>{{ t('runs.engineCommand') }}</template>
+        <h3>{{ t('campaign.launchConfig') }}</h3>
+        <el-tabs v-model="launchTab" type="border-card" class="launch-tabs">
+          <el-tab-pane :label="t('runs.serveTab')" name="serve">
             <div class="log-head">
-              <span class="muted tiny">{{ t('runs.engineCommandNote') }}</span>
-              <el-button size="small"
-                @click="copyText(selectedRun.serve_command, t('runs.engineCommandCopied'))">
-                {{ t('common.copy') }}</el-button>
+              <span class="muted tiny">{{ t('runs.serveNote') }}</span>
+              <CopyButton :value="runLaunch?.rendered.serve_command || selectedRun.serve_command || ''"
+                :label="t('runs.engineCommandCopied')" />
             </div>
-            <pre class="mono block">{{ selectedRun.serve_command }}</pre>
+            <pre class="mono block">{{ runLaunch?.rendered.serve_command || selectedRun.serve_command || '—' }}</pre>
+          </el-tab-pane>
+          <el-tab-pane :label="t('runs.engineArgsTab')" name="args">
+            <div class="log-head">
+              <span class="muted tiny">{{ t('runs.engineArgsNote') }}</span>
+              <CopyButton :value="engineArgsJson" :label="t('runs.engineArgsCopied')" />
+            </div>
+            <pre class="mono block">{{ engineArgsJson }}</pre>
+          </el-tab-pane>
+          <el-tab-pane v-if="launchYaml" :label="t('runs.launchConfigTab')" name="yaml">
+            <div class="log-head">
+              <span class="muted tiny">{{ t('runs.launchConfigNote') }}</span>
+              <CopyButton :value="launchYaml" :label="t('runs.launchConfigCopied')" />
+            </div>
+            <pre class="mono block">{{ launchYaml }}</pre>
+          </el-tab-pane>
+          <el-tab-pane :label="t('runs.appliedTab')" name="applied">
+            <div class="log-head">
+              <span class="muted tiny">{{ t('runs.appliedNote') }}</span>
+              <CopyButton v-if="appliedCommand" :value="appliedCommand" :label="t('runs.appliedCopied')" />
+            </div>
+            <pre class="mono block">{{ appliedCommand || t('runs.notLaunched') }}</pre>
             <dl class="run-image">
-              <dt>Image</dt><dd class="mono">{{ selectedRun.image }}</dd>
-              <dt>Weights</dt><dd class="mono">{{ selectedRun.model_path }}</dd>
+              <dt>Image</dt><dd class="mono">{{ runLaunch?.config.image || selectedRun.image }}</dd>
+              <dt>Weights</dt><dd class="mono">{{ runLaunch?.config.model_path || selectedRun.model_path }}</dd>
             </dl>
-          </el-collapse-item>
-          <el-collapse-item :title="t('runs.launchCommandApplied')" name="launch">
-            <pre class="mono block">{{ selectedRun.launch_command || '(not launched yet)' }}</pre>
-          </el-collapse-item>
+          </el-tab-pane>
+        </el-tabs>
+
+        <el-collapse class="run-more">
           <el-collapse-item v-for="(r, i) in selectedRun.results" :key="i" :name="`result-${i}`">
             <template #title>
               {{ t('runs.metrics') }} · {{ r.source }}
@@ -2432,5 +2421,46 @@ onMounted(() => {
 }
 .metric-count {
   margin-left: 8px;
+}
+
+/* The board's answer, above its evidence. */
+.winner-card {
+  border: 1px solid var(--el-color-success-light-5, #b3e19d);
+  background: var(--el-color-success-light-9, #f0f9eb);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+.winner-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.winner-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--el-color-success-dark-2, #529b2e);
+}
+.winner-score {
+  font-size: 18px;
+}
+.winner-actions {
+  margin-left: auto;
+}
+.winner-config {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.launch-tabs {
+  margin-bottom: 12px;
+}
+.launch-tabs pre.block {
+  margin: 0;
 }
 </style>
