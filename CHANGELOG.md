@@ -95,6 +95,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8 processes), not LLMBench's default of 2. Every benchmark past the second
   queued while its engine held GPUs: a third validation run waited 9 minutes.
   `docs/deploying.md` says how to size the slots to a campaign.
+- **An engine that dies during startup on Kubernetes now fails its run.** A
+  Deployment restarts a dead engine, and each restart reset the ready timeout's
+  clock, so a config that died after ten minutes of loading (an out-of-memory at
+  CUDA-graph capture exits 0) looped on its cards indefinitely. A container
+  restarted before its pod was ever ready is now a `crash_loop`, with its exit
+  code and restart count.
 
 - **Force stop on a policy campaign no longer wedges the worker.** Stopping a
   policy's launch also stops the benchmarks on it, and each of those had a

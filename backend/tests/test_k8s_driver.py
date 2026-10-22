@@ -694,3 +694,31 @@ def test_a_restarted_containers_exit_is_its_last_state():
         "lastState": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}},
     }]}}]
     assert driver.exit_info(handle) == (137, True)
+
+
+def test_an_engine_that_restarts_before_it_is_ready_has_crashed():
+    # An OOM at CUDA-graph capture exits 0; the Deployment restarts it, and each
+    # restart resets the container's startedAt, so the ready timeout never trips.
+    settings = _clone(k8s_workload_kind="deployment")
+    api = FakeK8sApi(settings)
+    driver = _driver(settings, api)
+    handle, _ = driver.launch(_spec())
+    def pods(ready, container):
+        conditions = [{"type": "Ready", "status": ready}]
+        return [{"status": {"conditions": conditions, "containerStatuses": [container]}}]
+
+    loading = {"state": {"running": {"startedAt": "2026-10-21T15:52:59Z"}}, "restartCount": 0}
+    api.pods = pods("False", loading)
+    assert driver.state(handle) == DeploymentState.STARTING
+    assert driver.failure_reason(handle) is None
+    exited = {"terminated": {"exitCode": 0, "reason": "Completed"}}
+    restarted = {**loading, "restartCount": 8, "lastState": exited}
+    api.pods = pods("False", restarted)
+    assert driver.state(handle) == DeploymentState.CRASHED
+    kind, message = driver.failure_reason(handle)
+    assert kind == "crash_loop"
+    assert "before it was ready" in message and "8 time(s)" in message
+    # Once serving, a restart is the supervisor's incarnation check, not a startup crash.
+    api.pods = pods("True", restarted)
+    assert driver.state(handle) == DeploymentState.READY
+    assert driver.failure_reason(handle) is None
