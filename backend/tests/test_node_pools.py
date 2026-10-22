@@ -100,6 +100,30 @@ def test_the_probe_counts_free_cards_on_nodes_that_take_pods():
     assert any("free cards are unknown" in w for w in probe["warnings"])
 
 
+def test_a_node_cordoned_for_us_counts_when_our_pods_tolerate_the_cordon():
+    """An admin cordons GPU nodes to keep everything else off them, for this
+    platform to use. With the cordon's toleration on the cluster, our pods
+    schedule there, so the node's cards are free cards, not none."""
+    settings = _clone(k8s_api_mode="kubectl",
+                      k8s_tolerations="node.kubernetes.io/unschedulable:NoSchedule")
+    api = _ClusterApi(settings)
+    api.nodes = [_node("gpu-a", 8, cordoned=True), _node("gpu-b", 8, cordoned=True)]
+    api.cluster_pods = [_pod("gpu-b", 2)]
+    probe = _driver(settings, api).probe_capacity(
+        MachineInfo(name="pool", host="", driver="k8s", node_selector=POOL)
+    )
+    assert probe["gpu_free"] == 14 and probe["node_gpu_max"] == 8
+
+    without = _clone(k8s_api_mode="kubectl")
+    api = _ClusterApi(without)
+    api.nodes = [_node("gpu-a", 8, cordoned=True)]
+    api.cluster_pods = []
+    probe = _driver(without, api).probe_capacity(
+        MachineInfo(name="pool", host="", driver="k8s", node_selector=POOL)
+    )
+    assert probe["gpu_free"] == 0, "a cordon we do not tolerate keeps our pods off"
+
+
 # -- sessions on a pool -------------------------------------------------------------
 
 
