@@ -113,6 +113,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **GPU nodes cordoned for the platform** can be used. An admin may cordon
+  nodes to keep other workloads off them, for this platform to use. With
+  `node.kubernetes.io/unschedulable:NoSchedule` among the GPU cluster's
+  tolerations, our pods already scheduled there, but the platform still
+  counted the nodes as having no free cards, and the weights check skipped
+  them; it now counts them.
+
 - **The quickstart installs LLMBench with 32 benchmark slots** (4 worker pods ×
   8 processes), not LLMBench's default of 2. Every benchmark past the second
   queued while its engine held GPUs: a third validation run waited 9 minutes.

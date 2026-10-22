@@ -813,9 +813,25 @@ def _node_gpu_count(node: dict) -> int:
         return 0
 
 
-def _node_takes_pods(node: dict) -> bool:
-    """Ready and not cordoned: a node the scheduler places new pods on."""
-    if (node.get("spec") or {}).get("unschedulable"):
+CORDON_TAINT = "node.kubernetes.io/unschedulable"
+
+
+def _tolerates_cordon(settings: Settings | None) -> bool:
+    """Whether this cluster's pods carry the cordon's toleration. An admin who
+    cordons GPU nodes to keep everything else off them, for this platform to
+    use, adds `node.kubernetes.io/unschedulable:NoSchedule` to the cluster's
+    tolerations: the scheduler then places our pods there and nothing else."""
+    for raw in ((settings.k8s_tolerations if settings else "") or "").split(","):
+        key = raw.strip().partition(":")[0].partition("=")[0].strip()
+        if key == CORDON_TAINT:
+            return True
+    return False
+
+
+def _node_takes_pods(node: dict, settings: Settings | None = None) -> bool:
+    """Ready, and not cordoned unless our pods tolerate the cordon: a node the
+    scheduler places our new pods on."""
+    if (node.get("spec") or {}).get("unschedulable") and not _tolerates_cordon(settings):
         return False
     return any(
         cond.get("type") == "Ready" and cond.get("status") == "True"
@@ -1393,7 +1409,7 @@ class K8sDriver(DeploymentDriver):
             count = _node_gpu_count(node)
             gpu_type = _node_gpu_type(node)
             total += count
-            schedulable = _node_takes_pods(node)
+            schedulable = _node_takes_pods(node, self.settings)
             used = None if held is None else held.get(_node_name(node), 0)
             free = None if used is None else (max(count - used, 0) if schedulable else 0)
             if schedulable:
@@ -1708,7 +1724,7 @@ class K8sDriver(DeploymentDriver):
         try:
             api = self.api
             names = [_node_name(n) for n in api.list("nodes", label_selector=selector)
-                     if _node_takes_pods(n)]
+                     if _node_takes_pods(n, self.settings)]
         except Exception as exc:  # noqa: BLE001 — a probe reports, never raises
             return unknown(f"could not read the machine's nodes: {str(exc)[:300]}")
         if not names:
