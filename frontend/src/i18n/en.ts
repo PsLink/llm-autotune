@@ -204,6 +204,17 @@ export default {
 
 
   runs: {
+    serveTab: 'Serve command',
+    serveNote: 'Serve this config on your own box: the real weights path, one flag per line.',
+    engineArgsTab: 'Engine args',
+    engineArgsNote: 'The config as the platform stores it (canonical keys).',
+    engineArgsCopied: 'Engine args copied',
+    launchConfigTab: 'Launch config',
+    launchConfigNote: 'Image, weights, cards, engine args and env: everything to run it again.',
+    launchConfigCopied: 'Launch config copied',
+    appliedTab: 'Applied',
+    appliedNote: 'Exactly what the platform applied to launch it.',
+    appliedCopied: 'Launch command copied',
     title: 'Runs',
     noneMatch: 'No runs match.',
     campaign: 'Campaign',
@@ -253,6 +264,13 @@ export default {
   },
 
   campaign: {
+    winner: 'Winner',
+    vsProduction: 'vs production',
+    validated: 'validated',
+    screenOnly: 'search result, not validated',
+    launchConfig: 'Launch config',
+    changesFromProduction: 'Changes from production',
+    sameAsProduction: 'Same config as production',
     // The chrome of the detail page. The explanatory prose inside each tab is
     // still English only — see docs; it is the next slice, not a forgotten one.
     evaluated: '{done}/{total} candidates evaluated',

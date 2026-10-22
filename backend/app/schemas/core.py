@@ -494,6 +494,9 @@ class RunOut(BaseModel):
     # Set when a policy session drove this run (a launch or its validation), so
     # the UI can offer that session's container log alongside the run's.
     policy_session_id: int | None = None
+    # A benchmark of a policy's launch: the engine run it measured, which holds
+    # the launch (its command, its pod) the benchmark itself never had.
+    launch_run_id: int | None = None
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
