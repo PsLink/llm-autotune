@@ -40,6 +40,30 @@ instead (**Account ▸ Users ▸ Add user**), turn sign-up off:
 allowSignup: false
 ```
 
+## Settings
+
+An admin sets the platform's links to other systems on the **Settings** page
+(user menu ▸ Settings). A value set there wins over the install's, which still
+applies while a field is empty. The checks run from the platform, not the
+browser, because the platform's API is what calls these systems.
+
+- **VictoriaLogs:** the store replay datasets are sampled from. It overrides
+  `llmbench.victoriaLogsUrl` ([Replay datasets](#replay-datasets)).
+- **Model catalog server:** a model-catalog `catalog-server`. The catalog
+  export reads which models it has at `<address>/index-v2.json`, instead of
+  `catalogIndexUrl`. With the server's write key set too, the export can
+  publish to it directly ([Publishing it to the model catalog](guide/results.md#publishing-it-to-the-model-catalog)).
+  The key is a token from the server's tokens file. It is stored encrypted and
+  never shown again.
+- **LLM endpoints:** OpenAI-compatible endpoints (requests go to
+  `<base URL>/chat/completions`), each registered once with its model and key.
+  **Test** makes one short call from the platform. Report writing uses the
+  endpoint chosen under **What uses which**. An agent policy chooses its
+  endpoint in its own form on the **Policies** page: at launch the endpoint
+  sets `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY` in the policy's
+  container, over the same names in its env, and the key is redacted from the
+  launch command. An endpoint in use cannot be deleted.
+
 ## Search policies
 
 Without a policy, a campaign tries every config in its search space. A policy
@@ -220,7 +244,8 @@ VICTORIALOGS_URL=http://victorialogs.logging:9428 deploy/quickstart.sh
 This turns on LLMBench's dataset collector and its datasets volume, and sets
 the address the dataset form starts from (`llmbench.victoriaLogsUrl`; without
 it, the form starts from `http://victorialogs.logging:9428`). The script
-remembers the address for later runs.
+remembers the address for later runs. An admin can also change the address
+later on the [Settings](#settings) page, without running the install again.
 
 The datasets volume is shared by LLMBench's backend, workers and collector.
 On a cluster with one node the node's disk is enough; with more, set a

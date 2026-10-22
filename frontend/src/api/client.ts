@@ -548,11 +548,36 @@ export interface CatalogExportPreview {
   /** Where the perf report came from: "saved:<report id>"; "" when none ships. */
   report_source: string
   hf: string
+  /** A catalog server and its write key are set (Settings): Publish to catalog works. */
+  catalog_writable: boolean
+  catalog_url: string
   /** The metadata the server drafted (or was given), for the form to adopt. */
   display_name: string
   description: string
   family: string
   tags: string[]
+}
+
+/** POST /catalog-export/publish: the export written through the catalog
+ *  server's api/v2, as a dry run (nothing committed) or for real. */
+export interface CatalogPublishResult {
+  url: string
+  dry_run: boolean
+  ok: boolean
+  writes: {
+    path: string
+    /** add_model | add | replace | metadata */
+    action: string
+    /** ok | unchanged | failed */
+    status: string
+    commit: string | null
+    version: string
+    digest: string
+    message: string
+  }[]
+  message: string
+  /** The export as published: no report, so no tuning entry. */
+  export: CatalogExportPreview | null
 }
 
 /** GET /agent/v1/runs/{id}/launch: everything needed to run a config again. */
@@ -878,7 +903,54 @@ export interface Policy {
   /** Names of the encrypted secret variables; their values are never returned. */
   secret_env_keys?: string[]
   ports: number
+  /** The LLM endpoint (Settings) it calls: sets LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. */
+  llm_endpoint_id?: number | null
   created_at: string | null
+}
+
+// -- settings (admin) -----------------------------------------------------------
+
+/** GET/PUT /settings. A URL left empty falls back to the install's value. */
+export interface PlatformSettings {
+  victorialogs_url: string
+  victorialogs_install: string
+  catalog_url: string
+  catalog_index_install: string
+  /** What the catalog export reads: <catalog_url>/index-v2.json, or the install's. */
+  catalog_index_url: string
+  catalog_has_token: boolean
+  catalog_writable: boolean
+  reports_llm_endpoint_id: number | null
+}
+
+export interface PlatformCheck {
+  ok: boolean
+  url: string
+  message: string
+  writable?: boolean | null
+  token_ok?: boolean | null
+  models?: number | null
+}
+
+/** An OpenAI-compatible endpoint, registered once; its key is never returned. */
+export interface LlmEndpoint {
+  id: number
+  name: string
+  description: string
+  base_url: string
+  model: string
+  has_api_key: boolean
+  /** "reports", and "policy:<name>" for each policy that uses it. */
+  used_by: string[]
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface LlmTest {
+  ok: boolean
+  message: string
+  seconds: number | null
+  reply: string
 }
 
 // -- logs ---------------------------------------------------------------------

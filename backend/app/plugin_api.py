@@ -84,6 +84,7 @@ from app.core.auth import (
     require_admin_principal,
 )
 from app.core.config import get_settings
+from app.core.platform_settings import LlmTarget, reports_llm
 from app.core.secrets import decrypt_secret, encrypt_secret
 from app.datasets import pinning
 from app.datasets.profiles import BuildInFlight, DatasetBuild, DatasetProfileError
@@ -201,6 +202,9 @@ __all__ = [
     "get_current_user",
     "get_principal",
     "get_settings",
+    # The LLM endpoint an admin chose for report writing (Settings), or None.
+    "LlmTarget",
+    "reports_llm",
     "require_admin",
     "require_admin_principal",
     "sync_session_factory",

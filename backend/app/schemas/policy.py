@@ -118,6 +118,9 @@ class PolicyBase(BaseModel):
     # the container's launch command. Secrets go in `secret_env`.
     env: dict[str, str] = Field(default_factory=dict)
     ports: int = Field(default=4, ge=1, le=16)
+    # The LLM endpoint (Settings → LLM endpoints) an agent policy calls; at
+    # launch it sets LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. None: no model.
+    llm_endpoint_id: int | None = None
 
 
 class PolicyIn(PolicyBase):

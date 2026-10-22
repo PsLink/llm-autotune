@@ -59,6 +59,7 @@ const initial = computed(() => (auth.user?.username ?? '?').charAt(0).toUpperCas
 function onCommand(command: string) {
   if (command === 'account') router.push('/account')
   else if (command === 'keys') router.push('/api-keys')
+  else if (command === 'settings') router.push('/settings')
   else if (command === 'logout') logout()
 }
 
@@ -160,6 +161,10 @@ function logout() {
             <el-dropdown-item command="keys">
               <a :href="href('/api-keys')" class="dropdown-link"
                 @click="onMenuLinkClick($event, '/api-keys')">{{ t('nav.apiKeys') }}</a>
+            </el-dropdown-item>
+            <el-dropdown-item v-if="auth.user?.role === 'admin'" command="settings">
+              <a :href="href('/settings')" class="dropdown-link"
+                @click="onMenuLinkClick($event, '/settings')">{{ t('nav.settings') }}</a>
             </el-dropdown-item>
             <el-dropdown-item divided command="logout">
               {{ t('nav.logOut') }}
