@@ -206,6 +206,17 @@ const zh: typeof en = {
 
 
   runs: {
+    serveTab: 'Serve 命令',
+    serveNote: '在自己的机器上运行这个配置：真实的权重路径，每行一个 flag。',
+    engineArgsTab: 'Engine 参数',
+    engineArgsNote: '平台存储的配置（规范化的 key）。',
+    engineArgsCopied: '已复制 engine 参数',
+    launchConfigTab: '启动配置',
+    launchConfigNote: '镜像、权重、卡数、engine 参数和环境变量：重新运行所需的全部信息。',
+    launchConfigCopied: '已复制启动配置',
+    appliedTab: '实际执行',
+    appliedNote: '平台启动它时实际执行的内容。',
+    appliedCopied: '已复制启动命令',
     title: '运行记录',
     noneMatch: '没有符合条件的 run。',
     campaign: 'Campaign',
@@ -253,6 +264,13 @@ const zh: typeof en = {
   },
 
   campaign: {
+    winner: '最佳配置',
+    vsProduction: '对比生产',
+    validated: '已验证',
+    screenOnly: '搜索结果，未验证',
+    launchConfig: '启动配置',
+    changesFromProduction: '相对生产的改动',
+    sameAsProduction: '与生产配置相同',
     evaluated: '已评估 {done}/{total} 个候选配置',
     grid: '搜索空间',
     objective: '目标',

@@ -455,6 +455,8 @@ export interface Run {
   error: string
   /** Set when a policy session drove this run — links to its container log. */
   policy_session_id: number | null
+  /** A benchmark of a policy's launch: the engine run it measured. */
+  launch_run_id?: number | null
   started_at: string | null
   finished_at: string | null
   created_at: string
@@ -576,6 +578,31 @@ export interface CatalogPublishResult {
   message: string
   /** The export as published: no report, so no tuning entry. */
   export: CatalogExportPreview | null
+}
+
+/** GET /agent/v1/runs/{id}/launch: everything needed to run a config again. */
+export interface RunLaunch {
+  run_id: number
+  cards: number
+  config: {
+    engine: string
+    image: string
+    model_path: string
+    served_model_name: string
+    service_port: number
+    engine_args: Record<string, unknown>
+    extra_env: Record<string, string>
+    extra_volumes: Record<string, string>
+    gpu_type: string
+  }
+  rendered: {
+    /** Exactly what the platform applied (docker run, or the k8s manifest). */
+    docker_command: string
+    /** The in-container server command. */
+    engine_command: string
+    /** `sglang serve` / `vllm serve` on the real weights, one flag per line. */
+    serve_command: string
+  }
 }
 
 export interface LeaderboardEntry {
