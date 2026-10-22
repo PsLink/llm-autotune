@@ -543,6 +543,12 @@ def render_policy_job(spec: WorkloadSpec, settings: Settings) -> dict:
             pod_spec["nodeSelector"] = selector
         if gpus and settings.k8s_runtime_class:
             pod_spec["runtimeClassName"] = settings.k8s_runtime_class
+    elif (settings.k8s_policy_node_selector or "").strip():
+        # Not the machine's selector (that would park it on GPU hardware) nor
+        # the global one: only where the install says controllers may run.
+        selector = _node_selector_pairs(settings.k8s_policy_node_selector, settings)
+        if selector:
+            pod_spec["nodeSelector"] = selector
     # The same tolerations an engine with these cards would carry: a policy
     # that takes cards lands on a tainted GPU node like an engine does, and the
     # explicitly declared ones apply to every pod. Without them a self-serving

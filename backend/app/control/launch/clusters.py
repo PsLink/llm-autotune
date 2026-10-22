@@ -68,6 +68,7 @@ _OVERRIDABLE: tuple[str, ...] = (
     "k8s_policy_ttl_after_finished",
     "k8s_policy_deadline_seconds",
     "k8s_policy_priority_class",
+    "k8s_policy_node_selector",
 )
 
 # Cluster-row column -> the `k8s_*` name it overrides. Fields absent here (the
@@ -151,6 +152,7 @@ class K8sClusterSettings:
     k8s_policy_ttl_after_finished: int = 86400
     k8s_policy_deadline_seconds: int = 0
     k8s_policy_priority_class: str = ""
+    k8s_policy_node_selector: str = ""
 
     @property
     def cache_key(self) -> str:

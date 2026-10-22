@@ -363,6 +363,11 @@ class Settings(BaseSettings):
     # Optional PriorityClass for policy pods. A controller costing 100m CPU
     # being preempted by production is a bad trade; empty = cluster default.
     k8s_policy_priority_class: str = ""
+    # Where a delegated-only policy pod may run, as "k=v,k2=v2"; empty = any
+    # node (the default: it asks for no cards). For a cluster where only some
+    # nodes reach what the policy calls, such as an agent policy's LLM
+    # endpoint. A self-serving policy follows its machine's selector instead.
+    k8s_policy_node_selector: str = ""
 
 
 @lru_cache
