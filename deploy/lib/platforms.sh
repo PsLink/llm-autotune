@@ -525,9 +525,26 @@ secrets:
   serviceApiKey: "$SERVICE_API_KEY"
 postgres:
   password: "$LLMBENCH_POSTGRES_PASSWORD"
+# 32 benchmark runs at once (4 worker pods x 8 processes): AutoTune starts one
+# per trial in flight and its validation runs side by side, and a run that
+# finds no free slot waits, its engine holding GPUs. LLMBench 0.3.0's chart
+# defaults to 2. A process peaks around 1.3 GiB on a large replay.
+replicaCount:
+  worker: 4
+resources:
+  worker:
+    requests:
+      memory: 2Gi
+    limits:
+      cpu: 8000m
+      memory: 16Gi
+app:
+  worker:
+    processes: 8
+    threads: 1
 EOF
     if [ -n "${HF_ENDPOINT:-}" ]; then
-      printf 'app:\n  extraEnv:\n    - name: HF_ENDPOINT\n      value: "%s"\n' "$HF_ENDPOINT"
+      printf '  extraEnv:\n    - name: HF_ENDPOINT\n      value: "%s"\n' "$HF_ENDPOINT"
     fi
     if [ -n "${VICTORIALOGS_URL:-}" ]; then
       printf 'datasets:\n  enabled: true\n  accessMode: %s\ndatasetBuilder:\n  enabled: true\n' "$datasets_access"

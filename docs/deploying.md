@@ -148,6 +148,17 @@ creates on LLMBench is filed under the group tag `llm-autotune`. The
 full contract between the two platforms (routes, roles, metric names, dataset
 stamping) is in llm-bench's `docs/api/for-autotune.md`.
 
+**Benchmark slots.** LLMBench runs as many benchmarks at once as it has worker
+slots: worker pods × `app.worker.processes` × `app.worker.threads`. AutoTune
+starts one benchmark per trial in flight, and a campaign's validation runs its
+finalists and production side by side. A benchmark that finds no free slot
+waits in LLMBench's queue while its engine holds its GPUs; AutoTune's service
+account skips LLMBench's per-user cap, but not this queue. So size the slots to
+the most benchmarks your campaigns run at once: for a campaign, about its GPU
+budget ÷ the cards each config uses, more during validation. The quickstart
+installs 32 slots (4 pods × 8 processes, 16 Gi each); see llm-bench's
+`docs/deploying.md#sizing` to change it.
+
 `llmbench.webUrl` is where a person's browser reaches LLMBench; the run pages
 link there. It defaults to `llmbench.url`, which is usually a cluster-internal
 address, so set it to LLMBench's ingress.

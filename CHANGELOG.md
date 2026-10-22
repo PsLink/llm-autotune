@@ -91,6 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The quickstart installs LLMBench with 32 benchmark slots** (4 worker pods ×
+  8 processes), not LLMBench's default of 2. Every benchmark past the second
+  queued while its engine held GPUs: a third validation run waited 9 minutes.
+  `docs/deploying.md` says how to size the slots to a campaign.
+
 - **Force stop on a policy campaign no longer wedges the worker.** Stopping a
   policy's launch also stops the benchmarks on it, and each of those had a
   stop request of its own; the second stop raised on the already-ended run,
