@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Where a delegated policy pod runs** (`AUTOTUNE_K8S_POLICY_NODE_SELECTOR`,
+  `k=v,k2=v2`). Such a pod asks for no cards and had no node selector, so it
+  could land on any node, including one that cannot reach what the policy
+  calls, such as an agent policy's LLM endpoint. Empty keeps the old
+  behaviour; a self-serving policy still follows its machine.
+
 - **Settings page (admins).** The platform's links to other systems are set in
   the UI, over the install's values, and checked from the platform:
   - **External platforms:** the VictoriaLogs store replay datasets are sampled
