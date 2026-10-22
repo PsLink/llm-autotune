@@ -110,6 +110,26 @@ _POD_FAILED_EVENT_REASONS = {
 }
 
 
+def _pod_ready(pod: dict) -> bool:
+    return any(
+        c.get("type") == "Ready" and c.get("status") == "True"
+        for c in (pod.get("status") or {}).get("conditions") or []
+    )
+
+
+def _restarted_before_ready(container: dict) -> bool:
+    """A container the cluster restarted while the pod was never ready: the
+    engine process died during startup, whatever its exit code (an OOM at
+    CUDA-graph capture exits 0). The Deployment restarts it with the same
+    config, so it dies the same way — and each restart resets the container's
+    `startedAt`, which the ready timeout counts from, so without this a
+    config that dies after ten minutes loops on its cards all night. Runs
+    have no liveness probe, so nothing else restarts a loading engine."""
+    return int(container.get("restartCount") or 0) > 0 and bool(
+        (container.get("lastState") or {}).get("terminated")
+    )
+
+
 def _failure_class_for(reason: str) -> str:
     """Map a k8s pod/event reason onto the platform's failure vocabulary."""
     return {
@@ -942,6 +962,8 @@ class K8sDriver(DeploymentDriver):
                 terminated = (container.get("state") or {}).get("terminated") or {}
                 if terminated and terminated.get("exitCode") not in (0, None):
                     any_crashed = True
+                if _restarted_before_ready(container):
+                    any_crashed = True
         return DeploymentState.CRASHED if any_crashed else DeploymentState.STARTING
 
     def incarnation(self, handle: DeploymentHandle) -> str | None:
@@ -1027,6 +1049,14 @@ class K8sDriver(DeploymentDriver):
                 reason = waiting.get("reason")
                 if reason in _POD_FAILED_REASONS:
                     return (_failure_class_for(reason), waiting.get("message") or reason)
+                if not _pod_ready(pod) and _restarted_before_ready(container):
+                    last = (container.get("lastState") or {}).get("terminated") or {}
+                    return (
+                        "crash_loop",
+                        f"the engine exited before it was ready (exit code {last.get('exitCode')}"
+                        f"{', ' + last['reason'] if last.get('reason') else ''}) and the cluster "
+                        f"restarted it {int(container.get('restartCount') or 0)} time(s)",
+                    )
                 term = (container.get("state") or {}).get("terminated") or {}
                 if term and term.get("exitCode") not in (0, None):
                     if term.get("reason") == "OOMKilled":
