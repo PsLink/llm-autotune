@@ -13,7 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `k=v,k2=v2`). Such a pod asks for no cards and had no node selector, so it
   could land on any node, including one that cannot reach what the policy
   calls, such as an agent policy's LLM endpoint. Empty keeps the old
-  behaviour; a self-serving policy still follows its machine.
+  behaviour; a self-serving policy still follows its machine. Each GPU
+  cluster can set its own (**Policy node selector** in its settings, migration
+  `020_cluster_policy_node_selector`), since a policy runs on its machine's
+  cluster and the install's selector names a node of one cluster; a cluster
+  that sets none uses the install's.
 
 - **Settings page (admins).** The platform's links to other systems are set in
   the UI, over the install's values, and checked from the platform:

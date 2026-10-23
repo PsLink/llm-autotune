@@ -112,7 +112,9 @@ A policy runs as a Job on a GPU cluster and calls the platform at
 for no cards may run on any node; when only some nodes reach what it calls
 (an agent policy's LLM endpoint, say), pin it with
 `{name: AUTOTUNE_K8S_POLICY_NODE_SELECTOR, value: "kubernetes.io/hostname=<node>"}`
-under `extraEnv`. If the GPU clusters
+under `extraEnv`. That names a node of one cluster; a policy runs on its
+machine's cluster, so with several GPU clusters set **Policy node selector**
+on each cluster's settings (Resources), which takes precedence. If the GPU clusters
 reach the platform at a different address, set `publicApiUrl` in
 `llm-autotune.custom.yaml`.
 

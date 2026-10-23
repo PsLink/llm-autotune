@@ -185,6 +185,10 @@ class K8sClusterSettings:
         values = _copyable(settings)
         for column, attr in _ROW_MAP.items():
             values[attr] = getattr(row, column)
+        # Unlike the columns above, an empty one keeps the install's value: the
+        # install-wide pin is what a cluster without its own still relies on.
+        if (policy := (getattr(row, "policy_node_selector", "") or "").strip()):
+            values["k8s_policy_node_selector"] = policy
         values["k8s_api_mode"] = "unavailable" if not row.api_mode else row.api_mode
         return cls(
             cluster_id=row.id,

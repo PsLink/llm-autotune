@@ -101,6 +101,8 @@ export interface Cluster {
   model_pvc_root: string
   shm_size_mb: number
   node_selector: string
+  /** Where a delegated policy pod runs here; "" = the install's setting. */
+  policy_node_selector: string
   service_nodeport: number
   run_ttl_seconds: number
   in_cluster: boolean
@@ -142,6 +144,7 @@ export interface ClusterInput {
   model_pvc_root?: string
   shm_size_mb?: number
   node_selector?: string
+  policy_node_selector?: string
   service_nodeport?: number
   run_ttl_seconds?: number
   in_cluster?: boolean
