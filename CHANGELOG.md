@@ -201,6 +201,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Campaign page.** A bar's config card opens below the bar (above it near
+  the bottom of the window) and scrolls when long, instead of opening past the
+  page's right edge. Export to model catalog is a button in the header; Rerun
+  failed configs moved into the ⋯ menu.
+
 - **Catalog schemas** follow model-catalog `5b668ff`: a model's metadata no
   longer needs `source` (a model with no weights, such as a mock server), and
   a variant may run on no GPU (`requires.gpus: 0`) or as `engine: mock`.

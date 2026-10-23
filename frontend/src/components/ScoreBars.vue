@@ -197,8 +197,10 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
       </template>
     </div>
     <div class="rows" :class="{ scroll: shown.length > 14 }">
-      <el-popover v-for="row in shown" :key="row.run_id" placement="right-start" trigger="hover"
-        :width="400" :show-after="120" :hide-after="60" :persistent="false" popper-class="bar-pop">
+      <!-- Below the row, or above it near the bottom of the window: a row is
+           as wide as the card, so there is no room beside it. -->
+      <el-popover v-for="row in shown" :key="row.run_id" placement="bottom-start" trigger="hover"
+        :fallback-placements="['top-start', 'bottom-start']" :width="400" :show-after="120" :hide-after="60" :persistent="false" popper-class="bar-pop">
         <template #reference>
           <div class="row" :class="'k-' + kindOf(row)" role="button" tabindex="0"
             @click="emit('select', row)" @keydown.enter="emit('select', row)">
@@ -370,6 +372,9 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
 .pop {
   font-size: 12px;
   line-height: 1.5;
+  /* A long config scrolls rather than running off the window. */
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
 }
 .pop-head {
   display: flex;

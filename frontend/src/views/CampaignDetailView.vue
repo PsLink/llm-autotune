@@ -865,7 +865,7 @@ function moreAction(command: string) {
   if (command === 'logs') logOpen.value = true
   else if (command === 'clone') copyToNew()
   else if (command === 'export') exportOpen.value = true
-  else if (command === 'catalog') catalogOpen.value = true
+  else if (command === 'retry') void retryFailed()
   else if (command === 'delete') void deleteCampaign()
   else if (command === 'done') void markDone()
 }
@@ -1273,6 +1273,9 @@ onMounted(() => {
       <div class="actions">
         <el-button :icon="Tickets" @click="logOpen = true">{{ t('campaign.logs') }}</el-button>
         <el-button :icon="Document" @click="openReport">{{ t('campaign.report') }}</el-button>
+        <el-button :icon="Upload" :disabled="!catalogCandidates.length" @click="catalogOpen = true">
+          {{ t('catalogExport.menu') }}
+        </el-button>
         <!-- The occasional actions, one click away instead of a row of buttons
              nobody reads past. -->
         <el-dropdown trigger="click" @command="moreAction">
@@ -1286,8 +1289,12 @@ onMounted(() => {
                 title="Everything needed to recreate this campaign — import it on the New campaign page">
                 {{ t('campaign.exportYaml') }}
               </el-dropdown-item>
-              <el-dropdown-item command="catalog" :icon="Upload" :disabled="!catalogCandidates.length">
-                {{ t('catalogExport.menu') }}
+              <!-- Re-queues only candidates whose every run failed, then puts
+                   the campaign back to work. -->
+              <el-dropdown-item v-if="retryableCount" command="retry" :icon="RefreshRight">
+                {{ retryableCount === 1
+                  ? t('campaign.rerunFailedOne', { n: retryableCount })
+                  : t('campaign.rerunFailedMany', { n: retryableCount }) }}
               </el-dropdown-item>
               <el-dropdown-item v-if="closable" command="done" :icon="CircleCheck" divided>
                 {{ t('campaign.markDone') }}
@@ -1298,14 +1305,6 @@ onMounted(() => {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-
-        <!-- Re-queues only candidates whose every run failed, then puts the
-             campaign back to work. -->
-        <el-button v-if="retryableCount" :icon="RefreshRight" @click="retryFailed">
-          {{ retryableCount === 1
-            ? t('campaign.rerunFailedOne', { n: retryableCount })
-            : t('campaign.rerunFailedMany', { n: retryableCount }) }}
-        </el-button>
 
         <!-- The run control: one segmented group, the way forward first and
              Stop always last. Pause lets current runs finish; Stop ends them.
