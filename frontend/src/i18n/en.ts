@@ -45,7 +45,6 @@ export default {
     objectives: 'Objectives',
     datasets: 'Datasets',
     policies: 'Policies',
-    tuning: 'Automatic Tuning',
     baselines: 'Baselines',
     runs: 'Runs',
     resources: 'Resources',
@@ -56,6 +55,14 @@ export default {
     account: 'Account',
     signedInAs: 'Signed in as',
     language: 'Language',
+    library: 'Library',
+    hint: {
+      searchSpaces: 'The engine parameters a campaign sweeps',
+      objectives: 'What a campaign maximizes, and its redlines',
+      datasets: 'Real traffic, sampled for replay benchmarks',
+      policies: 'Search algorithms that pick the next config',
+      baselines: 'Production configs to measure against',
+    },
   },
 
   account: {
@@ -186,6 +193,11 @@ export default {
     kind: 'Kind',
     live: 'running',
     searchCampaigns: 'Name, model or image',
+    filter: 'Filter',
+    find: 'Find',
+    noValues: 'Nothing to pick',
+    remove: 'Remove the {name} filter',
+    hint: 'Filter',
   },
 
   campaigns: {

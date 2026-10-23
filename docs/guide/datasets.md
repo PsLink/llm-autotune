@@ -6,7 +6,7 @@ A **Replay** workload sends each candidate recorded production requests
 instead of random prompts, so the measurement reflects real prompt lengths
 and prefix-cache reuse. The requests come from a **dataset**: a sample of one
 model's traffic that LLMBench collects from the gateway's request logs in
-VictoriaLogs. **Automatic Tuning ▸ Datasets** sets datasets up and shows what
+VictoriaLogs. **Library ▸ Datasets** sets datasets up and shows what
 each sample holds.
 
 ![The Datasets page, with one dataset's sample opened](images/datasets-list.png)

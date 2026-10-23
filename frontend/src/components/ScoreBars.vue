@@ -142,16 +142,28 @@ function pct(row: ScoreRow): string {
 const isSet = (config: Record<string, unknown>, k: string) =>
   config[k] !== undefined && config[k] !== null
 
+/** Without a declared sweep (a policy's configs), the keys whose values
+ *  differ between the bars: what every config sets alike says nothing about
+ *  which bar is which. */
+const varying = computed(() => {
+  const rows = scored.value.filter((r) => !r.is_baseline && !r.config.__baseline__)
+  const keys = new Set(rows.flatMap((r) => Object.keys(r.config).filter((k) => !k.startsWith('__'))))
+  return [...keys].filter((k) => new Set(rows.map((r) => JSON.stringify(r.config[k]))).size > 1).sort()
+})
+
+/** The keys the labels name: the declared sweep, else what varies. */
+const keysShown = computed(() => (props.sweptKeys.length ? props.sweptKeys : varying.value))
+
 /** Every bar sets every swept key (a grid): values alone read cleanly under
  *  one caption naming the keys. A policy's configs each set a few keys of
  *  many, and "0.9" alone could be anyone's: those bars name their keys. */
 const dense = computed(() =>
-  props.sweptKeys.length > 0 && scored.value.every((r) =>
-    r.config.__baseline__ || props.sweptKeys.every((k) => isSet(r.config, k))))
+  keysShown.value.length > 0 && scored.value.every((r) =>
+    r.is_baseline || r.config.__baseline__ || keysShown.value.every((k) => isSet(r.config, k))))
 
 function summary(config: Record<string, unknown>): string {
   if (config.__baseline__) return 'baseline'
-  const keys = props.sweptKeys.length ? props.sweptKeys : Object.keys(config)
+  const keys = keysShown.value
   const set = keys.filter((k) => isSet(config, k))
   if (!set.length) return 'defaults'
   return set.map((k) => (dense.value ? String(config[k]) : `${k}=${config[k]}`)).join(' · ')
@@ -184,7 +196,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
     <div class="caption muted tiny">
       <!-- Each bar is labelled with values only; say once whose they are. The
            metric is named once, by the board above; the bars start at zero. -->
-      <span v-if="dense" class="mono">{{ sweptKeys.join(' · ') }}</span>
+      <span v-if="dense" class="mono">{{ keysShown.join(' · ') }}</span>
       <template v-if="hasBaseline">
         <span v-if="dense" class="sep">·</span>
         <span class="legend">
@@ -282,7 +294,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
   cursor: pointer;
   border-radius: 3px;
   display: grid;
-  grid-template-columns: minmax(90px, 200px) 1fr 92px 58px;
+  grid-template-columns: minmax(120px, 360px) 1fr 92px 58px;
   align-items: center;
   gap: 10px;
   height: 20px;
@@ -349,7 +361,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
    colours its swatch, its bar fill, and (for the extremes) its number. */
 .k-better .dot,
 .k-better .fill {
-  background: var(--el-color-success);
+  background: var(--el-color-primary);
 }
 .k-baseline .dot,
 .k-baseline .fill {
@@ -386,7 +398,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
   margin-left: auto;
 }
 .pop-head .k-better {
-  color: var(--el-color-success);
+  color: var(--el-color-primary);
 }
 .pop-head .k-worse {
   color: var(--el-color-warning);

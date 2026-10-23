@@ -217,6 +217,36 @@ async function abortSession() {
   }
 }
 
+/** A space written for this campaign alone lives only in it; saving it puts
+ *  it on the Search spaces page for the next campaign. */
+const spaceSaved = ref('')
+async function saveSpace() {
+  const c = campaign.value
+  if (!c) return
+  let name: string
+  try {
+    ({ value: name } = await ElMessageBox.prompt('A name for it on the Search spaces page.',
+      'Save as search space', {
+        inputValue: `${c.served_model_name}-${c.id}`, confirmButtonText: 'Save',
+        cancelButtonText: 'Cancel', inputPattern: /\S/, inputErrorMessage: 'Give it a name',
+      }))
+  } catch {
+    return
+  }
+  const space = (c.search_space ?? {}) as Record<string, unknown>
+  try {
+    await api.post('/search-spaces', {
+      name: name.trim(), engine: c.engine, description: `From campaign ${c.name}`,
+      base: space.base ?? {}, grid: space.grid ?? {}, tied: space.tied ?? [],
+      ranges: space.ranges ?? {}, conditions: space.conditions ?? {},
+    })
+    spaceSaved.value = name.trim()
+    ElMessage.success(`Saved as ${name.trim()}`)
+  } catch (error) {
+    ElMessage.error(apiErrorText(error, 'Could not save the search space'))
+  }
+}
+
 /** The grid this campaign was created from, when it recorded one. */
 const spaceName = computed(
   () => ((campaign.value?.search_space ?? {}) as { name?: string }).name ?? '')
@@ -1710,8 +1740,10 @@ onMounted(() => {
 
         <div class="block-head">
           <h3>Search space</h3>
-          <span class="muted tiny">{{ spaceName || 'written for this campaign' }}</span>
+          <span class="muted tiny">{{ spaceName || (spaceSaved ? `saved as ${spaceSaved}` : 'written for this campaign') }}</span>
           <span class="spacer" />
+          <el-button v-if="!spaceName && !spaceSaved" size="small" text type="primary" @click="saveSpace">
+            Save as search space</el-button>
           <el-button size="small" text type="primary"
             @click="copyText(searchSpaceYaml, 'Search space copied')">Copy YAML</el-button>
         </div>

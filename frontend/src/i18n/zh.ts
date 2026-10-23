@@ -50,7 +50,6 @@ const zh: typeof en = {
     objectives: '优化目标',
     datasets: '回放数据集',
     policies: 'Policies',
-    tuning: '自动调优',
     baselines: '基线',
     runs: '运行记录',
     resources: '机器资源',
@@ -61,6 +60,14 @@ const zh: typeof en = {
     account: '账号',
     signedInAs: '当前登录',
     language: '语言',
+    library: '配置库',
+    hint: {
+      searchSpaces: 'Campaign 要搜索的引擎参数',
+      objectives: 'Campaign 优化的指标与红线',
+      datasets: '真实流量采样，用于回放压测',
+      policies: '决定下一个配置的搜索算法',
+      baselines: '用作对比的生产配置',
+    },
   },
 
   account: {
@@ -187,6 +194,11 @@ const zh: typeof en = {
     kind: '类型',
     live: '运行中',
     searchCampaigns: '名称、模型或镜像',
+    filter: '筛选',
+    find: '查找',
+    noValues: '没有可选项',
+    remove: '移除「{name}」筛选',
+    hint: '筛选',
   },
 
   campaigns: {
