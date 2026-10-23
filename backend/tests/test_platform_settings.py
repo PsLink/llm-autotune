@@ -155,6 +155,8 @@ def _catalog_server(calls: list, *, writable=True, token=TOKEN, models=None):
                 return httpx.Response(412, json={"error": "exists"})
             doc = yaml.safe_load(request.content)
             dry = bool(request.url.params.get("dryRun"))
+            if not dry:
+                models.setdefault(model, {})[vid] = {}
             return httpx.Response(201 if not exists else 200, json={
                 "commit": None if dry else "d" * 40, "path": f"models/{model}/{vid}.yaml",
                 "version": doc.get("version"), "digest": "sha256:" + "e" * 64,
@@ -163,6 +165,14 @@ def _catalog_server(calls: list, *, writable=True, token=TOKEN, models=None):
             if request.headers.get("If-Match") != f'"sha256:{parts[4]}-meta"':
                 return httpx.Response(412, json={"error": "changed"})
             dry = bool(request.url.params.get("dryRun"))
+            # As catalog-server does: defaultVariant must be a variant the
+            # model has now (a dry run's variant writes committed nothing).
+            default = (yaml.safe_load(request.content) or {}).get("defaultVariant")
+            if default is not None and default not in models.get(parts[4], {}):
+                return httpx.Response(422, json={
+                    "error": "not a change this catalog takes",
+                    "problems": [f"models/{parts[4]}/metadata.yaml: defaultVariant: "
+                                 f"{default!r} is not a variant of {parts[4]}"]})
             return httpx.Response(200, json={"commit": None if dry else "f" * 40,
                                              "path": f"models/{parts[4]}/metadata.yaml"})
         return httpx.Response(404, text="not in this catalog\n")
@@ -394,3 +404,27 @@ async def test_the_export_reads_the_catalog_set_in_settings(stack, monkeypatch, 
     await http.post("/api/catalog-export/preview", json={"variants": PAIR, "hf": HF})
     expected = f"{CATALOG}/index-v2.json" if url else get_settings().catalog_index_url
     assert seen == [expected]
+
+
+async def test_a_new_default_variant_passes_the_dry_run_then_lands(stack, monkeypatch):
+    """The catalog takes a defaultVariant only if the model has that variant. A
+    dry run commits nothing, so a variant this publish adds is not there when
+    the metadata is checked: the dry run checks the metadata without that key,
+    and the real write sends it after the variant is committed."""
+    http, _, factory = stack
+    await _seed(factory)
+    calls: list = []
+    published = {"qwen3.5-35b-a3b": {"sglang-tp1-b300": {}}}
+    monkeypatch.setattr(catalog_api, "_publish_transport",
+                        lambda: _catalog_server(calls, models=published))
+    await http.put("/api/settings", json={"catalog_url": CATALOG, "catalog_token": TOKEN})
+    body = {"variants": [{"run_id": 102, "role": "optimized"}], "hf": HF, "use_catalog": False,
+            "default_variant": "sglang-tp2-h800-optimized"}
+    dry = (await http.post("/api/catalog-export/publish", json=body)).json()
+    assert dry["ok"], dry
+    meta = next(w for w in dry["writes"] if w["action"] == "metadata")
+    assert "checked without defaultVariant" in meta["message"]
+    done = (await http.post("/api/catalog-export/publish", json={**body, "dry_run": False})).json()
+    assert done["ok"], done
+    sent = [c for c in calls if c[0] == "PUT" and c[1].endswith("/metadata") and not c[2]]
+    assert len(sent) == 1, "the real metadata write went out once, with its default"
