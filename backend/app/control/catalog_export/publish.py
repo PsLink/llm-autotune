@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+import yaml
 
 from app.control.catalog_export import CatalogExport
 
@@ -78,12 +79,29 @@ class _Refused(Exception):
 
 
 def _error(resp: httpx.Response) -> str:
+    """The server's reason. A 422 says what in its `problems` list; its
+    `error` alone ("not a change this catalog takes") names no file or field."""
     try:
         body = resp.json()
         text = str(body.get("error") or body.get("detail") or body)
+        problems = body.get("problems") if isinstance(body, dict) else None
+        if isinstance(problems, list) and problems:
+            text += ": " + "; ".join(str(p) for p in problems)
     except ValueError:
         text = resp.text
-    return f"{resp.status_code}: {text.strip()[:400]}"
+    return f"{resp.status_code}: {text.strip()[:800]}"
+
+
+def _without_new_default(text: str, added: set[str]) -> tuple[str, bool]:
+    """metadata.yaml for a dry run, when its defaultVariant names a variant
+    this publish adds: the server checks a dry run against the catalog as it
+    is, where that variant does not exist yet, and refuses the name. The real
+    write sends it unchanged, after the variant is committed."""
+    meta = yaml.safe_load(text) or {}
+    if not isinstance(meta, dict) or meta.get("defaultVariant") not in added:
+        return text, False
+    meta.pop("defaultVariant")
+    return yaml.safe_dump(meta, sort_keys=False, allow_unicode=True), True
 
 
 def _ascii(text: str) -> str:
@@ -147,9 +165,12 @@ async def _writes(
             json={"metadata": meta.text, "variants": [f.text for f in variants]},
         )
         return out
+    added: set[str] = set()
     for f in variants:
         vid = f.path.rsplit("/", 1)[-1].removesuffix(".yaml")
         etag = await cat.etag(f"models/{name}/variants/{vid}")
+        if etag is None:
+            added.add(vid)
         write = Write(path=f.path, action="replace" if etag else "add",
                       version=versions.get(f.path, ""))
         out.append(write)
@@ -163,14 +184,20 @@ async def _writes(
         write = Write(path=meta.path, action="metadata")
         out.append(write)
         etag = model_etag
-        if not dry_run:
+        text, deferred = meta.text, False
+        if dry_run:
+            text, deferred = _without_new_default(meta.text, added)
+        else:
             # The variant commits moved the branch, not this file's digest,
             # but read it again: someone else may have written it meanwhile.
             etag = await cat.etag(f"models/{name}/metadata") or model_etag
         await cat.send(
             write, "PUT", f"models/{name}/metadata", dry_run,
-            content=meta.text.encode(), headers={"Content-Type": YAML, "If-Match": etag},
+            content=text.encode(), headers={"Content-Type": YAML, "If-Match": etag},
         )
+        if deferred:
+            write.message = ("checked without defaultVariant, which names a variant this "
+                             "publish adds; the real write sends it after that variant")
     return out
 
 
@@ -183,9 +210,10 @@ async def publish(
     message: str = "",
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> Published:
-    """Dry-run every write; then, unless dry_run, make them. A new variant of
-    an existing model checks as a dry run against the catalog as it is, so a
-    metadata defaultVariant naming it can only be checked by the real write."""
+    """Dry-run every write; then, unless dry_run, make them. A dry run is
+    checked against the catalog as it is, so metadata naming a variant this
+    publish adds as defaultVariant is checked without that key; the real write
+    adds the variant first and sends the metadata as exported."""
     url = url.rstrip("/")
     async with httpx.AsyncClient(timeout=TIMEOUT, transport=transport) as client:
         cat = _Catalog(client, url, token, message)

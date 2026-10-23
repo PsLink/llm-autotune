@@ -119,6 +119,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Publish to catalog** refused a model the catalog already has when the
+  export made a new variant its default: the dry run checks the metadata
+  against the catalog as it is, where that variant does not exist yet, and the
+  server took `defaultVariant` for a variant the model lacks. The dry run now
+  checks the metadata without that key, and the real write sends it after the
+  variant is committed. A refusal also shows the server's list of problems,
+  not only "not a change this catalog takes".
+
 - **GPU nodes cordoned for the platform** can be used. An admin may cordon
   nodes to keep other workloads off them, for this platform to use. With
   `node.kubernetes.io/unschedulable:NoSchedule` among the GPU cluster's
