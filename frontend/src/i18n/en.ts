@@ -45,7 +45,6 @@ export default {
     objectives: 'Objectives',
     datasets: 'Datasets',
     policies: 'Policies',
-    tuning: 'Automatic Tuning',
     baselines: 'Baselines',
     runs: 'Runs',
     resources: 'Resources',
@@ -56,6 +55,14 @@ export default {
     account: 'Account',
     signedInAs: 'Signed in as',
     language: 'Language',
+    library: 'Library',
+    hint: {
+      searchSpaces: 'The engine parameters a campaign sweeps',
+      objectives: 'What a campaign maximizes, and its redlines',
+      datasets: 'Real traffic, sampled for replay benchmarks',
+      policies: 'Search algorithms that pick the next config',
+      baselines: 'Production configs to measure against',
+    },
   },
 
   account: {
@@ -186,6 +193,11 @@ export default {
     kind: 'Kind',
     live: 'running',
     searchCampaigns: 'Name, model or image',
+    filter: 'Filter',
+    find: 'Find',
+    noValues: 'Nothing to pick',
+    remove: 'Remove the {name} filter',
+    hint: 'Filter',
   },
 
   campaigns: {
@@ -266,12 +278,11 @@ export default {
 
   campaign: {
     winner: 'Winner',
-    vsProduction: 'vs production',
     validated: 'validated',
     screenOnly: 'search result, not validated',
     launchConfig: 'Launch config',
-    changesFromProduction: 'Changes from production',
-    sameAsProduction: 'Same config as production',
+    changesFromBaseline: 'Changes from the baseline',
+    sameAsBaseline: 'Same config as the baseline',
     // The chrome of the detail page. The explanatory prose inside each tab is
     // still English only — see docs; it is the next slice, not a forgotten one.
     evaluated: '{done}/{total} candidates evaluated',
@@ -476,16 +487,17 @@ export default {
     advanced: 'Advanced',
     publish: {
       button: 'Publish to catalog',
-      commit: 'Commit {n} write(s)',
+      commit: 'Confirm and publish {n} write(s)',
       failed: 'Could not publish',
-      checked: 'Every write would pass. Nothing is committed yet.',
+      confirmTitle: 'Ready to publish: {n} write(s) checked',
+      confirmBody: 'The catalog server accepted every write below in a dry run. Nothing is committed until you confirm. Catalog:',
+      back: 'Back',
       refused: 'The catalog would refuse this. Nothing was committed.',
       done: 'Published',
       failedMid: 'Publishing stopped partway',
       unchanged: 'already the same',
       noReport:
         'The catalog server takes no report, so the tuning result (which needs one) is not recorded. Download the zip to ship it with its report.',
-      footnote: 'Publish writes to {url} through its API: a check of every write first, then the commits.',
       actions: {
         add_model: 'Add the model',
         add: 'Add',
@@ -504,7 +516,7 @@ export default {
     includeVolumes: 'host paths',
     startup: 'Startup budget (min)',
     checking: 'Checking…',
-    result: 'Export',
+    result: 'What this export writes',
     fixFirst: 'Fix before exporting',
     status: {
       new: 'new, {version}',
@@ -528,12 +540,13 @@ export default {
     inExport: 'In the export',
     why: 'Why',
     actions: { kept: 'included', left_out: 'left out', emptyDir: 'empty dir', moved: 'moved' },
-    files: 'Files ({n})',
-    detailsN: 'Details ({n})',
+    files: 'File preview ({n})',
+    detailsN: 'How each value was derived ({n})',
     copied: 'Copied',
-    provenance: 'For the pull request description',
-    next: 'Unpack the zip at the root of model-catalog and open a pull request.',
-    refresh: 'Refresh',
+    provenance: 'Provenance',
+    provenanceHint: 'Where each file came from: paste into the pull request description.',
+    next: 'A zip to unpack at the root of a model-catalog checkout, for a pull request.',
+    refresh: 'Check again',
     failed: 'Could not build the export',
     download: 'Download (.zip)',
   },

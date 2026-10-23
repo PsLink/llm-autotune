@@ -217,6 +217,36 @@ async function abortSession() {
   }
 }
 
+/** A space written for this campaign alone lives only in it; saving it puts
+ *  it on the Search spaces page for the next campaign. */
+const spaceSaved = ref('')
+async function saveSpace() {
+  const c = campaign.value
+  if (!c) return
+  let name: string
+  try {
+    ({ value: name } = await ElMessageBox.prompt('A name for it on the Search spaces page.',
+      'Save as search space', {
+        inputValue: `${c.served_model_name}-${c.id}`, confirmButtonText: 'Save',
+        cancelButtonText: 'Cancel', inputPattern: /\S/, inputErrorMessage: 'Give it a name',
+      }))
+  } catch {
+    return
+  }
+  const space = (c.search_space ?? {}) as Record<string, unknown>
+  try {
+    await api.post('/search-spaces', {
+      name: name.trim(), engine: c.engine, description: `From campaign ${c.name}`,
+      base: space.base ?? {}, grid: space.grid ?? {}, tied: space.tied ?? [],
+      ranges: space.ranges ?? {}, conditions: space.conditions ?? {},
+    })
+    spaceSaved.value = name.trim()
+    ElMessage.success(`Saved as ${name.trim()}`)
+  } catch (error) {
+    ElMessage.error(apiErrorText(error, 'Could not save the search space'))
+  }
+}
+
 /** The grid this campaign was created from, when it recorded one. */
 const spaceName = computed(
   () => ((campaign.value?.search_space ?? {}) as { name?: string }).name ?? '')
@@ -865,7 +895,7 @@ function moreAction(command: string) {
   if (command === 'logs') logOpen.value = true
   else if (command === 'clone') copyToNew()
   else if (command === 'export') exportOpen.value = true
-  else if (command === 'catalog') catalogOpen.value = true
+  else if (command === 'retry') void retryFailed()
   else if (command === 'delete') void deleteCampaign()
   else if (command === 'done') void markDone()
 }
@@ -1273,6 +1303,9 @@ onMounted(() => {
       <div class="actions">
         <el-button :icon="Tickets" @click="logOpen = true">{{ t('campaign.logs') }}</el-button>
         <el-button :icon="Document" @click="openReport">{{ t('campaign.report') }}</el-button>
+        <el-button :icon="Upload" :disabled="!catalogCandidates.length" @click="catalogOpen = true">
+          {{ t('catalogExport.menu') }}
+        </el-button>
         <!-- The occasional actions, one click away instead of a row of buttons
              nobody reads past. -->
         <el-dropdown trigger="click" @command="moreAction">
@@ -1286,8 +1319,12 @@ onMounted(() => {
                 title="Everything needed to recreate this campaign — import it on the New campaign page">
                 {{ t('campaign.exportYaml') }}
               </el-dropdown-item>
-              <el-dropdown-item command="catalog" :icon="Upload" :disabled="!catalogCandidates.length">
-                {{ t('catalogExport.menu') }}
+              <!-- Re-queues only candidates whose every run failed, then puts
+                   the campaign back to work. -->
+              <el-dropdown-item v-if="retryableCount" command="retry" :icon="RefreshRight">
+                {{ retryableCount === 1
+                  ? t('campaign.rerunFailedOne', { n: retryableCount })
+                  : t('campaign.rerunFailedMany', { n: retryableCount }) }}
               </el-dropdown-item>
               <el-dropdown-item v-if="closable" command="done" :icon="CircleCheck" divided>
                 {{ t('campaign.markDone') }}
@@ -1298,14 +1335,6 @@ onMounted(() => {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-
-        <!-- Re-queues only candidates whose every run failed, then puts the
-             campaign back to work. -->
-        <el-button v-if="retryableCount" :icon="RefreshRight" @click="retryFailed">
-          {{ retryableCount === 1
-            ? t('campaign.rerunFailedOne', { n: retryableCount })
-            : t('campaign.rerunFailedMany', { n: retryableCount }) }}
-        </el-button>
 
         <!-- The run control: one segmented group, the way forward first and
              Stop always last. Pause lets current runs finish; Stop ends them.
@@ -1526,7 +1555,7 @@ onMounted(() => {
             <span class="muted tiny">{{ winnerObjective.unit || winnerObjective.label }}</span>
             <span v-if="winnerEntry.vs_baseline != null" class="mono"
               :class="beatsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) ? 'better' : 'worse'">
-              {{ fmtVsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) }} {{ t('campaign.vsProduction') }}</span>
+              {{ fmtVsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) }} {{ t('campaign.vsBaseline') }}</span>
             <el-tag size="small" effect="plain" :type="winnerEntry.stage === 'verify' ? 'warning' : 'info'">
               {{ winnerEntry.stage === 'verify' ? t('campaign.validated') : t('campaign.screenOnly') }}</el-tag>
             <el-tag v-if="winnerEntry.card_type" size="small" effect="plain" type="info">{{ winnerEntry.card_type }}</el-tag>
@@ -1537,9 +1566,9 @@ onMounted(() => {
             </span>
           </div>
           <div class="winner-config">
-            <span class="muted tiny">{{ t('campaign.changesFromProduction') }}</span>
+            <span class="muted tiny">{{ t('campaign.changesFromBaseline') }}</span>
             <ConfigChips v-if="winnerChanged.length" :config="winnerEntry.config" :keys="winnerChanged" />
-            <span v-else class="muted">{{ t('campaign.sameAsProduction') }}</span>
+            <span v-else class="muted">{{ t('campaign.sameAsBaseline') }}</span>
           </div>
         </div>
         <!-- The expensive stage first, in its own table: it decides the winner,
@@ -1711,8 +1740,10 @@ onMounted(() => {
 
         <div class="block-head">
           <h3>Search space</h3>
-          <span class="muted tiny">{{ spaceName || 'written for this campaign' }}</span>
+          <span class="muted tiny">{{ spaceName || (spaceSaved ? `saved as ${spaceSaved}` : 'written for this campaign') }}</span>
           <span class="spacer" />
+          <el-button v-if="!spaceName && !spaceSaved" size="small" text type="primary" @click="saveSpace">
+            Save as search space</el-button>
           <el-button size="small" text type="primary"
             @click="copyText(searchSpaceYaml, 'Search space copied')">Copy YAML</el-button>
         </div>

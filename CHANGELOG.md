@@ -201,6 +201,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Navigation.** The top row is Campaigns, Runs and Resources; what a
+  campaign is built from (search spaces, objectives, datasets, policies,
+  baselines) is one **Library** menu, each entry with a line saying what it
+  is. A plugin's `nav` takes `group: 'library'` (`'tuning'` still lands
+  there) and an optional `hint`.
+- **List filters** are one bar: a search, the active filters as removable
+  chips, and one Filter button with every field and its values' counts.
+- **Look.** One system font stack and one slate palette for the app and
+  Element Plus, status colours that sit with the accent, lists drawn as
+  cards, times in the app's language (an English page no longer reads
+  "10月22日"), Runs a page of 50 at a time. A policy campaign's bars are
+  labelled by the parameters that differ between its configs, values only,
+  with the names once above.
+- **Save as search space** on a campaign whose space was written for it
+  alone, so the next campaign can pick it from the Search spaces page.
+
+- **Campaign page.** A bar's config card opens below the bar (above it near
+  the bottom of the window) and scrolls when long, instead of opening past the
+  page's right edge. Export to model catalog is a button in the header; Rerun
+  failed configs moved into the ⋯ menu. The bars and the winner say "vs
+  baseline", not "vs production", and the baseline's bar, the mean of its
+  measurements, ranks by that mean rather than where its best measurement did.
+- **Export to model catalog.** Publish checks every write, then shows them and
+  the catalog's address on a confirmation step; only Confirm commits. One
+  footer (Check again, Download, Publish), aligned form fields, and sections
+  named for what they hold.
+
 - **Catalog schemas** follow model-catalog `5b668ff`: a model's metadata no
   longer needs `source` (a model with no weights, such as a mock server), and
   a variant may run on no GPU (`requires.gpus: 0`) or as `engine: mock`.

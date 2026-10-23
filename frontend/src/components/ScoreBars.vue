@@ -63,29 +63,28 @@ const emit = defineEmits<{ select: [row: ShownRow] }>()
 
 const scored = computed(() => props.rows.filter((r) => r.score !== null))
 
-/** The bars in board order, production's measurements collapsed into one bar
- *  where the first of them ranked. */
+/** The bars in board order, the baseline's measurements collapsed into one
+ *  bar placed by their mean: where the best of them ranked would put a bar
+ *  among configs that beat it. */
 const shown = computed<ShownRow[]>(() => {
   const base = scored.value.filter((r) => r.is_baseline)
-  const out: ShownRow[] = []
-  let placed = false
-  for (const r of scored.value) {
-    if (!r.is_baseline) {
-      out.push({ ...r, n: 1, values: [r.score!], run_ids: [r.run_id] })
-      continue
-    }
-    if (placed) continue
-    placed = true
-    const values = base.map((b) => b.score!)
-    out.push({
-      ...r,
-      score: values.reduce((a, b) => a + b, 0) / values.length,
-      holds_redlines: base.every((b) => b.holds_redlines),
-      n: values.length,
-      values,
-      run_ids: base.map((b) => b.run_id),
-    })
+  const out: ShownRow[] = scored.value
+    .filter((r) => !r.is_baseline)
+    .map((r) => ({ ...r, n: 1, values: [r.score!], run_ids: [r.run_id] }))
+  if (!base.length) return out
+  const values = base.map((b) => b.score!)
+  const bar: ShownRow = {
+    ...base[0],
+    score: values.reduce((a, b) => a + b, 0) / values.length,
+    holds_redlines: base.every((b) => b.holds_redlines),
+    n: values.length,
+    values,
+    run_ids: base.map((b) => b.run_id),
   }
+  const beats = (r: ShownRow) =>
+    r.holds_redlines && (props.direction === 'minimize' ? r.score! < bar.score! : r.score! > bar.score!)
+  const at = out.findIndex((r) => !beats(r))
+  out.splice(at < 0 ? out.length : at, 0, bar)
   return out
 })
 
@@ -143,16 +142,28 @@ function pct(row: ScoreRow): string {
 const isSet = (config: Record<string, unknown>, k: string) =>
   config[k] !== undefined && config[k] !== null
 
+/** Without a declared sweep (a policy's configs), the keys whose values
+ *  differ between the bars: what every config sets alike says nothing about
+ *  which bar is which. */
+const varying = computed(() => {
+  const rows = scored.value.filter((r) => !r.is_baseline && !r.config.__baseline__)
+  const keys = new Set(rows.flatMap((r) => Object.keys(r.config).filter((k) => !k.startsWith('__'))))
+  return [...keys].filter((k) => new Set(rows.map((r) => JSON.stringify(r.config[k]))).size > 1).sort()
+})
+
+/** The keys the labels name: the declared sweep, else what varies. */
+const keysShown = computed(() => (props.sweptKeys.length ? props.sweptKeys : varying.value))
+
 /** Every bar sets every swept key (a grid): values alone read cleanly under
  *  one caption naming the keys. A policy's configs each set a few keys of
  *  many, and "0.9" alone could be anyone's: those bars name their keys. */
 const dense = computed(() =>
-  props.sweptKeys.length > 0 && scored.value.every((r) =>
-    r.config.__baseline__ || props.sweptKeys.every((k) => isSet(r.config, k))))
+  keysShown.value.length > 0 && scored.value.every((r) =>
+    r.is_baseline || r.config.__baseline__ || keysShown.value.every((k) => isSet(r.config, k))))
 
 function summary(config: Record<string, unknown>): string {
-  if (config.__baseline__) return 'production'
-  const keys = props.sweptKeys.length ? props.sweptKeys : Object.keys(config)
+  if (config.__baseline__) return 'baseline'
+  const keys = keysShown.value
   const set = keys.filter((k) => isSet(config, k))
   if (!set.length) return 'defaults'
   return set.map((k) => (dense.value ? String(config[k]) : `${k}=${config[k]}`)).join(' · ')
@@ -185,7 +196,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
     <div class="caption muted tiny">
       <!-- Each bar is labelled with values only; say once whose they are. The
            metric is named once, by the board above; the bars start at zero. -->
-      <span v-if="dense" class="mono">{{ sweptKeys.join(' · ') }}</span>
+      <span v-if="dense" class="mono">{{ keysShown.join(' · ') }}</span>
       <template v-if="hasBaseline">
         <span v-if="dense" class="sep">·</span>
         <span class="legend">
@@ -197,8 +208,10 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
       </template>
     </div>
     <div class="rows" :class="{ scroll: shown.length > 14 }">
-      <el-popover v-for="row in shown" :key="row.run_id" placement="right-start" trigger="hover"
-        :width="400" :show-after="120" :hide-after="60" :persistent="false" popper-class="bar-pop">
+      <!-- Below the row, or above it near the bottom of the window: a row is
+           as wide as the card, so there is no room beside it. -->
+      <el-popover v-for="row in shown" :key="row.run_id" placement="bottom-start" trigger="hover"
+        :fallback-placements="['top-start', 'bottom-start']" :width="400" :show-after="120" :hide-after="60" :persistent="false" popper-class="bar-pop">
         <template #reference>
           <div class="row" :class="'k-' + kindOf(row)" role="button" tabindex="0"
             @click="emit('select', row)" @keydown.enter="emit('select', row)">
@@ -218,29 +231,29 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
           <div class="pop-head">
             <b class="mono">{{ fmt(row.score!) }}</b>
             <span v-if="unit" class="muted">{{ unit }}</span>
-            <span v-if="pct(row)" class="mono" :class="'k-' + kindOf(row)">{{ pct(row) }} vs production</span>
+            <span v-if="pct(row)" class="mono" :class="'k-' + kindOf(row)">{{ pct(row) }} vs baseline</span>
             <span class="muted pop-run">
-              {{ row.n > 1 ? `production · mean of ${row.n} runs` : (row.is_baseline ? 'production' : `run #${row.run_id}`) }}
+              {{ row.n > 1 ? `baseline · mean of ${row.n} runs` : (row.is_baseline ? 'baseline' : `run #${row.run_id}`) }}
             </span>
           </div>
           <div v-if="row.n > 1" class="muted tiny">runs {{ row.run_ids.map((i) => '#' + i).join(' ') }}: {{ row.values.map(fmt).join(' · ') }}</div>
           <div v-if="!row.holds_redlines" class="pop-bad tiny">Rejected: {{ (row.breaches ?? []).join('; ') || 'crossed a redline' }}</div>
           <div v-if="row.comparable === false" class="pop-bad tiny">Replayed a different dataset build than the campaign pinned.</div>
           <div v-if="offCard(row)" class="pop-bad tiny">
-            Ran on {{ row.card_type }}, production on {{ baselineCard }}: not comparable per card.</div>
+            Ran on {{ row.card_type }}, the baseline on {{ baselineCard }}: not comparable per card.</div>
           <div v-else-if="row.card_type" class="muted tiny">GPU {{ row.card_type }}</div>
           <template v-for="lines in [configLines(row.config)]" :key="'l'">
             <div v-if="production && !row.is_baseline" class="pop-sec tiny muted">
-              {{ lines.changed.length || lines.removed.length ? 'Changed from production' : 'Same config as production' }}</div>
+              {{ lines.changed.length || lines.removed.length ? 'Changed from baseline' : 'Same config as the baseline' }}</div>
             <div v-for="c in lines.changed" :key="c.key" class="kv mono" :class="{ changed: production && !row.is_baseline }">
               <span>{{ c.key }}</span><span>{{ show(c.value) }}<i v-if="production && !row.is_baseline" class="was">
-                {{ c.inProd ? `was ${show(c.was)}` : 'not set in production' }}</i></span>
+                {{ c.inProd ? `was ${show(c.was)}` : 'not set in the baseline' }}</i></span>
             </div>
             <div v-for="k in lines.removed" :key="'-' + k" class="kv mono changed">
-              <span>{{ k }}</span><span><i class="was">unset (production: {{ show(production?.[k]) }})</i></span>
+              <span>{{ k }}</span><span><i class="was">unset (baseline: {{ show(production?.[k]) }})</i></span>
             </div>
             <template v-if="lines.kept.length">
-              <div class="pop-sec tiny muted">{{ row.is_baseline ? 'Config' : 'Same as production' }}</div>
+              <div class="pop-sec tiny muted">{{ row.is_baseline ? 'Config' : 'Same as the baseline' }}</div>
               <div v-for="k in lines.kept" :key="'=' + k" class="kv mono muted">
                 <span>{{ k }}</span><span>{{ show(row.config[k]) }}</span>
               </div>
@@ -281,7 +294,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
   cursor: pointer;
   border-radius: 3px;
   display: grid;
-  grid-template-columns: minmax(90px, 200px) 1fr 92px 58px;
+  grid-template-columns: minmax(120px, 360px) 1fr 92px 58px;
   align-items: center;
   gap: 10px;
   height: 20px;
@@ -348,7 +361,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
    colours its swatch, its bar fill, and (for the extremes) its number. */
 .k-better .dot,
 .k-better .fill {
-  background: var(--el-color-success);
+  background: var(--el-color-primary);
 }
 .k-baseline .dot,
 .k-baseline .fill {
@@ -370,6 +383,9 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
 .pop {
   font-size: 12px;
   line-height: 1.5;
+  /* A long config scrolls rather than running off the window. */
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
 }
 .pop-head {
   display: flex;
@@ -382,7 +398,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
   margin-left: auto;
 }
 .pop-head .k-better {
-  color: var(--el-color-success);
+  color: var(--el-color-primary);
 }
 .pop-head .k-worse {
   color: var(--el-color-warning);
