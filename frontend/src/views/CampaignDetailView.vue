@@ -584,24 +584,30 @@ const StopIcon = () =>
   h('svg', { viewBox: '0 0 1024 1024', fill: 'currentColor' },
     [h('rect', { x: 224, y: 224, width: 576, height: 576, rx: 64 })])
 
+/** What the run control's Stop does now, the same test the server makes: a
+ *  searching policy is first asked to wrap up (its finalists are measured),
+ *  and only after that, or for anything else, does Stop end things at once.
+ *  The button says which, since the two lose very different amounts. */
+const stopIsRequest = computed(() => {
+  const s = session.value
+  return !!s && !!s.first_heartbeat_at && s.status === 'searching' && !s.finalize_requested_at
+})
+
 async function forceStop() {
   const live = liveRuns.value.length
-  const s = session.value
-  // A searching policy is first asked to wrap up (measure its finalists); a
-  // second Stop ends it at once.
-  const windDown = !!s && s.status === 'searching' && !s.finalize_requested_at
+  const windDown = stopIsRequest.value
   let message = 'Pause this campaign?'
   if (windDown) {
-    message = 'Ask the policy to wrap up? It measures its finalists, then stops. ' +
-      'Press Stop again to end it at once.'
+    message = 'Ask the policy to wrap up? Runs in progress finish, its finalists are measured, ' +
+      'then it stops. Force stop stays available if it should end at once.'
   } else if (live || policyLive.value) {
     const what = [live ? `${live} run(s)` : '', policyLive.value ? 'the policy' : '']
       .filter(Boolean).join(' and ')
     message = `Stop now? ${what} will be ended; measurements in progress are lost.`
   }
   try {
-    await ElMessageBox.confirm(message, t('campaign.forceStop'), {
-      confirmButtonText: windDown ? 'Wrap up' : t('campaign.forceStop'),
+    await ElMessageBox.confirm(message, windDown ? t('campaign.requestStop') : t('campaign.forceStop'), {
+      confirmButtonText: windDown ? t('campaign.requestStop') : t('campaign.forceStop'),
       cancelButtonText: 'Cancel', type: windDown ? 'warning' : 'error',
       confirmButtonClass: windDown ? '' : 'el-button--danger',
     })
@@ -614,7 +620,7 @@ async function forceStop() {
     ElMessage.error(apiErrorText(error, 'Could not stop'))
     return
   }
-  ElMessage.success(windDown ? 'The policy is wrapping up' : 'Stopped')
+  ElMessage.success(windDown ? 'Stop requested: the policy is wrapping up' : 'Stopped')
   await load()
 }
 
@@ -1365,9 +1371,11 @@ onMounted(() => {
           <el-button v-else type="primary" :icon="VideoPlay" @click="setStatus('active')">
             {{ t('campaign.start') }}</el-button>
           <el-button v-if="campaign.status === 'active' || liveRuns.length || policyLive"
-            class="stop"
-            :icon="StopIcon" title="Stop now: runs in progress are ended and their measurements lost"
-            @click="forceStop">{{ t('campaign.forceStop') }}</el-button>
+            :class="stopIsRequest ? 'stop-request' : 'stop'" :icon="StopIcon"
+            :title="stopIsRequest
+              ? 'Ask the policy to wrap up: runs in progress finish and its finalists are measured'
+              : 'Stop now: runs in progress are ended and their measurements lost'"
+            @click="forceStop">{{ stopIsRequest ? t('campaign.requestStop') : t('campaign.forceStop') }}</el-button>
         </el-button-group>
       </div>
     </div>
@@ -1955,6 +1963,9 @@ onMounted(() => {
 }
 .run-control .stop {
   color: var(--el-color-danger);
+}
+.run-control .stop-request {
+  color: var(--el-color-warning-dark-2);
 }
 .run-control .stop:hover,
 .run-control .stop:focus-visible {

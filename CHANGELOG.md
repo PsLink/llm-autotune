@@ -205,6 +205,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Stop says which stop it is.** On a campaign whose policy is searching, the
+  run control reads **Request stop** (the policy wraps up: runs in progress
+  finish and its finalists are measured); otherwise, including after a
+  request, it reads **Force stop** (runs in progress end and their
+  measurements are lost). Both were labelled Stop.
+
 - **Navigation.** The top row is Campaigns, Runs and Resources; what a
   campaign is built from (search spaces, objectives, datasets, policies,
   baselines) is one **Library** menu, each entry with a line saying what it
