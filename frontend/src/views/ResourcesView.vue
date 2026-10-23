@@ -90,6 +90,7 @@ const emptyClusterForm = () => ({
   workload_kind: 'deployment',
   node_host: '',
   gpu_resource: 'nvidia.com/gpu',
+  gpu_product_label: 'nvidia.com/gpu.product',
   runtime_class: 'nvidia',
   shm_size_mb: 2048,
   node_selector: '',
@@ -142,7 +143,8 @@ const addStep = ref<'connect' | 'nodes'>('connect')
 const clusterAdvanced = ref<string[]>([])
 const newCluster = ref({
   name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
-  runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu', tolerations: '',
+  runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu',
+  gpu_product_label: 'nvidia.com/gpu.product', tolerations: '',
   image_pull_secrets: '',
 })
 const nodesCluster = ref<{ id: number; name: string } | null>(null)
@@ -175,7 +177,8 @@ watch(() => newCluster.value.kubeconfig, (text, before) => {
 function openAddCluster() {
   newCluster.value = {
     name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
-    runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu', tolerations: '',
+    runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu',
+    gpu_product_label: 'nvidia.com/gpu.product', tolerations: '',
     image_pull_secrets: '',
   }
   clusterAdvanced.value = []
@@ -439,6 +442,7 @@ function openEditCluster(c: Cluster) {
     workload_kind: c.workload_kind,
     node_host: c.node_host,
     gpu_resource: c.gpu_resource,
+    gpu_product_label: c.gpu_product_label,
     runtime_class: c.runtime_class,
     shm_size_mb: c.shm_size_mb,
     node_selector: c.node_selector,
@@ -1201,8 +1205,12 @@ onMounted(() => {
               <el-form-item label="RuntimeClass">
                 <el-input v-model="newCluster.runtime_class" class="mono" />
               </el-form-item>
-              <el-form-item label="GPU resource">
+              <el-form-item label="GPU / NPU resource">
                 <el-input v-model="newCluster.gpu_resource" class="mono" />
+              </el-form-item>
+              <el-form-item label="GPU / NPU product label">
+                <el-input v-model="newCluster.gpu_product_label" class="mono"
+                  placeholder="node.kubernetes.io/npu.chip.name" />
               </el-form-item>
               <el-form-item label="Extra tolerations">
                 <el-input v-model="newCluster.tolerations" class="mono"
@@ -1424,8 +1432,12 @@ onMounted(() => {
           </el-form-item>
         </div>
         <div class="grid-2">
-          <el-form-item label="GPU resource">
+          <el-form-item label="GPU / NPU resource">
             <el-input v-model="clusterForm.gpu_resource" class="mono" />
+          </el-form-item>
+          <el-form-item label="GPU / NPU product label">
+            <el-input v-model="clusterForm.gpu_product_label" class="mono"
+              placeholder="node.kubernetes.io/npu.chip.name" />
           </el-form-item>
           <el-form-item label="/dev/shm (MiB)">
             <el-input-number v-model="clusterForm.shm_size_mb" :min="0" :max="1048576" />

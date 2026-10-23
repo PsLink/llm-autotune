@@ -289,6 +289,9 @@ class Cluster(Base):
     # from a node InternalIP, which needs the cluster-scoped `nodes` read.
     node_host: Mapped[str] = mapped_column(String(255), default="")
     gpu_resource: Mapped[str] = mapped_column(String(64), default="nvidia.com/gpu")
+    gpu_product_label: Mapped[str] = mapped_column(
+        String(253), default="nvidia.com/gpu.product", server_default="nvidia.com/gpu.product"
+    )
     runtime_class: Mapped[str] = mapped_column(String(64), default="nvidia")
     tolerate_gpu_taint: Mapped[bool] = mapped_column(Boolean, default=True)
     tolerations: Mapped[str] = mapped_column(String(512), default="")

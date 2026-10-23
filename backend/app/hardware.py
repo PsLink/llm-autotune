@@ -1,4 +1,4 @@
-"""Canonical GPU types, and how to recognize one from the cluster.
+"""Canonical accelerator types, and how to recognize one from the cluster.
 
 A card type is not decoration: the platform's whole comparison model leans on
 it. Throughput "per card" (`output_tpm_card_norm`) is normalized by card
@@ -8,8 +8,8 @@ other chip, silently compares different silicon. That only stays correct if the
 card type is a controlled value the whole platform agrees on, not a free string
 one person writes "A100" and another "A100-SXM4-80GB".
 
-So there is one vocabulary here, one function that maps a cluster GPU product
-label (`nvidia.com/gpu.product` = "NVIDIA-H100-80GB-HBM3") or a legacy hand-typed
+So there is one vocabulary here, one function that maps a configured cluster product
+label (e.g. `nvidia.com/gpu.product` = "NVIDIA-H100-80GB-HBM3") or a legacy hand-typed
 value onto it, and one list the forms offer. Teaching the platform a new card the
 cluster grows into (B300 today, whatever is next) is a single line in GPU_TYPES.
 """
@@ -18,8 +18,8 @@ import re
 
 # Canonical short names, roughly oldest -> newest. The forms offer these; a k8s
 # machine's type is probed from the cluster and normalized to one of them. This
-# tuple is the ONE place a new card is taught to the platform — extend it and
-# the dropdowns, validation and normalizer all follow.
+# tuple drives the dropdowns and validation. Extend the normalizer too when
+# the cluster uses a different spelling (e.g. Ascend's bare chip name).
 GPU_TYPES: tuple[str, ...] = (
     "A100",
     "A800",
@@ -29,6 +29,7 @@ GPU_TYPES: tuple[str, ...] = (
     "H20",
     "B200",
     "B300",
+    "ASCEND-910B4-1",
 )
 
 
@@ -45,6 +46,9 @@ def normalize_gpu_type(raw: str) -> str:
     if not raw:
         return ""
     s = raw.upper().replace("NVIDIA-", "").replace("NVIDIA ", "").replace("_", "-")
+    # Cluster chip labels omit the vendor; accept common qualified spellings too.
+    if s in {"910B4-1", "ASCEND910B4-1", "ASCEND 910B4-1", "HUAWEI-ASCEND910B4-1"}:
+        return "ASCEND-910B4-1"
     for gpu in GPU_TYPES:
         if re.search(rf"(?<![A-Z0-9]){gpu}(?![A-Z0-9])", s):
             return gpu
