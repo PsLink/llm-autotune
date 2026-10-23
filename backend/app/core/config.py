@@ -273,6 +273,8 @@ class Settings(BaseSettings):
     # (which node, which devices) is the cluster's job, so the spec asks for a
     # count and never names an index.
     k8s_gpu_resource: str = "nvidia.com/gpu"
+    # Node label supplying the exact accelerator model for pools and comparisons.
+    k8s_gpu_product_label: str = "nvidia.com/gpu.product"
     # The RuntimeClass a GPU pod asks for. NVIDIA's device plugin requires the
     # nvidia runtime to be selected; ours is named `nvidia`, but a cluster that
     # names it differently (or has none) would reject the pod outright, so this

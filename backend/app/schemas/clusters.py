@@ -30,6 +30,7 @@ class ClusterIn(BaseModel):
     workload_kind: WorkloadKind = "deployment"
     node_host: str = ""
     gpu_resource: str = "nvidia.com/gpu"
+    gpu_product_label: str = Field(default="nvidia.com/gpu.product", min_length=1, max_length=253)
     runtime_class: str = "nvidia"
     tolerate_gpu_taint: bool = True
     tolerations: str = ""
@@ -71,7 +72,7 @@ class RegisterNodes(BaseModel):
 
 
 class RegisterPools(BaseModel):
-    """GPU products of a cluster (the nvidia.com/gpu.product label) to register
+    """Accelerator products of a cluster (its configured product label) to register
     as node pools: one machine per product, spanning every node that has it."""
 
     products: list[str] = Field(..., min_length=1)
@@ -90,6 +91,7 @@ class ClusterOut(BaseModel):
     workload_kind: str
     node_host: str
     gpu_resource: str
+    gpu_product_label: str
     runtime_class: str
     tolerate_gpu_taint: bool
     tolerations: str

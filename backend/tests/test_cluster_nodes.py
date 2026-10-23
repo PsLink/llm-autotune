@@ -143,3 +143,45 @@ async def test_a_gpu_type_registers_as_one_pool_of_its_nodes(client, cluster_nod
     unknown = await client.post(f"/api/clusters/{cluster['id']}/pools",
                                 json={"products": ["NVIDIA-GB200"]})
     assert unknown.status_code == 422
+
+
+async def test_npu_cluster_round_trips_label_and_registers_nodes_and_pools(
+    client, cluster_nodes,  # noqa: F811
+):
+    label = "node.kubernetes.io/npu.chip.name"
+    for node in cluster_nodes[:2]:
+        node["metadata"]["labels"] = {label: "910B4-1"}
+        node["status"]["allocatable"] = {"huawei.com/npu": "8"}
+    response = await client.post("/api/clusters", json={
+        "name": "ascend", "kubeconfig": KUBECONFIG,
+        "gpu_resource": "huawei.com/npu", "gpu_product_label": label, "runtime_class": "",
+    })
+    assert response.status_code == 201, response.text
+    cluster = response.json()
+    assert cluster["gpu_product_label"] == label
+    assert cluster["runtime_class"] == ""
+    cid = cluster["id"]
+    listed = (await client.get(f"/api/clusters/{cid}/nodes")).json()
+    npu = next(n for n in listed["nodes"] if n["node"] == "gpu-node-1")
+    assert npu["gpu_count"] == 8 and npu["gpu_type"] == "ASCEND-910B4-1"
+    probe = (await client.post(f"/api/clusters/{cid}/probe")).json()
+    assert "ASCEND-910B4-1" in probe["probe"]["gpu_types"]
+    response = await client.post(f"/api/clusters/{cid}/pools", json={"products": ["910B4-1"]})
+    assert response.status_code == 200, response.text
+    pool = next(p for p in response.json()["pools"] if p["product"] == "910B4-1")
+    assert pool["machine"] is not None
+    async with client.factory() as session:
+        machine = (await session.execute(
+            Machine.__table__.select().where(Machine.name == pool["machine"]["name"])
+        )).one()
+    assert machine.node_selector == f"{label}=910B4-1"
+    assert (machine.gpu_count, machine.node_gpu_max) == (16, 8)
+    again = await client.post(f"/api/clusters/{cid}/pools", json={"products": ["910B4-1"]})
+    assert again.json()["registered"] == []
+    response = await client.post(f"/api/clusters/{cid}/nodes", json={"nodes": ["gpu-node-1"]})
+    assert response.status_code == 200, response.text
+    async with client.factory() as session:
+        machine = (await session.execute(
+            Machine.__table__.select().where(Machine.name == "gpu-node-1")
+        )).one()
+    assert machine.gpu_type == "ASCEND-910B4-1" and machine.gpu_count == 8

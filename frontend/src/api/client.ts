@@ -92,6 +92,7 @@ export interface Cluster {
    *  a node InternalIP, which needs the cluster-scoped `nodes` read. */
   node_host: string
   gpu_resource: string
+  gpu_product_label: string
   runtime_class: string
   tolerate_gpu_taint: boolean
   tolerations: string
@@ -132,6 +133,7 @@ export interface ClusterInput {
   workload_kind?: string
   node_host?: string
   gpu_resource?: string
+  gpu_product_label?: string
   runtime_class?: string
   tolerate_gpu_taint?: boolean
   tolerations?: string

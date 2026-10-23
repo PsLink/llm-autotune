@@ -50,6 +50,7 @@ _OVERRIDABLE: tuple[str, ...] = (
     "k8s_node_host",
     "k8s_service_nodeport",
     "k8s_gpu_resource",
+    "k8s_gpu_product_label",
     "k8s_runtime_class",
     "k8s_engine_cpu_request",
     "k8s_engine_memory_request",
@@ -80,6 +81,7 @@ _ROW_MAP: dict[str, str] = {
     "workload_kind": "k8s_workload_kind",
     "node_host": "k8s_node_host",
     "gpu_resource": "k8s_gpu_resource",
+    "gpu_product_label": "k8s_gpu_product_label",
     "runtime_class": "k8s_runtime_class",
     "tolerate_gpu_taint": "k8s_tolerate_gpu_taint",
     "tolerations": "k8s_tolerations",
@@ -134,6 +136,7 @@ class K8sClusterSettings:
     k8s_node_host: str = ""
     k8s_service_nodeport: int = 0
     k8s_gpu_resource: str = "nvidia.com/gpu"
+    k8s_gpu_product_label: str = "nvidia.com/gpu.product"
     k8s_runtime_class: str = "nvidia"
     k8s_engine_cpu_request: str = ""
     k8s_engine_memory_request: str = ""

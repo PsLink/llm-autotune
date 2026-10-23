@@ -222,7 +222,7 @@ def _probe(cluster: K8sClusterSettings) -> dict:
         types = set()
         for node in nodes:
             labels = (node.get("metadata") or {}).get("labels") or {}
-            canon = normalize_gpu_type(str(labels.get(_GPU_PRODUCT_LABEL) or ""))
+            canon = normalize_gpu_type(str(labels.get(cluster.k8s_gpu_product_label) or ""))
             if canon:
                 types.add(canon)
         result["gpu_types"] = sorted(types)
@@ -297,7 +297,7 @@ def _gpu_nodes(cluster: K8sClusterSettings) -> list[dict]:
             count = int((status_.get("allocatable") or {}).get(resource, 0) or 0)
         except (TypeError, ValueError):
             count = 0
-        raw_type = str(labels.get(_GPU_PRODUCT_LABEL) or "")
+        raw_type = str(labels.get(cluster.k8s_gpu_product_label) or "")
         if count <= 0 and not raw_type:
             continue
         name = str(meta.get("name") or "")
@@ -355,15 +355,17 @@ async def _nodes_view(row: Cluster, session: AsyncSession) -> dict:
     ]
     return {
         "cluster": row.name, "namespace": row.namespace, "nodes": nodes, "gone": gone,
-        "pools": _pools_of(nodes, machines),
+        "pools": _pools_of(nodes, machines, cluster.k8s_gpu_product_label),
     }
 
 
-def _pool_selector(product: str) -> str:
-    return f"{_GPU_PRODUCT_LABEL}={product}"
+def _pool_selector(product: str, product_label: str = _GPU_PRODUCT_LABEL) -> str:
+    return f"{product_label}={product}"
 
 
-def _pools_of(nodes: list[dict], machines: list[Machine]) -> list[dict]:
+def _pools_of(
+    nodes: list[dict], machines: list[Machine], product_label: str = _GPU_PRODUCT_LABEL,
+) -> list[dict]:
     """The cluster's GPU products, each as the pool it could be registered as:
     its nodes, their cards, and the machine already spanning them, if any."""
     by_selector = {(m.node_selector or "").replace(" ", ""): m for m in machines}
@@ -380,7 +382,7 @@ def _pools_of(nodes: list[dict], machines: list[Machine]) -> list[dict]:
         if n["ready"] and n["schedulable"]:
             pool["node_gpu_max"] = max(pool["node_gpu_max"], n["gpu_count"])
     for pool in pools.values():
-        m = by_selector.get(_pool_selector(pool["product"]))
+        m = by_selector.get(_pool_selector(pool["product"], product_label))
         pool["machine"] = {"id": m.id, "name": m.name} if m else None
     return sorted(pools.values(), key=lambda p: p["product"])
 
@@ -458,7 +460,7 @@ async def register_pools(
     session: AsyncSession = Depends(get_async_session),
 ):
     """Register GPU products as node pools: one machine per product, selecting
-    every node with that `nvidia.com/gpu.product` label, not yet leased. A run
+    every node with that configured product label, not yet leased. A run
     on it goes to whichever of those nodes has room. A product already
     registered as a pool is skipped."""
     row = await _get(cluster_id, session)
@@ -490,7 +492,7 @@ async def register_pools(
             host="",  # placed by its node selector, never by address
             driver="k8s",
             cluster_id=row.id,
-            node_selector=_pool_selector(product),
+            node_selector=_pool_selector(product, row.gpu_product_label),
             gpu_count=pool["gpu_count"],
             gpu_type=pool["gpu_type"],
             node_count=len(pool["nodes"]),

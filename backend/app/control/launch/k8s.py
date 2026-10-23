@@ -267,7 +267,10 @@ def _engine_container(spec: LaunchSpec, settings: Settings) -> dict:
     """The serving container, shared by the Deployment (and reusable by a CRD
     that takes a raw pod template)."""
     command = _guarded_command(get_adapter(spec.engine).build_command(spec))
-    env = {**DEFAULT_ENV, **spec.env}
+    env = {
+        **(DEFAULT_ENV if settings.k8s_gpu_resource.startswith("nvidia.com/") else {}),
+        **spec.env,
+    }
     pod_volumes, mounts = _engine_volumes(spec, settings)
     container: dict[str, Any] = {
         "name": "engine",
@@ -295,7 +298,7 @@ def _engine_container(spec: LaunchSpec, settings: Settings) -> dict:
         "volumeMounts": mounts,
     }
     # GPU-ness is per machine, exactly as in the ssh driver: only a machine with
-    # cards gets the resource request and the nvidia runtimeClass. This is also
+    # cards gets the configured resource request and runtimeClass. This is also
     # what lets the driver run on a GPU-less test cluster.
     gpus = _gpu_count(spec)
     pod_spec: dict[str, Any] = {"containers": [container], "volumes": pod_volumes}
@@ -625,7 +628,10 @@ def _render_cr(spec: LaunchSpec, settings: Settings) -> dict:
     expressed. The common case — one model directory — is covered.
     """
     command = _guarded_command(get_adapter(spec.engine).build_command(spec))
-    env = {**DEFAULT_ENV, **spec.env}
+    env = {
+        **(DEFAULT_ENV if settings.k8s_gpu_resource.startswith("nvidia.com/") else {}),
+        **spec.env,
+    }
     cr_spec: dict[str, Any] = {
         "image": spec.image,
         "command": [command[0]],
@@ -634,6 +640,8 @@ def _render_cr(spec: LaunchSpec, settings: Settings) -> dict:
         # A count, never device indices — the scheduler places them.
         "gpuCount": _gpu_count(spec),
         "gpuResourceName": settings.k8s_gpu_resource,
+        # An explicit empty value disables the operator's NVIDIA default.
+        "runtimeClassName": settings.k8s_runtime_class if _gpu_count(spec) > 0 else "",
         "modelMountPath": MODEL_MOUNT,
         "serviceType": "NodePort",
         "env": {k: str(v) for k, v in sorted(env.items())},
@@ -809,12 +817,12 @@ def _node_name(node: dict) -> str:
     return str((node.get("metadata") or {}).get("name") or "")
 
 
-def _node_gpu_count(node: dict) -> int:
+def _node_gpu_count(node: dict, resource: str = _GPU_RESOURCE) -> int:
     """Allocatable GPUs on a node — what the scheduler can place, not the raw
     installed count (which a drained or partly-reserved node overstates)."""
     alloc = (node.get("status") or {}).get("allocatable") or {}
     try:
-        return int(alloc.get(_GPU_RESOURCE, 0) or 0)
+        return int(alloc.get(resource, 0) or 0)
     except (TypeError, ValueError):
         return 0
 
@@ -845,11 +853,11 @@ def _node_takes_pods(node: dict, settings: Settings | None = None) -> bool:
     )
 
 
-def _node_gpu_type(node: dict) -> str:
+def _node_gpu_type(node: dict, product_label: str = _GPU_PRODUCT_LABEL) -> str:
     """The node's canonical card type from its GPU product label, or "" if the
     label is absent or names a card the platform does not know yet."""
     labels = (node.get("metadata") or {}).get("labels") or {}
-    return normalize_gpu_type(str(labels.get(_GPU_PRODUCT_LABEL) or ""))
+    return normalize_gpu_type(str(labels.get(product_label) or ""))
 
 
 class K8sDriver(DeploymentDriver):
@@ -1152,7 +1160,10 @@ class K8sDriver(DeploymentDriver):
                 )
         want = _pod_gpu_request(pod, self.settings.k8s_gpu_resource)
         if want > 0 and nodes:
-            biggest = max((_node_gpu_count(node) for node in nodes), default=0)
+            biggest = max(
+                (_node_gpu_count(node, self.settings.k8s_gpu_resource) for node in nodes),
+                default=0,
+            )
             if want > biggest:
                 return (
                     "unplaceable",
@@ -1412,8 +1423,8 @@ class K8sDriver(DeploymentDriver):
         free_total = 0
         types: set[str] = set()
         for node in nodes:
-            count = _node_gpu_count(node)
-            gpu_type = _node_gpu_type(node)
+            count = _node_gpu_count(node, self.settings.k8s_gpu_resource)
+            gpu_type = _node_gpu_type(node, self.settings.k8s_gpu_product_label)
             total += count
             schedulable = _node_takes_pods(node, self.settings)
             used = None if held is None else held.get(_node_name(node), 0)
@@ -1425,7 +1436,7 @@ class K8sDriver(DeploymentDriver):
                 types.add(gpu_type)
             else:
                 labels = (node.get("metadata") or {}).get("labels") or {}
-                raw = labels.get(_GPU_PRODUCT_LABEL)
+                raw = labels.get(self.settings.k8s_gpu_product_label)
                 warnings.append(
                     f"{_node_name(node)}: unknown GPU product {raw!r} — add it to "
                     "app.hardware.GPU_TYPES" if raw
@@ -1554,7 +1565,9 @@ class K8sDriver(DeploymentDriver):
         parts, worst = [], "pass"
         for node in nodes:
             spec = node.get("spec") or {}
-            gpus = f"{_node_gpu_count(node)} × {_node_gpu_type(node) or 'GPU'} allocatable"
+            count = _node_gpu_count(node, self.settings.k8s_gpu_resource)
+            card_type = _node_gpu_type(node, self.settings.k8s_gpu_product_label)
+            gpus = f"{count} × {card_type or 'accelerator'} allocatable"
             if not _node_ready(node):
                 parts.append(f"{_node_name(node)}: NotReady")
                 worst = "fail"
@@ -1689,7 +1702,7 @@ class K8sDriver(DeploymentDriver):
         nodes, node = self._smoke_nodes(api, machine)
         checks.append(pf.Check("node", "Node", node["status"], node["detail"]))
         if widest_candidate_cards and nodes:
-            biggest = max(_node_gpu_count(n) for n in nodes)
+            biggest = max(_node_gpu_count(n, self.settings.k8s_gpu_resource) for n in nodes)
             if widest_candidate_cards > biggest:
                 checks.append(pf.Check(
                     "gpus", "GPUs", pf.FAIL,
@@ -1895,7 +1908,7 @@ class K8sDriver(DeploymentDriver):
             return ""
         for node in nodes:
             if _node_name(node) == node_name or len(nodes) == 1:
-                return _node_gpu_type(node)
+                return _node_gpu_type(node, self.settings.k8s_gpu_product_label)
         return ""
 
 
@@ -1943,8 +1956,9 @@ def render_preflight_job(
             "command": ["sh", "-c", command if container_name == "engine" else "exit 0"],
             # No cards: keep the NVIDIA runtime from handing it every GPU on the
             # node because the image says "all".
-            "env": [{"name": "NVIDIA_VISIBLE_DEVICES", "value": "void"},
-                    {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"}],
+            "env": ([{"name": "NVIDIA_VISIBLE_DEVICES", "value": "void"},
+                     {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"}]
+                    if settings.k8s_gpu_resource.startswith("nvidia.com/") else []),
             "resources": {
                 "requests": {"cpu": "10m", "memory": "16Mi"},
                 "limits": {"cpu": "100m", "memory": "64Mi"},
