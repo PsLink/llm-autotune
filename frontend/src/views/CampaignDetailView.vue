@@ -1525,7 +1525,7 @@ onMounted(() => {
             <span class="muted tiny">{{ winnerObjective.unit || winnerObjective.label }}</span>
             <span v-if="winnerEntry.vs_baseline != null" class="mono"
               :class="beatsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) ? 'better' : 'worse'">
-              {{ fmtVsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) }} {{ t('campaign.vsProduction') }}</span>
+              {{ fmtVsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) }} {{ t('campaign.vsBaseline') }}</span>
             <el-tag size="small" effect="plain" :type="winnerEntry.stage === 'verify' ? 'warning' : 'info'">
               {{ winnerEntry.stage === 'verify' ? t('campaign.validated') : t('campaign.screenOnly') }}</el-tag>
             <el-tag v-if="winnerEntry.card_type" size="small" effect="plain" type="info">{{ winnerEntry.card_type }}</el-tag>
@@ -1536,9 +1536,9 @@ onMounted(() => {
             </span>
           </div>
           <div class="winner-config">
-            <span class="muted tiny">{{ t('campaign.changesFromProduction') }}</span>
+            <span class="muted tiny">{{ t('campaign.changesFromBaseline') }}</span>
             <ConfigChips v-if="winnerChanged.length" :config="winnerEntry.config" :keys="winnerChanged" />
-            <span v-else class="muted">{{ t('campaign.sameAsProduction') }}</span>
+            <span v-else class="muted">{{ t('campaign.sameAsBaseline') }}</span>
           </div>
         </div>
         <!-- The expensive stage first, in its own table: it decides the winner,

@@ -204,7 +204,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Campaign page.** A bar's config card opens below the bar (above it near
   the bottom of the window) and scrolls when long, instead of opening past the
   page's right edge. Export to model catalog is a button in the header; Rerun
-  failed configs moved into the ⋯ menu.
+  failed configs moved into the ⋯ menu. The bars and the winner say "vs
+  baseline", not "vs production", and the baseline's bar, the mean of its
+  measurements, ranks by that mean rather than where its best measurement did.
+- **Export to model catalog.** Publish checks every write, then shows them and
+  the catalog's address on a confirmation step; only Confirm commits. One
+  footer (Check again, Download, Publish), aligned form fields, and sections
+  named for what they hold.
 
 - **Catalog schemas** follow model-catalog `5b668ff`: a model's metadata no
   longer needs `source` (a model with no weights, such as a mock server), and
