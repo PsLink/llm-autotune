@@ -300,6 +300,10 @@ class Cluster(Base):
     model_pvc_root: Mapped[str] = mapped_column(String(255), default="")
     shm_size_mb: Mapped[int] = mapped_column(Integer, default=2048)
     node_selector: Mapped[str] = mapped_column(String(512), default="")
+    # Where a delegated policy pod (no cards) runs on this cluster, `k=v,k2=v2`.
+    # Empty = the install's AUTOTUNE_K8S_POLICY_NODE_SELECTOR, which names a
+    # node of one cluster and so cannot place pods on every cluster.
+    policy_node_selector: Mapped[str] = mapped_column(String(512), default="", server_default="")
     service_nodeport: Mapped[int] = mapped_column(Integer, default=0)
     run_ttl_seconds: Mapped[int] = mapped_column(Integer, default=0)
     in_cluster: Mapped[bool] = mapped_column(Boolean, default=False)

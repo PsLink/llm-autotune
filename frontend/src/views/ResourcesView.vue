@@ -94,6 +94,7 @@ const emptyClusterForm = () => ({
   runtime_class: 'nvidia',
   shm_size_mb: 2048,
   node_selector: '',
+  policy_node_selector: '',
   tolerations: '',
   image_pull_secrets: '',
   engine_cpu_request: '',
@@ -446,6 +447,7 @@ function openEditCluster(c: Cluster) {
     runtime_class: c.runtime_class,
     shm_size_mb: c.shm_size_mb,
     node_selector: c.node_selector,
+    policy_node_selector: c.policy_node_selector ?? '',
     tolerations: c.tolerations,
     image_pull_secrets: c.image_pull_secrets,
     engine_cpu_request: c.engine_cpu_request,
@@ -1445,6 +1447,17 @@ onMounted(() => {
         </div>
         <el-form-item label="Default node selector">
           <el-input v-model="clusterForm.node_selector" class="mono" placeholder="(none)" />
+        </el-form-item>
+        <el-form-item>
+          <template #label>
+            Policy node selector
+            <InfoHint :width="360">Where a policy container that runs no engine itself (it asks for
+              no cards) is placed on this cluster, as <code>key=value</code> pairs: a node that can
+              reach what the policy calls, such as an LLM endpoint. Empty uses the install's
+              <code>AUTOTUNE_K8S_POLICY_NODE_SELECTOR</code>.</InfoHint>
+          </template>
+          <el-input v-model="clusterForm.policy_node_selector" class="mono"
+            placeholder="(the install's setting)" />
         </el-form-item>
         <el-form-item>
           <template #label>

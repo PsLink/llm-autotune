@@ -146,6 +146,18 @@ def test_npu_product_label_is_resolved_per_cluster():
     assert default_cluster.k8s_gpu_product_label == "default.example/product"
 
 
+def test_policy_node_selector_is_per_cluster_and_falls_back_to_the_install():
+    defaults = get_settings().model_copy(update={
+        "k8s_policy_node_selector": "kubernetes.io/hostname=cpu-a",
+    })
+    own = K8sClusterSettings.from_row(
+        _row(policy_node_selector="kubernetes.io/hostname=cpu-b"), defaults)
+    assert own.k8s_policy_node_selector == "kubernetes.io/hostname=cpu-b"
+    # A cluster that sets none keeps the install's pin.
+    inherited = K8sClusterSettings.from_row(_row(policy_node_selector=""), defaults)
+    assert inherited.k8s_policy_node_selector == "kubernetes.io/hostname=cpu-a"
+
+
 def test_driver_cache_separates_two_clusters(monkeypatch):
     """`get_driver` must hand back a different driver per cluster, or two k8s
     clusters would share one client. The DB resolver is stubbed — this is about

@@ -39,6 +39,8 @@ class ClusterIn(BaseModel):
     model_pvc_root: str = ""
     shm_size_mb: int = Field(2048, ge=0, le=1_048_576)
     node_selector: str = ""
+    # Where a delegated policy pod runs; empty = the install's setting.
+    policy_node_selector: str = Field("", max_length=512)
     service_nodeport: int = Field(0, ge=0, le=65535)
     run_ttl_seconds: int = Field(0, ge=0)
     in_cluster: bool = False
@@ -100,6 +102,7 @@ class ClusterOut(BaseModel):
     model_pvc_root: str
     shm_size_mb: int
     node_selector: str
+    policy_node_selector: str = ""
     service_nodeport: int
     run_ttl_seconds: int
     in_cluster: bool
