@@ -64,7 +64,6 @@ const zh: typeof en = {
     hint: {
       searchSpaces: 'Campaign 要搜索的引擎参数',
       objectives: 'Campaign 优化的指标与红线',
-      datasets: '真实流量采样，用于回放压测',
       policies: '决定下一个配置的搜索算法',
       baselines: '用作对比的生产配置',
     },
