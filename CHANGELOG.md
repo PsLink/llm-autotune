@@ -205,6 +205,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Datasets is in the top menu**, next to Runs, instead of under Library.
+  The page explains collection first (gateway logs → filter → sample →
+  dataset → replay, and the rule that a fresh sample waits for campaigns
+  measuring on the current one), and shows each dataset as a card: its state,
+  the sample in use with its prefix-cache hit rate, a chart of prompt lengths,
+  when the next sample comes or what holds it back, the last few collections,
+  and the campaigns that replay it as chips instead of a cramped column.
+  Frozen datasets are cards too.
+
 - **Stop says which stop it is.** On a campaign whose policy is searching, the
   run control reads **Request stop** (the policy wraps up: runs in progress
   finish and its finalists are measured); otherwise, including after a

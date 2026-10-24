@@ -15,16 +15,16 @@ const { t, locale, setLocale } = useI18n()
 const activeMenu = computed(() => '/' + route.path.split('/')[1])
 /** The menu, with whatever installed plugins add, each group in `order`.
  *  The top row is where people work all day: campaigns, their runs, the
- *  machines they run on. The Library holds what a campaign is built from,
+ *  production traffic they replay, the machines they run on. The Library holds what a campaign is built from,
  *  set up once and reused, each entry saying what it is. */
 const NAV: NavItem[] = [
   { path: '/campaigns', label: 'nav.campaigns', group: 'top', order: 10 },
   { path: '/runs', label: 'nav.runs', group: 'top', order: 20 },
+  { path: '/datasets', label: 'nav.datasets', group: 'top', order: 25 },
   { path: '/resources', label: 'nav.resources', group: 'top', order: 30 },
   ...(AGENT_REPORTS ? [{ path: '/reports', label: 'nav.reports', group: 'top' as const, order: 50 }] : []),
   { path: '/search-spaces', label: 'nav.searchSpaces', hint: 'nav.hint.searchSpaces', group: 'library', order: 10 },
   { path: '/objectives', label: 'nav.objectives', hint: 'nav.hint.objectives', group: 'library', order: 20 },
-  { path: '/datasets', label: 'nav.datasets', hint: 'nav.hint.datasets', group: 'library', order: 30 },
   { path: '/policies', label: 'nav.policies', hint: 'nav.hint.policies', group: 'library', order: 40 },
   { path: '/baselines', label: 'nav.baselines', hint: 'nav.hint.baselines', group: 'library', order: 50 },
 ]

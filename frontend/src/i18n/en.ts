@@ -59,7 +59,6 @@ export default {
     hint: {
       searchSpaces: 'The engine parameters a campaign sweeps',
       objectives: 'What a campaign maximizes, and its redlines',
-      datasets: 'Real traffic, sampled for replay benchmarks',
       policies: 'Search algorithms that pick the next config',
       baselines: 'Production configs to measure against',
     },
