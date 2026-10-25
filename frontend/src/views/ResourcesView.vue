@@ -6,6 +6,7 @@ import { api, type Cluster, type Machine, type MachineGroup, type MachineGroupPr
 import InfoHint from '../components/InfoHint.vue'
 import PageLoading from '../components/PageLoading.vue'
 import LinkButton from '../components/LinkButton.vue'
+import { useI18n } from '../i18n'
 import { useAuthStore } from '../stores/auth'
 import { all, useFirstLoad } from '../utils/load'
 import { usePoll } from '../utils/poll'
@@ -13,6 +14,7 @@ import { relativeTime } from '../utils/time'
 
 /** Adding, editing and probing clusters is for admins; the API refuses the
  *  rest with a 403, so the buttons are not offered to them at all. */
+const { t } = useI18n()
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
 
@@ -205,7 +207,7 @@ async function loadNodes(cluster: { id: number; name: string }) {
       .filter((n) => !n.machine && n.ready && n.schedulable).map((n) => n.hostname)
     pickedPools.value = nodesView.value!.pools.filter((p) => !p.machine).map((p) => p.product)
   } catch (error: any) {
-    nodesError.value = apiErrorText(error, 'Could not read the cluster\'s nodes')
+    nodesError.value = apiErrorText(error, t('resources.err.nodes'))
   }
 }
 
@@ -217,7 +219,7 @@ async function connectCluster() {
     addStep.value = 'nodes'
     await loadNodes(data)
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Could not add the cluster'))
+    ElMessage.error(apiErrorText(error, t('resources.err.addCluster')))
   } finally {
     busy.value = false
   }
@@ -247,12 +249,12 @@ async function registerNodes() {
       }
     }
     ElMessage.success(names.length
-      ? `${leaseOnRegister.value ? 'Registered and leased' : 'Registered'} ${names.join(', ')}`
-      : 'Nothing new to register')
+      ? (leaseOnRegister.value ? t('resources.msg.registeredLeased', { names: names.join(', ') }) : t('resources.msg.registered', { names: names.join(', ') }))
+      : t('resources.msg.nothingNew'))
     showAddCluster.value = false
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Could not register the nodes'))
+    ElMessage.error(apiErrorText(error, t('resources.err.register')))
   } finally {
     busy.value = false
   }
@@ -282,7 +284,7 @@ async function runGroupPreflight(group: MachineGroup) {
     const { data } = await api.post(`/machine-groups/${group.id}/preflight`, {})
     groupPreflight.value = data
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Preflight failed'))
+    ElMessage.error(apiErrorText(error, t('resources.err.preflight')))
     showGroupPreflight.value = false
   } finally {
     busy.value = false
@@ -295,8 +297,8 @@ const memberChoices = computed(() =>
   machines.value.map((m) => ({
     name: m.name,
     label: `${m.name} · ${m.gpu_count}×${m.gpu_type || 'GPU'} · ${
-      m.lease_state === 'active' ? 'leased' : m.state
-    }${m.group ? ` · in ${m.group}` : ''}`,
+      m.lease_state === 'active' ? t('resources.look.leased') : m.state
+    }${m.group ? ` · ${t('resources.inGroup', { group: m.group })}` : ''}`,
     disabled: Boolean(m.group) && m.group !== groupForm.value.name,
   })),
 )
@@ -399,7 +401,7 @@ async function saveGroup() {
     showGroup.value = false
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Save failed'))
+    ElMessage.error(apiErrorText(error, t('resources.err.save')))
   } finally {
     busy.value = false
   }
@@ -408,20 +410,19 @@ async function saveGroup() {
 async function removeGroup(group: MachineGroup) {
   try {
     await ElMessageBox.confirm(
-      `Dissolve ${group.name}? The machines are not touched — they simply go back ` +
-        'to being loose machines in the fleet.',
-      'Dissolve node group',
-      { confirmButtonText: 'Dissolve', cancelButtonText: 'Cancel', type: 'warning' },
+      t('resources.dissolveConfirm', { name: group.name }),
+      t('resources.dissolveTitle'),
+      { confirmButtonText: t('resources.dissolve'), cancelButtonText: t('common.cancel'), type: 'warning' },
     )
   } catch {
     return
   }
   try {
     await api.delete(`/machine-groups/${group.id}`)
-    ElMessage.success(`Dissolved ${group.name}`)
+    ElMessage.success(t('resources.msg.dissolved', { name: group.name }))
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Could not dissolve the group'))
+    ElMessage.error(apiErrorText(error, t('resources.err.dissolve')))
   }
 }
 
@@ -465,12 +466,12 @@ async function saveCluster() {
     const payload = { ...clusterForm.value }
     if (editingClusterId.value === null) await api.post('/clusters', payload)
     else await api.put(`/clusters/${editingClusterId.value}`, payload)
-    ElMessage.success(`Saved ${payload.name}`)
+    ElMessage.success(t('resources.msg.saved', { name: payload.name }))
     editingClusterId.value = null
     clusterForm.value = emptyClusterForm()
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Save failed'))
+    ElMessage.error(apiErrorText(error, t('resources.err.save')))
   } finally {
     busy.value = false
   }
@@ -479,20 +480,19 @@ async function saveCluster() {
 async function removeCluster(c: Cluster) {
   try {
     await ElMessageBox.confirm(
-      `Remove cluster ${c.name}? Its kubeconfig is deleted with it. ` +
-        'Machines that name it must be re-pointed first.',
-      'Remove cluster',
-      { confirmButtonText: 'Remove', cancelButtonText: 'Cancel', type: 'warning' },
+      t('resources.removeClusterConfirm', { name: c.name }),
+      t('resources.removeClusterTitle'),
+      { confirmButtonText: t('resources.remove'), cancelButtonText: t('common.cancel'), type: 'warning' },
     )
   } catch {
     return
   }
   try {
     await api.delete(`/clusters/${c.id}`)
-    ElMessage.success(`Removed ${c.name}`)
+    ElMessage.success(t('resources.msg.removed', { name: c.name }))
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Could not remove the cluster'))
+    ElMessage.error(apiErrorText(error, t('resources.err.removeCluster')))
   }
 }
 
@@ -505,13 +505,13 @@ async function probeCluster(c: Cluster) {
     const probe = data.probe ?? {}
     const warnings: string[] = probe.warnings ?? []
     const summary = probe.reachable
-      ? `reachable · ${probe.node_count} node(s)`
-      : 'not reachable'
+      ? t('resources.reachable', { n: probe.node_count })
+      : t('resources.unreachable')
     if (warnings.length) ElMessage.warning(`${c.name}: ${summary} — ${warnings.join('; ')}`)
     else ElMessage.success(`${c.name}: ${summary}`)
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Probe failed'))
+    ElMessage.error(apiErrorText(error, t('resources.err.probe')))
   } finally {
     probingCluster.value = null
   }
@@ -529,7 +529,7 @@ async function save() {
     showAdd.value = false
     await load()
   } catch (error: any) {
-    const text = apiErrorText(error, 'Save failed')
+    const text = apiErrorText(error, t('resources.err.save'))
     // The machine could not be read: the count it needs is under Advanced.
     if (text.includes('GPU count')) addAdvanced.value = ['advanced']
     ElMessage.error(text)
@@ -541,20 +541,20 @@ async function save() {
 async function removeMachine(machine: Machine) {
   try {
     await ElMessageBox.confirm(
-      `Remove ${machine.name}? Its finished runs are kept; only the machine is deleted.`,
-      'Remove machine',
-      { confirmButtonText: 'Remove', cancelButtonText: 'Cancel', type: 'warning' },
+      t('resources.removeMachineConfirm', { name: machine.name }),
+      t('resources.removeMachineTitle'),
+      { confirmButtonText: t('resources.remove'), cancelButtonText: t('common.cancel'), type: 'warning' },
     )
   } catch {
     return
   }
   try {
     await api.delete(`/machines/${machine.id}`)
-    ElMessage.success(`Removed ${machine.name}`)
+    ElMessage.success(t('resources.msg.removed', { name: machine.name }))
     await load()
   } catch (error: any) {
     // 409 carries the reason (campaigns pinned / live run) — show it verbatim.
-    ElMessage.error(apiErrorText(error, 'Remove failed'))
+    ElMessage.error(apiErrorText(error, t('resources.err.remove')))
   }
 }
 
@@ -574,7 +574,7 @@ async function lease(machine: Machine) {
     })
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Could not lease the machine'))
+    ElMessage.error(apiErrorText(error, t('resources.err.lease')))
   }
 }
 
@@ -584,21 +584,20 @@ async function endLease(machine: Machine, mode: 'polite' | 'eager') {
   const warning =
     mode === 'eager'
       ? running
-        ? '\n\nRuns in flight will be killed and their measurements lost.'
+        ? '\n\n' + t('resources.end.killed')
         : ''
       : running
-        ? `\n\nRuns already started will finish first${
-            stage?.returnable_at ? ` — expect to wait until ${exactClock(stage.returnable_at)}` : ''
-          }.`
+        ? '\n\n' + (stage?.returnable_at
+            ? t('resources.end.finishUntil', { time: exactClock(stage.returnable_at) })
+            : t('resources.end.finish'))
         : ''
   try {
     await ElMessageBox.confirm(
-      `Hand ${machine.name} back?${warning}\n\nOnly the platform's own runs stop; ` +
-        'nothing else on the machine is touched.',
-      mode === 'eager' ? 'End lease now' : 'End lease',
+      t('resources.end.confirm', { name: machine.name, warning }),
+      mode === 'eager' ? t('resources.endLeaseNow') : t('resources.endLease'),
       {
-        confirmButtonText: mode === 'eager' ? 'Stop everything' : 'End it',
-        cancelButtonText: 'Cancel',
+        confirmButtonText: mode === 'eager' ? t('resources.end.stopAll') : t('resources.end.endIt'),
+        cancelButtonText: t('common.cancel'),
         type: mode === 'eager' ? 'error' : 'warning',
       },
     )
@@ -607,10 +606,10 @@ async function endLease(machine: Machine, mode: 'polite' | 'eager') {
   }
   try {
     await api.post(`/machines/${machine.name}/lease/end`, { mode, reason: 'ended from the UI' })
-    ElMessage.success(mode === 'eager' ? 'Stopping runs' : 'No new runs will start')
+    ElMessage.success(mode === 'eager' ? t('resources.msg.stopping') : t('resources.msg.noNew'))
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Could not end the lease'))
+    ElMessage.error(apiErrorText(error, t('resources.err.endLease')))
   }
 }
 
@@ -664,7 +663,7 @@ async function runSmoke() {
     })
     smoke.value.result = data
   } catch (error: any) {
-    smoke.value.error = apiErrorText(error, 'Smoke test failed to run')
+    smoke.value.error = apiErrorText(error, t('resources.err.smoke'))
   } finally {
     smoke.value.running = false
   }
@@ -681,13 +680,12 @@ async function probeCapacity(machine: Machine) {
     const { data } = await api.post(`/machines/${machine.id}/probe-capacity`)
     const p = data.probe ?? {}
     const warnings: string[] = p.warnings ?? []
-    const summary = `${p.gpu_count} GPU${p.gpu_count === 1 ? '' : 's'}` +
-      `${p.gpu_type ? ` · ${p.gpu_type}` : ''} across ${p.node_count} node(s)`
+    const summary = t('resources.probed', { n: p.gpu_count, type: p.gpu_type ? ` · ${p.gpu_type}` : '', nodes: p.node_count })
     if (warnings.length) ElMessage.warning(`${summary} — ${warnings.join('; ')}`)
-    else ElMessage.success(`Probed: ${summary}`)
+    else ElMessage.success(t('resources.msg.probed', { summary }))
     await load()
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Probe failed'))
+    ElMessage.error(apiErrorText(error, t('resources.err.probe')))
   } finally {
     busyMachine.value = null
   }
@@ -697,19 +695,24 @@ async function probeCapacity(machine: Machine) {
  *  because `available` covers both "ours for the night" and "ours but leaving",
  *  and those are the two an operator most needs to tell apart. */
 function leaseLook(m: Machine): { type: string; text: string } {
-  if (m.lease_state === 'draining') return { type: 'warning', text: 'handing back' }
+  if (m.lease_state === 'draining') return { type: 'warning', text: t('resources.look.handingBack') }
   if (m.state === 'away' || m.lease_state === 'released' || m.lease_state === 'none') {
-    return { type: 'info', text: 'not leased' }
+    return { type: 'info', text: t('resources.look.notLeased') }
   }
-  if (m.state === 'reserved') return { type: 'warning', text: 'running' }
-  return { type: 'success', text: 'leased' }
+  if (m.state === 'reserved') return { type: 'warning', text: t('resources.look.running') }
+  return { type: 'success', text: t('resources.look.leased') }
 }
 
-const readinessLook: Record<string, { type: string; text: string }> = {
-  busy: { type: 'warning', text: 'busy' },
-  idle: { type: 'info', text: 'idle' },
-  returnable: { type: 'success', text: 'returnable' },
-}
+const readinessLook = computed<Record<string, { type: string; text: string }>>(() => ({
+  busy: { type: 'warning', text: t('resources.look.busy') },
+  idle: { type: 'info', text: t('resources.look.idle') },
+  returnable: { type: 'success', text: t('resources.look.returnable') },
+}))
+
+/** The lifecycle's step names come from the API in English; known ones are
+ *  shown in the page's language. */
+const STEP_KEYS: Record<string, string> = { Leased: 'leased', 'Running campaigns': 'running', 'Handed back': 'handedBack' }
+const stepLabel = (label: string) => (STEP_KEYS[label] ? t(`resources.steps.${STEP_KEYS[label]}`) : label)
 
 const dotClass: Record<string, string> = {
   waiting: 'dot-wait',
@@ -747,60 +750,46 @@ onMounted(() => {
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">Resources
-          <InfoHint :width="400">
-            Leasing hands a machine to the platform, free: campaigns run on it until the
-            lease ends, and ending it stops only the platform's own runs.
-            <br /><br />
-            The same lease can be started and ended by an external fleet manager over the
-            API — these buttons call exactly those endpoints.
+        <h1 class="page-title">{{ t('resources.title') }}
+          <InfoHint :width="400"><span v-html="t('resources.hint')" />
           </InfoHint>
         </h1>
       </div>
       <div>
         <el-button @click="openDocs">API</el-button>
-        <el-button @click="openClusters">Clusters</el-button>
-        <el-button @click="openAddGroup">Group machines</el-button>
-        <el-button @click="openAdd">Add machine</el-button>
-        <el-button v-if="isAdmin" type="primary" @click="openAddCluster">Add GPU cluster</el-button>
+        <el-button @click="openClusters">{{ t('resources.clusters') }}</el-button>
+        <el-button @click="openAddGroup">{{ t('resources.groupMachines') }}</el-button>
+        <el-button @click="openAdd">{{ t('resources.addMachine') }}</el-button>
+        <el-button v-if="isAdmin" type="primary" @click="openAddCluster">{{ t('resources.addCluster') }}</el-button>
       </div>
     </div>
 
     <div v-if="groups.length" class="groups">
       <h2 class="section-title">
-        Node groups
-        <InfoHint :width="420">
-          A group is a named set of leased machines the platform may deploy as
-          <b>one multi-node service</b> — the first member is the master. It is a
-          <b>topology, not a reservation</b>: every member stays an ordinary machine
-          that single-node campaigns can still use, and a member is taken only while
-          a multi-node run is actually deployed on it.
-          <br /><br />
-          Members must share a substrate, a GPU type and a card count. Setting an
-          interior address (<span class="mono">data_host</span>) on a machine is only
-          needed when its engine-facing NIC differs from its management address.
+        {{ t('resources.nodeGroups') }}
+        <InfoHint :width="420"><span v-html="t('resources.nodeGroupsHint')" />
         </InfoHint>
       </h2>
       <div v-for="g in groups" :key="g.id" class="card group-card">
         <div class="top">
           <div class="who">
             <span class="name">{{ g.name }}</span>
-            <el-tag size="small" effect="plain">{{ g.node_count }} nodes</el-tag>
+            <el-tag size="small" effect="plain">{{ t('resources.nNodes', { n: g.node_count }) }}</el-tag>
             <el-tag :type="g.deployable ? 'success' : 'warning'" size="small"
               :title="g.deployable
-                ? 'Every member is leased, handed over and free.'
-                : 'Advisory: the scheduler re-checks at launch.'">
-              {{ g.deployable ? 'ready to deploy' : 'blocked' }}
+                ? t('resources.group.readyTip')
+                : t('resources.group.blockedTip')">
+              {{ g.deployable ? t('resources.group.ready') : t('resources.group.blocked') }}
             </el-tag>
             <span v-if="g.driver" class="muted tiny mono">{{ g.driver }}</span>
             <span v-if="g.notes" class="muted tiny">· {{ g.notes }}</span>
           </div>
           <div class="acts">
             <el-button size="small" :loading="busy && preflightGroup === g.name"
-              @click="runGroupPreflight(g)">Preflight</el-button>
-            <el-button size="small" @click="openEditGroup(g)">Edit</el-button>
+              @click="runGroupPreflight(g)">{{ t('resources.preflight') }}</el-button>
+            <el-button size="small" @click="openEditGroup(g)">{{ t('resources.edit') }}</el-button>
             <el-button size="small" text class="risky" @click="removeGroup(g)">
-              Dissolve
+              {{ t('resources.dissolve') }}
             </el-button>
           </div>
         </div>
@@ -812,7 +801,7 @@ onMounted(() => {
             <span class="mono">{{ m.name }}</span>
             <span class="muted tiny">
               {{ m.host }}<template v-if="m.data_host !== m.host"> → {{ m.data_host }}</template>
-              · {{ m.gpus_busy }}/{{ m.gpu_count }} cards
+              · {{ t('resources.cardsBusy', { busy: m.gpus_busy, n: m.gpu_count }) }}
             </span>
           </div>
         </div>
@@ -828,9 +817,9 @@ onMounted(() => {
     <PageLoading v-if="!machines.length && (first.loading || first.error)" :error="first.error"
       @retry="first.run" />
     <div v-else-if="!machines.length" class="empty muted">
-      No machines.
-      <el-button v-if="isAdmin" link type="primary" @click="openAddCluster">Add a GPU cluster</el-button>
-      <span v-else>An admin adds GPU clusters.</span>
+      {{ t('resources.noMachines') }}
+      <el-button v-if="isAdmin" link type="primary" @click="openAddCluster">{{ t('resources.addACluster') }}</el-button>
+      <span v-else>{{ t('resources.adminAdds') }}</span>
     </div>
 
     <div v-for="m in machines" :key="m.id" class="card">
@@ -839,40 +828,38 @@ onMounted(() => {
           <span class="name">{{ m.name }}</span>
           <el-tag v-if="m.driver === 'k8s'" size="small" effect="plain" type="warning">k8s</el-tag>
           <el-tag v-if="m.driver === 'k8s' && m.cluster_name" size="small" effect="plain"
-            :title="`Pods land in the ${m.cluster_name} cluster`">
+            :title="t('resources.podsLand', { name: m.cluster_name })">
             {{ m.cluster_name }}
           </el-tag>
           <el-tag v-else-if="m.driver === 'k8s'" size="small" effect="plain"
-            title="The platform-default cluster (AUTOTUNE_K8S_*)">
-            default cluster
+            :title="t('resources.defaultClusterTip')">
+            {{ t('resources.defaultCluster') }}
           </el-tag>
           <el-tag v-if="m.group" size="small" effect="plain" type="primary"
             :title="m.group_rank === 0
-              ? `Master of node group ${m.group}`
-              : `Worker rank ${m.group_rank} of node group ${m.group}`">
+              ? t('resources.masterOf', { group: m.group })
+              : t('resources.rankOf', { group: m.group, rank: m.group_rank })">
             {{ m.group }} · {{ m.group_rank === 0 ? 'master' : `rank ${m.group_rank}` }}
           </el-tag>
           <el-tag v-if="m.pool" size="small" effect="plain"
-            :title="`Runs go to whichever of its ${m.node_count} nodes has room `
-              + `(${m.node_selector || 'any node'}); one run fits on one node, up to `
-              + `${m.node_gpu_max} cards`">
-            pool · {{ m.node_count }} node{{ m.node_count === 1 ? '' : 's' }}
+            :title="t('resources.poolTip', { n: m.node_count, selector: m.node_selector || t('resources.anyNode'), max: m.node_gpu_max })">
+            {{ t('resources.pool', { n: m.node_count }) }}
           </el-tag>
           <span class="mono muted">{{ m.host }}</span>
           <el-tag :type="(leaseLook(m).type as any)" size="small">{{ leaseLook(m).text }}</el-tag>
           <el-tag v-if="stageOf(m) && (m.lease_state === 'active' || m.lease_state === 'draining')"
             size="small" effect="plain"
             :type="(readinessLook[stageOf(m)!.readiness]?.type as any) ?? 'info'"
-            title="What an external fleet manager is told when it asks for this machine">
+            :title="t('resources.readinessTip')">
             {{ readinessLook[stageOf(m)!.readiness]?.text ?? stageOf(m)!.readiness }}
           </el-tag>
           <span class="muted tiny">
-            {{ m.gpus_busy }}/{{ m.gpu_count }} cards in use
+            {{ t('resources.cardsInUse', { busy: m.gpus_busy, n: m.gpu_count }) }}
             <template v-if="m.gpu_type"> · {{ m.gpu_type }}</template>
             <template v-if="m.driver === 'k8s' && m.gpu_free != null">
-              · <span :title="`Cards no pod on the cluster holds, on nodes that take new pods`
-                + (m.capacity_checked_at ? ` (read ${relativeTime(m.capacity_checked_at)})` : '')">
-                {{ m.gpu_free }} free on the cluster</span>
+              · <span :title="t('resources.freeTip')
+                + (m.capacity_checked_at ? ` (${relativeTime(m.capacity_checked_at)})` : '')">
+                {{ t('resources.freeOnCluster', { n: m.gpu_free }) }}</span>
             </template>
           </span>
           <span v-if="m.notes" class="muted tiny">· {{ m.notes }}</span>
@@ -881,26 +868,26 @@ onMounted(() => {
         <div class="acts">
           <el-button v-if="m.lease_state !== 'active' && m.lease_state !== 'draining'"
             size="small" type="primary" @click="lease(m)">
-            Lease to platform
+            {{ t('resources.leaseToPlatform') }}
           </el-button>
           <el-button v-else-if="m.lease_state === 'active'" size="small"
             @click="endLease(m, 'polite')">
-            End lease
+            {{ t('resources.endLease') }}
           </el-button>
-          <span v-else class="muted tiny">handing back…</span>
+          <span v-else class="muted tiny">{{ t('resources.handingBack') }}</span>
 
-          <el-button size="small" text @click="openSmoke(m)">Smoke test</el-button>
+          <el-button size="small" text @click="openSmoke(m)">{{ t('resources.smokeTest') }}</el-button>
           <el-dropdown trigger="click" @command="(a: any) => menu(m, a)">
-            <el-button size="small" text :loading="busyMachine === m.id">More ▾</el-button>
+            <el-button size="small" text :loading="busyMachine === m.id">{{ t('resources.more') }} ▾</el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="edit">Edit</el-dropdown-item>
-                <el-dropdown-item command="remove" class="risky">Remove</el-dropdown-item>
-                <el-dropdown-item command="probe" divided>Re-read GPUs</el-dropdown-item>
+                <el-dropdown-item command="edit">{{ t('resources.edit') }}</el-dropdown-item>
+                <el-dropdown-item command="remove" class="risky">{{ t('resources.remove') }}</el-dropdown-item>
+                <el-dropdown-item command="probe" divided>{{ t('resources.reread') }}</el-dropdown-item>
                 <el-dropdown-item command="end-eager"
                   :disabled="m.lease_state === 'none'
                   || m.lease_state === 'released'" class="risky">
-                  End lease now (stops runs)
+                  {{ t('resources.endNowStops') }}
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -910,10 +897,10 @@ onMounted(() => {
 
       <div v-if="m.lease_state === 'active' || m.lease_state === 'draining'" class="lease">
         <span class="muted tiny">
-          leased by <b>{{ m.lease_holder || 'unknown' }}</b>
-          <template v-if="m.lease_due_at"> · due back {{ relativeTime(m.lease_due_at) }}</template>
+          {{ t('resources.leasedBy') }} <b>{{ m.lease_holder || t('resources.unknown') }}</b>
+          <template v-if="m.lease_due_at"> · {{ t('resources.dueBack', { ago: relativeTime(m.lease_due_at) }) }}</template>
           <template v-if="stageOf(m)?.returnable_at">
-            · free by {{ exactClock(stageOf(m)!.returnable_at) }}
+            · {{ t('resources.freeBy', { time: exactClock(stageOf(m)!.returnable_at) }) }}
           </template>
         </span>
       </div>
@@ -921,7 +908,7 @@ onMounted(() => {
       <div class="track">
         <div v-for="(label, i) in steps" :key="label" class="step" :class="stepClass(m, i)">
           <span class="pip" />
-          <span class="label">{{ label }}</span>
+          <span class="label">{{ stepLabel(label) }}</span>
         </div>
       </div>
 
@@ -932,42 +919,38 @@ onMounted(() => {
           {{ stageOf(m)?.detail }}
           <template v-if="(m.lease_state === 'active' || m.lease_state === 'draining')
             && stageOf(m)?.hand_back?.summary">
-            <br /><br /><b>On hand-back:</b> {{ stageOf(m)!.hand_back.summary }}
+            <br /><br /><b>{{ t('resources.onHandBack') }}</b> {{ stageOf(m)!.hand_back.summary }}
           </template>
         </InfoHint>
       </div>
 
       <div v-if="stageOf(m)?.campaigns?.length" class="for">
-        <span class="muted tiny">for</span>
+        <span class="muted tiny">{{ t('resources.for') }}</span>
         <LinkButton v-for="c in stageOf(m)!.campaigns" :key="c.id" link type="primary"
           size="small" :to="`/campaigns/${c.id}`">
-          {{ c.name || `campaign ${c.id}` }}
+          {{ c.name || t('resources.campaignN', { id: c.id }) }}
         </LinkButton>
       </div>
 
     </div>
 
-    <el-dialog v-model="showAdd" :title="editingId === null ? 'Add machine' : 'Edit machine'"
+    <el-dialog v-model="showAdd" :title="editingId === null ? t('resources.addMachine') : t('resources.editMachine')"
       width="480px">
       <el-form label-position="top">
-        <el-form-item label="Name"><el-input v-model="form.name" /></el-form-item>
+        <el-form-item :label="t('common.name')"><el-input v-model="form.name" /></el-form-item>
         <el-form-item>
           <template #label>
-            Driver
+            {{ t('resources.driver') }}
             <!-- What has to be true before this machine can be reached at all,
                  set up outside this page. -->
             <InfoHint :width="380">
               <template v-if="form.driver === 'k8s'">
-                A slice of a cluster added with <b>Add GPU cluster</b>, which already
-                registers each GPU node; add one here only for a custom node selector.
+                <span v-html="t('resources.driverK8sHint')" />
               </template>
               <template v-else>
-                Needs ssh access: put the public half of the worker's ssh key (set at
-                install, <span class="mono">worker.ssh</span>) in the user's
-                <span class="mono">~/.ssh/authorized_keys</span> on the machine, which
-                needs Docker and the NVIDIA container toolkit.
+                <span v-html="t('resources.driverSshHint')" />
               </template>
-              <a :href="setupDocs" target="_blank" rel="noopener">Setup guide</a>
+              <a :href="setupDocs" target="_blank" rel="noopener">{{ t('resources.setupGuide') }}</a>
             </InfoHint>
           </template>
           <el-select v-model="form.driver" style="width: 100%" :empty-values="[null, undefined]">
@@ -975,94 +958,86 @@ onMounted(() => {
             <el-option label="Kubernetes" value="k8s" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="form.driver === 'k8s'" label="Cluster">
-          <el-select v-model="form.cluster_id" clearable placeholder="platform default"
+        <el-form-item v-if="form.driver === 'k8s'" :label="t('resources.cluster')">
+          <el-select v-model="form.cluster_id" clearable :placeholder="t('resources.platformDefault')"
             style="width: 100%">
             <el-option v-for="c in clusters" :key="c.id"
               :label="`${c.name} · ${c.namespace} · ${c.workload_kind}`" :value="c.id" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="form.driver !== 'k8s'" label="Host">
+        <el-form-item v-if="form.driver !== 'k8s'" :label="t('resources.host')">
           <el-input v-model="form.host" class="mono" placeholder="10.0.0.24" />
         </el-form-item>
         <el-form-item v-if="form.driver === 'k8s'">
           <template #label>
-            Node selector
-            <InfoHint>Which nodes its pods may land on, as
-              <span class="mono">label=value</span> pairs — for a model whose weights live
-              on only some nodes. Empty: any node with free GPUs.</InfoHint>
+            {{ t('resources.nodeSelector') }}
+            <InfoHint><span v-html="t('resources.nodeSelectorHint')" /></InfoHint>
           </template>
           <el-input v-model="form.node_selector" class="mono" placeholder="label=value" />
         </el-form-item>
         <el-collapse v-model="addAdvanced" class="dialog-advanced">
-          <el-collapse-item name="advanced" title="Advanced">
+          <el-collapse-item name="advanced" :title="t('resources.advanced')">
         <div v-if="form.driver !== 'k8s'" class="grid-2">
-          <el-form-item label="SSH user"><el-input v-model="form.ssh_user" /></el-form-item>
-          <el-form-item label="SSH port">
+          <el-form-item :label="t('resources.sshUser')"><el-input v-model="form.ssh_user" /></el-form-item>
+          <el-form-item :label="t('resources.sshPort')">
             <el-input-number v-model="form.ssh_port" :min="1" :max="65535" />
           </el-form-item>
         </div>
         <div class="grid-2">
           <el-form-item>
             <template #label>
-              GPU count
-              <InfoHint>Read from the machine on save; set it only if it cannot be read.</InfoHint>
+              {{ t('resources.gpuCount') }}
+              <InfoHint>{{ t('resources.gpuCountHint') }}</InfoHint>
             </template>
             <el-input-number v-model="form.gpu_count" :min="1" :max="64"
-              :value-on-clear="null" placeholder="read on save" controls-position="right" />
+              :value-on-clear="null" :placeholder="t('resources.readOnSave')" controls-position="right" />
           </el-form-item>
-          <el-form-item label="GPU type">
-            <el-select v-model="form.gpu_type" clearable placeholder="(any card)"
+          <el-form-item :label="t('resources.gpuType')">
+            <el-select v-model="form.gpu_type" clearable :placeholder="t('resources.anyCard')"
               style="width: 100%">
-              <el-option v-for="t in gpuTypes" :key="t" :label="t" :value="t" />
+              <el-option v-for="g in gpuTypes" :key="g" :label="g" :value="g" />
             </el-select>
           </el-form-item>
         </div>
         <template v-if="form.driver !== 'k8s'">
           <el-form-item>
             <template #label>
-              Interior address
-              <InfoHint :width="360">Where the engine reaches this machine for inter-node
-                traffic (NCCL / dist-init). Leave empty unless its rail NIC differs from the
-                management address — which ssh and LLMBench use. Only matters inside a node
-                group.</InfoHint>
+              {{ t('resources.interior') }}
+              <InfoHint :width="360">{{ t('resources.interiorHint') }}</InfoHint>
             </template>
-            <el-input v-model="form.data_host" class="mono" placeholder="(same as host)" />
+            <el-input v-model="form.data_host" class="mono" :placeholder="t('resources.sameAsHost')" />
           </el-form-item>
           <el-form-item>
             <template #label>
-              NCCL interface
-              <InfoHint><span class="mono">NCCL_SOCKET_IFNAME</span>, when the routable IP and
-                the InfiniBand/RoCE rail differ. Usually set on the group instead.</InfoHint>
+              {{ t('resources.ncclIf') }}
+              <InfoHint><span v-html="t('resources.ncclIfHint')" /></InfoHint>
             </template>
-            <el-input v-model="form.nccl_ifname" class="mono" placeholder="(engine default)" />
+            <el-input v-model="form.nccl_ifname" class="mono" :placeholder="t('resources.engineDefault')" />
           </el-form-item>
         </template>
-        <el-form-item label="Notes"><el-input v-model="form.notes" /></el-form-item>
+        <el-form-item :label="t('resources.notes')"><el-input v-model="form.notes" /></el-form-item>
           </el-collapse-item>
         </el-collapse>
       </el-form>
       <template #footer>
-        <el-button @click="showAdd = false">Cancel</el-button>
+        <el-button @click="showAdd = false">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="busy" @click="save">
-          {{ editingId === null ? 'Add' : 'Save' }}
+          {{ editingId === null ? t('resources.add') : t('common.save') }}
         </el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="showGroup" width="560px"
-      :title="editingGroupId === null ? 'Group machines for multi-node' : 'Edit node group'">
+      :title="editingGroupId === null ? t('resources.groupTitle') : t('resources.editGroup')">
       <el-form label-position="top">
-        <el-form-item label="Name">
+        <el-form-item :label="t('common.name')">
           <el-input v-model="groupForm.name" :disabled="editingGroupId !== null"
-            placeholder="e.g. nv-pair-a" />
+            :placeholder="t('resources.egGroup')" />
         </el-form-item>
         <el-form-item>
           <template #label>
-            Members
-            <InfoHint :width="340">Selection order is the rank order; the first is the
-              master. All members must share a substrate, a GPU type and a card count. A
-              machine already in another group is greyed out.</InfoHint>
+            {{ t('resources.members') }}
+            <InfoHint :width="340">{{ t('resources.membersHint') }}</InfoHint>
           </template>
           <el-select v-model="groupForm.members" multiple style="width: 100%">
             <el-option v-for="c in memberChoices" :key="c.name" :label="c.label"
@@ -1070,56 +1045,55 @@ onMounted(() => {
           </el-select>
         </el-form-item>
         <div class="grid-2">
-          <el-form-item label="Substrate">
+          <el-form-item :label="t('resources.substrate')">
             <el-select v-model="groupForm.driver" style="width: 100%" :empty-values="[null, undefined]">
-              <el-option label="(each machine's own)" value="" />
+              <el-option :label="t('resources.eachOwn')" value="" />
               <el-option label="SSH + Docker" value="ssh_docker" />
               <el-option label="Kubernetes" value="k8s" />
             </el-select>
           </el-form-item>
           <el-form-item>
             <template #label>
-              Rendezvous port
-              <InfoHint>0 picks a free port per run on the master.</InfoHint>
+              {{ t('resources.rendezvous') }}
+              <InfoHint>{{ t('resources.rendezvousHint') }}</InfoHint>
             </template>
             <el-input-number v-model="groupForm.dist_port" :min="0" :max="65535" />
           </el-form-item>
         </div>
         <el-form-item>
           <template #label>
-            NCCL environment
-            <InfoHint>One <span class="mono">KEY=VALUE</span> per line, applied to every
-              rank's container.</InfoHint>
+            {{ t('resources.ncclEnv') }}
+            <InfoHint><span v-html="t('resources.ncclEnvHint')" /></InfoHint>
           </template>
           <el-input v-model="groupForm.ncclEnvText" type="textarea" :rows="3" class="mono"
             placeholder="NCCL_SOCKET_IFNAME=ib0" />
         </el-form-item>
-        <el-form-item label="Notes"><el-input v-model="groupForm.notes" /></el-form-item>
+        <el-form-item :label="t('resources.notes')"><el-input v-model="groupForm.notes" /></el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="showGroup = false">Cancel</el-button>
+        <el-button @click="showGroup = false">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="busy"
           :disabled="!groupForm.name.trim() || !groupForm.members.length" @click="saveGroup">
-          {{ editingGroupId === null ? 'Create group' : 'Save' }}
+          {{ editingGroupId === null ? t('resources.createGroup') : t('common.save') }}
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showGroupPreflight" :title="`Preflight · ${preflightGroup}`" width="640px">
-      <div v-if="!groupPreflight" class="muted">Probing…</div>
+    <el-dialog v-model="showGroupPreflight" :title="`${t('resources.preflight')} · ${preflightGroup}`" width="640px">
+      <div v-if="!groupPreflight" class="muted">{{ t('resources.probing') }}</div>
       <template v-else>
         <el-alert v-if="groupPreflight.note" type="info" :closable="false"
           :title="groupPreflight.note" style="margin-bottom: 12px" />
         <el-alert v-if="groupPreflight.ok" type="success" :closable="false" show-icon
-          title="Every member is ready and can reach the master"
+          :title="t('resources.pfOk')"
           style="margin-bottom: 12px" />
         <el-alert v-else-if="!groupPreflight.note" type="error" :closable="false" show-icon
-          title="Something would stop this group deploying" style="margin-bottom: 12px" />
+          :title="t('resources.pfBad')" style="margin-bottom: 12px" />
         <div v-for="row in groupPreflight.machines" :key="row.machine" class="pf-row">
           <div class="pf-head">
             <span class="mono">{{ row.machine }}</span>
             <el-tag size="small" :type="row.ok ? 'success' : 'danger'" effect="plain">
-              {{ row.ok ? 'ok' : `${row.failed} failed` }}
+              {{ row.ok ? 'ok' : t('resources.nFailed', { n: row.failed }) }}
             </el-tag>
           </div>
           <div v-for="c in row.checks" :key="row.machine + c.key" class="pf-check">
@@ -1132,21 +1106,21 @@ onMounted(() => {
         </div>
       </template>
       <template #footer>
-        <el-button @click="showGroupPreflight = false">Close</el-button>
+        <el-button @click="showGroupPreflight = false">{{ t('common.close') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showSmoke" :title="`Smoke test · ${smoke.machine?.name ?? ''}`" width="640px">
+    <el-dialog v-model="showSmoke" :title="`${t('resources.smokeTest')} · ${smoke.machine?.name ?? ''}`" width="640px">
       <div v-if="smoke.running" class="muted">
-        {{ smoke.pod ? 'Checking (up to ~40 s)…' : 'Checking…' }}
+        {{ smoke.pod ? t('resources.checking40') : t('resources.checking') }}
       </div>
       <el-alert v-else-if="smoke.error" type="error" :closable="false" :title="smoke.error" />
       <template v-else-if="smoke.result">
         <el-alert v-if="smoke.result.ok" type="success" :closable="false" show-icon
-          title="The platform can reach this machine"
+          :title="t('resources.smokeOk')"
           style="margin-bottom: 12px" />
         <el-alert v-else type="error" :closable="false" show-icon
-          title="A launch on this machine would fail"
+          :title="t('resources.smokeBad')"
           style="margin-bottom: 12px" />
         <div v-for="c in smoke.result.checks" :key="c.name" class="pf-check">
           <el-tag size="small" :type="(checkTag[c.status] as any)" effect="plain">
@@ -1159,67 +1133,63 @@ onMounted(() => {
       <template #footer>
         <el-checkbox v-if="smoke.machine?.driver === 'k8s'" v-model="smoke.pod"
           :disabled="smoke.running" style="margin-right: 12px">
-          Probe pod
-          <InfoHint>Also place a pod on the node — created and deleted, asking for no
-            GPUs.</InfoHint>
+          {{ t('resources.probePod') }}
+          <InfoHint>{{ t('resources.probePodHint') }}</InfoHint>
         </el-checkbox>
-        <el-button :loading="smoke.running" @click="runSmoke">Run again</el-button>
-        <el-button @click="showSmoke = false">Close</el-button>
+        <el-button :loading="smoke.running" @click="runSmoke">{{ t('resources.runAgain') }}</el-button>
+        <el-button @click="showSmoke = false">{{ t('common.close') }}</el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="showAddCluster" width="680px"
-      :title="addStep === 'connect' ? 'Add GPU cluster' : `GPU nodes · ${nodesCluster?.name ?? ''}`">
+      :title="addStep === 'connect' ? t('resources.addCluster') : `${t('resources.gpuNodes')} · ${nodesCluster?.name ?? ''}`">
       <el-form v-if="addStep === 'connect'" label-position="top">
         <el-form-item>
           <template #label>
             Kubeconfig
             <InfoHint :width="380">
-              A scoped kubeconfig for the GPU cluster. Write one with
-              <span class="mono">deploy/gpu-cluster.sh</span>, run with that cluster's admin
-              kubeconfig: it creates a namespace for engine pods and an account limited to
-              it. Stored encrypted; never shown again.
-              <a :href="setupDocs" target="_blank" rel="noopener">Setup guide</a>
+              <span v-html="t('resources.kubeconfigHint')" />
+              <a :href="setupDocs" target="_blank" rel="noopener">{{ t('resources.setupGuide') }}</a>
             </InfoHint>
             <el-button link type="primary" class="label-link"
-              @click="kubeconfigFile?.click()">Upload file</el-button>
+              @click="kubeconfigFile?.click()">{{ t('resources.upload') }}</el-button>
           </template>
           <input ref="kubeconfigFile" type="file" hidden @change="readKubeconfigFile" />
           <el-input v-model="newCluster.kubeconfig" type="textarea" :rows="6" class="mono"
-            placeholder="paste or upload the kubeconfig" />
+            :placeholder="t('resources.pasteKubeconfig')" />
         </el-form-item>
-        <el-form-item label="Name">
+        <el-form-item :label="t('common.name')">
           <el-input v-model="newCluster.name" placeholder="gpu-cluster-a" />
         </el-form-item>
         <el-collapse v-model="clusterAdvanced" class="dialog-advanced">
-          <el-collapse-item name="advanced" title="Advanced">
+          <el-collapse-item name="advanced" :title="t('resources.advanced')">
             <div class="grid-2">
-              <el-form-item label="Namespace">
+              <el-form-item :label="t('resources.namespace')">
                 <el-input v-model="newCluster.namespace" class="mono"
-                  placeholder="from the kubeconfig" />
+                  :placeholder="t('resources.fromKubeconfig')" />
               </el-form-item>
-              <el-form-item label="Workload kind">
+              <el-form-item :label="t('resources.workloadKind')">
                 <el-select v-model="newCluster.workload_kind" style="width: 100%">
-                  <el-option label="deployment (no operator)" value="deployment" />
+                  <el-option :label="t('resources.wkDeployment')" value="deployment" />
                   <el-option label="custom (TuningRun CRD)" value="custom" />
                 </el-select>
               </el-form-item>
               <el-form-item label="RuntimeClass">
                 <el-input v-model="newCluster.runtime_class" class="mono" />
               </el-form-item>
-              <el-form-item label="GPU / NPU resource">
+              <el-form-item :label="t('resources.gpuResource')">
                 <el-input v-model="newCluster.gpu_resource" class="mono" />
               </el-form-item>
-              <el-form-item label="GPU / NPU product label">
+              <el-form-item :label="t('resources.gpuLabel')">
                 <el-input v-model="newCluster.gpu_product_label" class="mono"
                   placeholder="node.kubernetes.io/npu.chip.name" />
               </el-form-item>
-              <el-form-item label="Extra tolerations">
+              <el-form-item :label="t('resources.tolerations')">
                 <el-input v-model="newCluster.tolerations" class="mono"
                   placeholder="key=value:NoSchedule" />
               </el-form-item>
-              <el-form-item label="Image pull secrets">
-                <el-input v-model="newCluster.image_pull_secrets" class="mono" placeholder="(none)" />
+              <el-form-item :label="t('resources.pullSecrets')">
+                <el-input v-model="newCluster.image_pull_secrets" class="mono" :placeholder="t('resources.none')" />
               </el-form-item>
             </div>
           </el-collapse-item>
@@ -1230,25 +1200,22 @@ onMounted(() => {
         <div v-if="nodesError" class="pf-check">
           <el-alert type="error" :closable="false" show-icon :title="nodesError" />
         </div>
-        <div v-else-if="!nodesView" class="muted">Reading the cluster's nodes…</div>
+        <div v-else-if="!nodesView" class="muted">{{ t('resources.readingNodes') }}</div>
         <template v-else>
           <div class="muted tiny nodes-head">
-            Namespace <span class="mono">{{ nodesView.namespace }}</span>
-            · {{ nodesView.nodes.length }} GPU node(s)
+            {{ t('resources.namespace') }} <span class="mono">{{ nodesView.namespace }}</span>
+            · {{ t('resources.nGpuNodes', { n: nodesView.nodes.length }) }}
           </div>
           <div class="register-as">
             <el-radio-group v-model="registerAs" size="small">
-              <el-radio-button value="pools">One pool per GPU type</el-radio-button>
-              <el-radio-button value="nodes">One machine per node</el-radio-button>
+              <el-radio-button value="pools">{{ t('resources.asPools') }}</el-radio-button>
+              <el-radio-button value="nodes">{{ t('resources.asNodes') }}</el-radio-button>
             </el-radio-group>
-            <InfoHint v-if="registerAs === 'pools'">A pool spans every node with that GPU;
-              each run goes to whichever node has room, and waits if none has. One run
-              is always on one node.</InfoHint>
-            <InfoHint v-else>Each machine is pinned to its node: runs go there and wait
-              for its cards, even when another node is free.</InfoHint>
+            <InfoHint v-if="registerAs === 'pools'">{{ t('resources.poolsHint') }}</InfoHint>
+            <InfoHint v-else>{{ t('resources.nodesHint') }}</InfoHint>
           </div>
           <el-table v-if="registerAs === 'pools'" :data="nodesView.pools" size="small"
-            row-key="product" empty-text="No GPU nodes visible to this kubeconfig">
+            row-key="product" :empty-text="t('resources.noGpuNodes')">
             <el-table-column width="48">
               <template #default="{ row }">
                 <el-checkbox v-if="!row.machine" :model-value="pickedPools.includes(row.product)"
@@ -1263,23 +1230,23 @@ onMounted(() => {
                 <div class="muted tiny mono">{{ row.product }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="Nodes" min-width="170">
+            <el-table-column :label="t('resources.nodes')" min-width="170">
               <template #default="{ row }">
-                {{ row.nodes.length }} · {{ row.gpu_count }} cards
+                {{ row.nodes.length }} · {{ t('resources.nCards', { n: row.gpu_count }) }}
                 <div class="muted tiny">{{ row.nodes.join(', ') }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="Status" min-width="150">
+            <el-table-column :label="t('common.status')" min-width="150">
               <template #default="{ row }">
                 <el-tag v-if="row.machine" size="small" type="success" effect="plain">
-                  registered as {{ row.machine.name }}
+                  {{ t('resources.registeredAs', { name: row.machine.name }) }}
                 </el-tag>
-                <span v-else class="muted tiny">new</span>
+                <span v-else class="muted tiny">{{ t('resources.new') }}</span>
               </template>
             </el-table-column>
           </el-table>
           <el-table v-else :data="nodesView.nodes" size="small" row-key="hostname"
-            empty-text="No GPU nodes visible to this kubeconfig">
+            :empty-text="t('resources.noGpuNodes')">
             <el-table-column width="48">
               <template #default="{ row }">
                 <el-checkbox v-if="!row.machine" :model-value="pickedNodes.includes(row.hostname)"
@@ -1288,7 +1255,7 @@ onMounted(() => {
                     : pickedNodes.filter((h) => h !== row.hostname)" />
               </template>
             </el-table-column>
-            <el-table-column label="Node" min-width="160">
+            <el-table-column :label="t('resources.node')" min-width="160">
               <template #default="{ row }"><span class="mono">{{ row.node }}</span></template>
             </el-table-column>
             <el-table-column label="GPUs" min-width="150">
@@ -1296,18 +1263,18 @@ onMounted(() => {
                 {{ row.gpu_count }}× {{ row.gpu_type || row.gpu_product || 'GPU' }}
               </template>
             </el-table-column>
-            <el-table-column label="Status" min-width="170">
+            <el-table-column :label="t('common.status')" min-width="170">
               <template #default="{ row }">
                 <el-tag v-if="row.machine" size="small" type="success" effect="plain">
-                  registered as {{ row.machine.name }}
+                  {{ t('resources.registeredAs', { name: row.machine.name }) }}
                 </el-tag>
                 <el-tag v-else-if="!row.ready" size="small" type="danger" effect="plain">
-                  not ready
+                  {{ t('resources.notReady') }}
                 </el-tag>
                 <el-tag v-else-if="!row.schedulable" size="small" type="warning" effect="plain">
-                  cordoned
+                  {{ t('resources.cordoned') }}
                 </el-tag>
-                <span v-else class="muted tiny">new</span>
+                <span v-else class="muted tiny">{{ t('resources.new') }}</span>
               </template>
             </el-table-column>
           </el-table>
@@ -1315,32 +1282,30 @@ onMounted(() => {
               ? nodesView.pools.some((p) => !p.machine) : nodesView.nodes.some((n) => !n.machine)"
             v-model="leaseOnRegister"
             class="lease-now">
-            Lease them to the platform now
-            <InfoHint>Campaigns only run on leased machines. Untick to register them
-              now and lease each one later from its card.</InfoHint>
+            {{ t('resources.leaseNow') }}
+            <InfoHint>{{ t('resources.leaseNowHint') }}</InfoHint>
           </el-checkbox>
           <el-alert v-if="nodesView.gone.length" type="warning" :closable="false" show-icon
             class="gone"
-            :title="`Gone from the cluster: ${nodesView.gone.map((g) => g.name).join(', ')}`" />
+            :title="t('resources.gone', { names: nodesView.gone.map((g) => g.name).join(', ') })" />
         </template>
       </template>
 
       <template #footer>
         <el-button @click="showAddCluster = false">
-          {{ addStep === 'connect' ? 'Cancel' : 'Close' }}
+          {{ addStep === 'connect' ? t('common.cancel') : t('common.close') }}
         </el-button>
         <el-button v-if="addStep === 'connect'" type="primary" :loading="busy"
           :disabled="!newCluster.kubeconfig.trim() || !newCluster.name.trim()"
-          @click="connectCluster">Connect</el-button>
+          @click="connectCluster">{{ t('resources.connect') }}</el-button>
         <el-button v-else type="primary" :loading="busy" :disabled="!picked"
           @click="registerNodes">
-          Register {{ picked || '' }}
-          {{ registerAs === 'pools' ? 'pool' : 'node' }}{{ picked === 1 ? '' : 's' }}
+          {{ registerAs === 'pools' ? t('resources.registerPools', { n: picked || '' }) : t('resources.registerNodes', { n: picked || '' }) }}
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showClusters" title="Kubernetes clusters" width="680px">
+    <el-dialog v-model="showClusters" :title="t('resources.k8sClusters')" width="680px">
       <div v-for="c in clusters" :key="c.id" class="card" style="margin-bottom: 8px">
         <div class="top">
           <div class="who">
@@ -1352,19 +1317,19 @@ onMounted(() => {
             </el-tag>
             <el-tag size="small" effect="plain" type="info">{{ c.api_mode }}</el-tag>
             <el-tag v-if="c.machine_count" size="small" effect="plain" type="success">
-              {{ c.machine_count }} machine(s)
+              {{ t('resources.nMachines', { n: c.machine_count }) }}
             </el-tag>
             <el-tag v-if="!c.has_kubeconfig" size="small" effect="plain" type="danger">
-              no credential
+              {{ t('resources.noCredential') }}
             </el-tag>
           </div>
           <div v-if="isAdmin" class="acts">
-            <el-button size="small" type="primary" plain @click="openNodes(c)">Nodes</el-button>
+            <el-button size="small" type="primary" plain @click="openNodes(c)">{{ t('resources.nodes') }}</el-button>
             <el-button size="small" :loading="probingCluster === c.id"
-              @click="probeCluster(c)">Probe</el-button>
-            <el-button size="small" @click="openEditCluster(c)">Edit</el-button>
+              @click="probeCluster(c)">{{ t('resources.probe') }}</el-button>
+            <el-button size="small" @click="openEditCluster(c)">{{ t('resources.edit') }}</el-button>
             <el-button size="small" text class="risky" @click="removeCluster(c)">
-              Remove
+              {{ t('resources.remove') }}
             </el-button>
           </div>
         </div>
@@ -1378,38 +1343,38 @@ onMounted(() => {
           <span v-for="w in c.last_probe.warnings" :key="w" class="muted tiny">· {{ w }}</span>
         </div>
         <div v-else-if="c.last_probe_at" class="muted tiny">
-          probed {{ relativeTime(c.last_probe_at) }}
+          {{ t('resources.probedAgo', { ago: relativeTime(c.last_probe_at) }) }}
         </div>
       </div>
       <div v-if="!clusters.length" class="empty muted">
-        No clusters.
+        {{ t('resources.noClusters') }}
         <el-button v-if="isAdmin" link type="primary"
-          @click="showClusters = false; openAddCluster()">Add a GPU cluster</el-button>
+          @click="showClusters = false; openAddCluster()">{{ t('resources.addACluster') }}</el-button>
       </div>
 
       <template v-if="editingClusterId !== null">
       <el-divider />
-      <h3 class="muted">Edit {{ clusterForm.name }}</h3>
+      <h3 class="muted">{{ t('resources.editName', { name: clusterForm.name }) }}</h3>
       <el-form label-position="top">
         <div class="grid-2">
-          <el-form-item label="Name">
+          <el-form-item :label="t('common.name')">
             <el-input v-model="clusterForm.name" placeholder="gpu-cluster-a" />
           </el-form-item>
-          <el-form-item label="Namespace">
+          <el-form-item :label="t('resources.namespace')">
             <el-input v-model="clusterForm.namespace" class="mono" />
           </el-form-item>
         </div>
         <div class="grid-2">
-          <el-form-item label="API mode">
+          <el-form-item :label="t('resources.apiMode')">
             <el-select v-model="clusterForm.api_mode" style="width: 100%">
               <el-option label="client (Python client)" value="client" />
               <el-option label="kubectl (shell out)" value="kubectl" />
               <el-option label="unavailable" value="unavailable" />
             </el-select>
           </el-form-item>
-          <el-form-item label="Workload kind">
+          <el-form-item :label="t('resources.workloadKind')">
             <el-select v-model="clusterForm.workload_kind" style="width: 100%">
-              <el-option label="deployment (no operator)" value="deployment" />
+              <el-option :label="t('resources.wkDeployment')" value="deployment" />
               <el-option label="custom (TuningRun CRD)" value="custom" />
             </el-select>
           </el-form-item>
@@ -1417,16 +1382,15 @@ onMounted(() => {
         <el-form-item>
           <template #label>
             Kubeconfig
-            <InfoHint>A scoped one, never an admin one. Stored encrypted and never shown
-              again; leave empty when editing to keep it.</InfoHint>
+            <InfoHint>{{ t('resources.kubeconfigEditHint') }}</InfoHint>
           </template>
           <el-input v-model="clusterForm.kubeconfig" type="textarea" :rows="5" class="mono"
             :placeholder="editingClusterId === null
-              ? 'paste the kubeconfig YAML'
-              : 'leave empty to keep the stored credential'" />
+              ? t('resources.pasteYaml')
+              : t('resources.keepCred')" />
         </el-form-item>
         <div class="grid-2">
-          <el-form-item label="Endpoint host (node_host)">
+          <el-form-item :label="t('resources.endpointHost')">
             <el-input v-model="clusterForm.node_host" class="mono" placeholder="198.51.100.10" />
           </el-form-item>
           <el-form-item label="RuntimeClass">
@@ -1434,10 +1398,10 @@ onMounted(() => {
           </el-form-item>
         </div>
         <div class="grid-2">
-          <el-form-item label="GPU / NPU resource">
+          <el-form-item :label="t('resources.gpuResource')">
             <el-input v-model="clusterForm.gpu_resource" class="mono" />
           </el-form-item>
-          <el-form-item label="GPU / NPU product label">
+          <el-form-item :label="t('resources.gpuLabel')">
             <el-input v-model="clusterForm.gpu_product_label" class="mono"
               placeholder="node.kubernetes.io/npu.chip.name" />
           </el-form-item>
@@ -1445,61 +1409,54 @@ onMounted(() => {
             <el-input-number v-model="clusterForm.shm_size_mb" :min="0" :max="1048576" />
           </el-form-item>
         </div>
-        <el-form-item label="Default node selector">
-          <el-input v-model="clusterForm.node_selector" class="mono" placeholder="(none)" />
+        <el-form-item :label="t('resources.defaultSelector')">
+          <el-input v-model="clusterForm.node_selector" class="mono" :placeholder="t('resources.none')" />
         </el-form-item>
         <el-form-item>
           <template #label>
-            Policy node selector
-            <InfoHint :width="360">Where a policy container that runs no engine itself (it asks for
-              no cards) is placed on this cluster, as <code>key=value</code> pairs: a node that can
-              reach what the policy calls, such as an LLM endpoint. Empty uses the install's
-              <code>AUTOTUNE_K8S_POLICY_NODE_SELECTOR</code>.</InfoHint>
+            {{ t('resources.policySelector') }}
+            <InfoHint :width="360"><span v-html="t('resources.policySelectorHint')" /></InfoHint>
           </template>
           <el-input v-model="clusterForm.policy_node_selector" class="mono"
-            placeholder="(the install's setting)" />
+            :placeholder="t('resources.installSetting')" />
         </el-form-item>
         <el-form-item>
           <template #label>
-            Extra tolerations
-            <InfoHint :width="360">Comma-separated
-              <span class="mono">key[=value][:effect]</span>. Needed for a cordoned pool: a
-              pod that tolerates <span class="mono">node.kubernetes.io/unschedulable</span>
-              still schedules onto it. The GPU taint is handled when “tolerate GPU taint”
-              is on.</InfoHint>
+            {{ t('resources.tolerations') }}
+            <InfoHint :width="360"><span v-html="t('resources.tolerationsHint')" /></InfoHint>
           </template>
           <el-input v-model="clusterForm.tolerations" class="mono"
             placeholder="node.kubernetes.io/unschedulable" />
         </el-form-item>
-        <el-form-item label="Image pull secrets">
+        <el-form-item :label="t('resources.pullSecrets')">
           <el-input v-model="clusterForm.image_pull_secrets" class="mono"
-            placeholder="(none — nodes already carry registry creds)" />
+            :placeholder="t('resources.noneCreds')" />
         </el-form-item>
         <div class="grid-2">
-          <el-form-item label="Engine cpu request">
-            <el-input v-model="clusterForm.engine_cpu_request" class="mono" placeholder="(omit)" />
+          <el-form-item :label="t('resources.cpuReq')">
+            <el-input v-model="clusterForm.engine_cpu_request" class="mono" :placeholder="t('resources.omit')" />
           </el-form-item>
-          <el-form-item label="Engine memory request">
-            <el-input v-model="clusterForm.engine_memory_request" class="mono" placeholder="(omit)" />
+          <el-form-item :label="t('resources.memReq')">
+            <el-input v-model="clusterForm.engine_memory_request" class="mono" :placeholder="t('resources.omit')" />
           </el-form-item>
         </div>
         <div class="grid-2">
-          <el-form-item label="Engine cpu limit">
-            <el-input v-model="clusterForm.engine_cpu_limit" class="mono" placeholder="(omit)" />
+          <el-form-item :label="t('resources.cpuLim')">
+            <el-input v-model="clusterForm.engine_cpu_limit" class="mono" :placeholder="t('resources.omit')" />
           </el-form-item>
-          <el-form-item label="Engine memory limit">
-            <el-input v-model="clusterForm.engine_memory_limit" class="mono" placeholder="(omit)" />
+          <el-form-item :label="t('resources.memLim')">
+            <el-input v-model="clusterForm.engine_memory_limit" class="mono" :placeholder="t('resources.omit')" />
           </el-form-item>
         </div>
-        <el-form-item label="Notes">
+        <el-form-item :label="t('resources.notes')">
           <el-input v-model="clusterForm.notes" />
         </el-form-item>
       </el-form>
       </template>
       <template #footer>
-        <el-button @click="showClusters = false">Close</el-button>
+        <el-button @click="showClusters = false">{{ t('common.close') }}</el-button>
         <el-button v-if="editingClusterId !== null" type="primary" :loading="busy"
-          @click="saveCluster">Save</el-button>
+          @click="saveCluster">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
   </div>

@@ -5,6 +5,7 @@
  *  is. The first few show, the rest open in place. */
 import { Lock } from '@element-plus/icons-vue'
 import { computed, ref } from 'vue'
+import { useI18n } from '../i18n'
 
 export interface ChipCampaign {
   id: number
@@ -25,6 +26,7 @@ const sorted = computed(() => [...props.campaigns].sort((a, b) =>
   Number(props.holding.includes(b.id)) - Number(props.holding.includes(a.id))
   || (ORDER[a.status] ?? 5) - (ORDER[b.status] ?? 5)
   || b.id - a.id))
+const { t } = useI18n()
 const all = ref(false)
 const shown = computed(() => (all.value ? sorted.value : sorted.value.slice(0, props.max)))
 const hidden = computed(() => sorted.value.length - shown.value.length)
@@ -34,13 +36,13 @@ const hidden = computed(() => sorted.value.length - shown.value.length)
   <div class="chips">
     <router-link v-for="c in shown" :key="c.id" :to="`/campaigns/${c.id}`" class="chip"
       :class="{ holding: holding.includes(c.id) }"
-      :title="`${c.name} — ${c.status}${holding.includes(c.id) ? ', measuring on the current sample' : ''}`">
+      :title="`${c.name} — ${c.status}${holding.includes(c.id) ? t('datasets.chips.measuring') : ''}`">
       <el-icon v-if="holding.includes(c.id)" class="lock"><Lock /></el-icon>
       <span v-else class="dot" :class="`s-${c.status}`" />
       <span class="name">{{ c.name }}</span>
     </router-link>
-    <button v-if="hidden > 0" type="button" class="more" @click="all = true">+{{ hidden }} more</button>
-    <button v-else-if="all && sorted.length > max" type="button" class="more" @click="all = false">Show fewer</button>
+    <button v-if="hidden > 0" type="button" class="more" @click="all = true">{{ t('datasets.chips.more', { n: hidden }) }}</button>
+    <button v-else-if="all && sorted.length > max" type="button" class="more" @click="all = false">{{ t('datasets.chips.fewer') }}</button>
   </div>
 </template>
 

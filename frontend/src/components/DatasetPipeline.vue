@@ -2,29 +2,32 @@
 /** How a replay dataset comes to be, as five steps in a row: the gateway's
  *  logs, the filter, the sample, the file on LLMBench, the replay. Read once,
  *  it explains every column of the cards below it, so it can fold away. */
+import { computed } from 'vue'
+import { useI18n } from '../i18n'
 import { ArrowRight, DataAnalysis, Files, Filter, Lock, Tickets, VideoPlay } from '@element-plus/icons-vue'
 
 defineProps<{ collapsed: boolean }>()
 defineEmits<{ toggle: [] }>()
 
-const STEPS = [
-  { icon: Tickets, title: 'Gateway logs', text: 'Every request the gateway serves is logged to VictoriaLogs.' },
-  { icon: Filter, title: 'Filter', text: 'One model’s successful requests, from every node or the ones you pick.' },
-  { icon: DataAnalysis, title: 'Sample', text: 'N requests spread evenly over the last hours, so every hour of the day is in it.' },
-  { icon: Files, title: 'Dataset', text: 'LLMBench keeps the sample, and takes a fresh one on the schedule you set.' },
-  { icon: VideoPlay, title: 'Replay', text: 'A campaign sends those requests again to every config it tries.' },
-]
+const { t } = useI18n()
+const STEPS = computed(() => [
+  { icon: Tickets, key: 'logs' },
+  { icon: Filter, key: 'filter' },
+  { icon: DataAnalysis, key: 'sample' },
+  { icon: Files, key: 'dataset' },
+  { icon: VideoPlay, key: 'replay' },
+].map((s) => ({ ...s, title: t(`datasets.pipeline.${s.key}`), text: t(`datasets.pipeline.${s.key}Text`) })))
 </script>
 
 <template>
   <section class="pipeline" :class="{ collapsed }">
     <div class="head">
-      <span class="title">How collection works</span>
-      <button type="button" class="toggle" @click="$emit('toggle')">{{ collapsed ? 'Show' : 'Hide' }}</button>
+      <span class="title">{{ t('datasets.pipeline.title') }}</span>
+      <button type="button" class="toggle" @click="$emit('toggle')">{{ collapsed ? t('datasets.pipeline.show') : t('datasets.pipeline.hide') }}</button>
     </div>
     <template v-if="!collapsed">
       <ol class="steps">
-        <template v-for="(s, i) in STEPS" :key="s.title">
+        <template v-for="(s, i) in STEPS" :key="s.key">
           <li class="step">
             <span class="badge"><el-icon :size="20"><component :is="s.icon" /></el-icon></span>
             <span class="step-title"><span class="num">{{ i + 1 }}</span>{{ s.title }}</span>
@@ -37,9 +40,7 @@ const STEPS = [
       </ol>
       <div class="rule">
         <el-icon class="rule-icon"><Lock /></el-icon>
-        <span>A fresh sample never replaces one that a campaign is still measuring on. It waits
-          until that campaign finishes, so every run of the campaign replays the same requests and
-          stays comparable.</span>
+        <span>{{ t('datasets.pipeline.rule') }}</span>
       </div>
     </template>
   </section>

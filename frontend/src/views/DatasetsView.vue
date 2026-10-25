@@ -20,6 +20,7 @@ import DatasetDialog from '../components/DatasetDialog.vue'
 import DatasetPipeline from '../components/DatasetPipeline.vue'
 import InfoHint from '../components/InfoHint.vue'
 import PageLoading from '../components/PageLoading.vue'
+import { useI18n } from '../i18n'
 import { apiErrorText } from '../utils/apiError'
 import { useFirstLoad } from '../utils/load'
 import { usePoll } from '../utils/poll'
@@ -28,6 +29,7 @@ import { exactTime, relativeTime } from '../utils/time'
 const DOCS = 'https://github.com/modelsphere/llm-autotune/blob/main/docs/guide/datasets.md'
 const PIPELINE_KEY = 'autotune.datasets.pipelineHidden'
 
+const { t } = useI18n()
 const route = useRoute()
 const list = ref<DatasetList | null>(null)
 const loadError = ref('')
@@ -66,7 +68,7 @@ async function loadList() {
     loadError.value = ''
     void loadBuilds()
   } catch (error) {
-    loadError.value = apiErrorText(error, 'Could not reach LLMBench')
+    loadError.value = apiErrorText(error, t('datasets.unreachable'))
   }
 }
 /** Recent collections for every card, re-read only when a dataset's last
@@ -89,7 +91,7 @@ async function loadFrozen() {
     frozenError.value = ''
   } catch (error) {
     frozen.value = []
-    frozenError.value = apiErrorText(error, 'Could not read the frozen datasets')
+    frozenError.value = apiErrorText(error, t('datasets.frozenReadFailed'))
   }
 }
 const first = useFirstLoad(load)
@@ -130,11 +132,12 @@ const tiles = computed(() => {
   const replaying = new Set(ds.flatMap((d) => [...d.used_by, ...d.held_by].map((c) => c.id)))
   const held = ds.filter((d) => d.held_by.length).length
   return [
-    { icon: Coin, label: 'Datasets', value: String(ds.length), sub: `${ds.filter((d) => d.current).length} with a sample` },
-    { icon: DataAnalysis, label: 'Requests in samples', value: fmt(ds.reduce((n, d) => n + (d.current?.records ?? 0), 0)), sub: 'across every dataset' },
-    { icon: collecting.value.length ? Loading : Lock, spin: collecting.value.length > 0, label: collecting.value.length ? 'Collecting now' : 'Held steady',
-      value: String(collecting.value.length || held), sub: collecting.value.length ? 'samples on their way' : 'kept for campaigns measuring on them' },
-    { icon: VideoPlay, label: 'Campaigns replaying', value: String(replaying.size), sub: `${frozen.value.length} frozen dataset${frozen.value.length === 1 ? '' : 's'} too` },
+    { icon: Coin, label: t('datasets.tiles.datasets'), value: String(ds.length), sub: t('datasets.tiles.withSample', { n: ds.filter((d) => d.current).length }) },
+    { icon: DataAnalysis, label: t('datasets.tiles.requests'), value: fmt(ds.reduce((n, d) => n + (d.current?.records ?? 0), 0)), sub: t('datasets.tiles.acrossAll') },
+    { icon: collecting.value.length ? Loading : Lock, spin: collecting.value.length > 0, label: collecting.value.length ? t('datasets.tiles.collecting') : t('datasets.tiles.held'),
+      value: String(collecting.value.length || held), sub: collecting.value.length ? t('datasets.tiles.onTheirWay') : t('datasets.tiles.heldSub') },
+    { icon: VideoPlay, label: t('datasets.tiles.replaying'), value: String(replaying.size),
+      sub: frozen.value.length === 1 ? t('datasets.tiles.frozenTooOne') : t('datasets.tiles.frozenToo', { n: frozen.value.length }) },
   ]
 })
 
@@ -154,10 +157,9 @@ async function collect(d: ReplayDataset) {
     const names = d.held_by.map((c) => c.name).join(', ')
     try {
       await ElMessageBox.confirm(
-        `${names} is measuring on the current sample. Its later replay runs would use the new ` +
-          'sample and no longer compare with the earlier ones. Collect a new sample anyway?',
-        'Collect a new sample',
-        { confirmButtonText: 'Collect', cancelButtonText: 'Cancel', type: 'warning' },
+        t('datasets.collectConfirm', { names }),
+        t('datasets.collectTitle'),
+        { confirmButtonText: t('datasets.collect'), cancelButtonText: t('datasets.dialog.cancel'), type: 'warning' },
       )
     } catch {
       return
@@ -166,30 +168,29 @@ async function collect(d: ReplayDataset) {
   }
   try {
     await api.post(`/datasets/${d.name}/collect`, null, { params: { force } })
-    ElMessage.success(`Collecting a new sample of ${d.display_name || d.name}`)
+    ElMessage.success(t('datasets.collecting', { name: d.display_name || d.name }))
     await load()
   } catch (error) {
-    ElMessage.error(apiErrorText(error, 'Could not start collecting'))
+    ElMessage.error(apiErrorText(error, t('datasets.collectFailed')))
   }
 }
 
 async function remove(d: ReplayDataset) {
   try {
     await ElMessageBox.confirm(
-      `Delete ${d.display_name || d.name}? Finished campaigns keep their results; a campaign ` +
-        'created later can no longer replay it.',
-      'Delete dataset',
-      { confirmButtonText: 'Delete', cancelButtonText: 'Cancel', type: 'warning' },
+      t('datasets.deleteConfirm', { name: d.display_name || d.name }),
+      t('datasets.deleteTitle'),
+      { confirmButtonText: t('datasets.card.delete'), cancelButtonText: t('datasets.dialog.cancel'), type: 'warning' },
     )
   } catch {
     return
   }
   try {
     await api.delete(`/datasets/${d.name}`)
-    ElMessage.success('Dataset deleted')
+    ElMessage.success(t('datasets.deleted'))
     await load()
   } catch (error) {
-    ElMessage.error(apiErrorText(error, 'Delete failed'))
+    ElMessage.error(apiErrorText(error, t('datasets.deleteFailed')))
   }
 }
 </script>
@@ -198,28 +199,23 @@ async function remove(d: ReplayDataset) {
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">Datasets
+        <h1 class="page-title">{{ t('datasets.title') }}
           <InfoHint :width="400">
-            A dataset is a sample of one model's recorded production requests, which a campaign's
-            <b>Replay</b> workload sends again. LLMBench collects it from the gateway's request
-            logs in VictoriaLogs, and replaces it with a fresh sample on the interval you choose,
-            but not while a campaign is measuring on it.
-            <a :href="DOCS" target="_blank" rel="noopener">Datasets guide</a>
+            <span v-html="t('datasets.hint')" />
+            <a :href="DOCS" target="_blank" rel="noopener">{{ t('datasets.guide') }}</a>
           </InfoHint>
         </h1>
-        <p class="lede">Real production traffic, sampled from the gateway's logs and kept fresh, so
-          campaigns tune against the requests your users actually send.</p>
+        <p class="lede">{{ t('datasets.lede') }}</p>
       </div>
-      <el-button type="primary" :icon="Plus" @click="openNew">New dataset</el-button>
+      <el-button type="primary" :icon="Plus" @click="openNew">{{ t('datasets.newDataset') }}</el-button>
     </div>
 
     <el-alert v-if="loadError" type="error" :closable="false" show-icon class="banner"
       :title="loadError" />
     <el-alert v-else-if="list && !list.collector" type="warning" :closable="false" show-icon
-      class="banner" title="LLMBench has no dataset collector, so no sample can be collected">
-      An admin turns it on in LLMBench's values (<span class="mono">datasets.enabled</span> and
-      <span class="mono">datasetBuilder.enabled</span>);
-      <a :href="DOCS" target="_blank" rel="noopener">see the guide</a>.
+      class="banner" :title="t('datasets.noCollector')">
+      <span v-html="t('datasets.noCollectorBody')" />
+      <a :href="DOCS" target="_blank" rel="noopener">{{ t('datasets.seeGuide') }}</a>
     </el-alert>
 
     <PageLoading v-if="first.loading && !list" />
@@ -244,25 +240,18 @@ async function remove(d: ReplayDataset) {
       </div>
       <div v-else-if="!loadError" class="empty-card">
         <span class="empty-icon"><el-icon :size="26"><Coin /></el-icon></span>
-        <div class="empty-title">No datasets yet</div>
-        <div class="empty-text">Pick a model the gateway serves, and LLMBench collects a sample of its
-          requests for campaigns to replay.</div>
-        <el-button type="primary" :icon="Plus" @click="openNew">New dataset</el-button>
+        <div class="empty-title">{{ t('datasets.emptyTitle') }}</div>
+        <div class="empty-text">{{ t('datasets.emptyText') }}</div>
+        <el-button type="primary" :icon="Plus" @click="openNew">{{ t('datasets.newDataset') }}</el-button>
       </div>
     </template>
 
     <div class="header-row frozen-head">
-      <h2 class="section-title"><el-icon class="section-icon"><Files /></el-icon> Frozen datasets
-        <InfoHint :width="400">
-          Files on LLMBench that never change: a sample frozen there, or a dataset imported
-          from another installation (an import is always frozen). Every campaign that replays
-          one sees exactly the same requests, so their results compare across nights. Choose
-          one under <b>Replay</b> in a campaign's workload. Import and download them on
-          LLMBench's datasets page.
-        </InfoHint>
+      <h2 class="section-title"><el-icon class="section-icon"><Files /></el-icon> {{ t('datasets.frozenTitle') }}
+        <InfoHint :width="400"><span v-html="t('datasets.frozenHint')" /></InfoHint>
       </h2>
       <el-button v-if="list?.llmbench_url" link type="primary"
-        @click="openOnLlmbench">Import or download on LLMBench</el-button>
+        @click="openOnLlmbench">{{ t('datasets.importOnLlmbench') }}</el-button>
     </div>
     <el-alert v-if="frozenError" type="warning" :closable="false" show-icon class="banner"
       :title="frozenError" />
@@ -270,23 +259,22 @@ async function remove(d: ReplayDataset) {
       <article v-for="f in frozen" :key="f.name" class="frozen">
         <div class="frozen-top">
           <span class="mono frozen-name" :title="f.name">{{ f.name }}</span>
-          <el-tag v-if="f.origin === 'upload'" size="small" effect="plain">imported</el-tag>
+          <el-tag v-if="f.origin === 'upload'" size="small" effect="plain">{{ t('datasets.imported') }}</el-tag>
         </div>
         <div class="frozen-facts">
-          <span><b>{{ fmt(f.records) }}</b> requests</span>
+          <span v-html="t('datasets.requestsN', { n: fmt(f.records) })" />
           <span><b>{{ size(f.bytes) }}</b></span>
-          <span :title="exactTime(f.frozen_at)">frozen {{ relativeTime(f.frozen_at) }}</span>
+          <span :title="exactTime(f.frozen_at)">{{ t('datasets.frozenAgo', { ago: relativeTime(f.frozen_at) }) }}</span>
         </div>
         <div v-if="f.source_profile || f.source_build_id" class="frozen-from tiny">
-          from <span class="mono">{{ f.source_profile }}<template v-if="f.source_build_id"> / {{ f.source_build_id }}</template></span>
+          {{ t('datasets.from') }} <span class="mono">{{ f.source_profile }}<template v-if="f.source_build_id"> / {{ f.source_build_id }}</template></span>
         </div>
         <CampaignChips v-if="f.campaigns.length" :campaigns="f.campaigns" :max="3" class="frozen-chips" />
-        <div v-else class="tiny muted frozen-chips">No campaign replays it</div>
+        <div v-else class="tiny muted frozen-chips">{{ t('datasets.noCampaign') }}</div>
       </article>
     </div>
     <div v-else-if="!first.loading" class="empty muted">
-      No frozen datasets. Freeze a sample, or import a dataset downloaded from another
-      installation, on LLMBench's datasets page.
+      {{ t('datasets.noFrozen') }}
     </div>
 
     <DatasetDialog v-model="dialogOpen" :dataset="editing" @saved="load" />
