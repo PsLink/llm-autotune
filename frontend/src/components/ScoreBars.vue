@@ -330,7 +330,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
   width: 8px;
   height: 8px;
   border-radius: 2px;
-  background: var(--el-color-primary);
+  background: var(--el-color-success);
 }
 .track {
   background: var(--autotune-bg, #f5f7fa);
@@ -341,7 +341,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
 .fill {
   display: block;
   height: 100%;
-  background: var(--el-color-primary);
+  background: var(--el-color-success);
   border-radius: 3px;
 }
 .row:hover,
@@ -361,7 +361,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
    colours its swatch, its bar fill, and (for the extremes) its number. */
 .k-better .dot,
 .k-better .fill {
-  background: var(--el-color-primary);
+  background: var(--el-color-success);
 }
 .k-baseline .dot,
 .k-baseline .fill {
@@ -398,7 +398,7 @@ const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
   margin-left: auto;
 }
 .pop-head .k-better {
-  color: var(--el-color-primary);
+  color: var(--el-color-success);
 }
 .pop-head .k-worse {
   color: var(--el-color-warning);

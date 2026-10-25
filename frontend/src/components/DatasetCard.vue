@@ -7,6 +7,7 @@ import {
 } from '@element-plus/icons-vue'
 import { computed } from 'vue'
 import type { DatasetBuildState, ReplayDataset } from '../api/client'
+import { useI18n } from '../i18n'
 import { absoluteTime, exactTime, relativeTime } from '../utils/time'
 import CampaignChips from './CampaignChips.vue'
 import InfoHint from './InfoHint.vue'
@@ -20,6 +21,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ collect: []; edit: []; remove: []; llmbench: [] }>()
 
+const { t } = useI18n()
 const d = computed(() => props.dataset)
 const fmt = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString())
 /** 140,213 → "140K": token counts read at a glance. */
@@ -40,30 +42,30 @@ const lastFailed = computed(() => {
 })
 
 const state = computed(() => {
-  if (inFlight.value) return { key: 'collecting', label: 'Collecting' }
-  if (d.value.current && lastFailed.value) return { key: 'warn', label: 'Ready · last attempt failed' }
-  if (d.value.current) return { key: 'ready', label: 'Ready' }
-  if (lastFailed.value) return { key: 'failed', label: 'Collection failed' }
-  return { key: 'empty', label: 'Not collected yet' }
+  if (inFlight.value) return { key: 'collecting', label: t('datasets.card.collecting') }
+  if (d.value.current && lastFailed.value) return { key: 'warn', label: t('datasets.card.readyWarn') }
+  if (d.value.current) return { key: 'ready', label: t('datasets.card.ready') }
+  if (lastFailed.value) return { key: 'failed', label: t('datasets.card.failed') }
+  return { key: 'empty', label: t('datasets.card.empty') }
 })
 
-const nodes = computed(() => (d.value.forwarded_to.length ? d.value.forwarded_to.join(', ') : 'all nodes'))
+const nodes = computed(() => (d.value.forwarded_to.length ? d.value.forwarded_to.join(', ') : t('datasets.card.allNodes')))
 
 const refreshLabel = computed(() => {
   const x = d.value
-  if (x.external) return x.schedule_hours ? `Every ${x.schedule_hours} h, on LLMBench` : 'Only when asked'
-  if (!x.refresh_hours) return 'Only when asked'
-  if (x.refresh_hours === 24) return 'Every day'
-  if (x.refresh_hours === 168) return 'Every week'
-  return `Every ${x.refresh_hours} h`
+  if (x.external) return x.schedule_hours ? t('datasets.card.everyHOnLlmbench', { n: x.schedule_hours }) : t('datasets.card.onlyWhenAsked')
+  if (!x.refresh_hours) return t('datasets.card.onlyWhenAsked')
+  if (x.refresh_hours === 24) return t('datasets.card.everyDay')
+  if (x.refresh_hours === 168) return t('datasets.card.everyWeek')
+  return t('datasets.card.everyH', { n: x.refresh_hours })
 })
 const untilNext = computed(() => {
   if (!d.value.next_refresh_at) return ''
   const ms = new Date(d.value.next_refresh_at).getTime() - Date.now()
-  if (ms <= 0) return 'due now'
+  if (ms <= 0) return t('datasets.card.dueNow')
   const hours = ms / 3_600_000
-  if (hours < 1) return `next in ${Math.ceil(ms / 60_000)} min`
-  return hours < 48 ? `next in ${Math.round(hours)} h` : `next in ${Math.round(hours / 24)} days`
+  if (hours < 1) return t('datasets.card.nextMin', { n: Math.ceil(ms / 60_000) })
+  return hours < 48 ? t('datasets.card.nextH', { n: Math.round(hours) }) : t('datasets.card.nextDays', { n: Math.round(hours / 24) })
 })
 
 /** Prompt-length bands as columns, tallest = full height. */
@@ -87,7 +89,7 @@ const history = computed(() => {
   return list.map((b) => ({
     ...b,
     height: b.status === 'ready' ? Math.max(0.12, (b.records ?? 0) / top) : b.status === 'failed' ? 1 : 0.5,
-    tip: `${absoluteTime(b.created_at)} · ${b.status}${b.records != null ? ` · ${fmt(b.records)} requests` : ''}${b.error ? ` — ${b.error}` : ''}`,
+    tip: `${absoluteTime(b.created_at)} · ${b.status}${b.records != null ? ` · ${fmt(b.records)} ${t('datasets.card.requestsWord')}` : ''}${b.error ? ` — ${b.error}` : ''}`,
   }))
 })
 
@@ -118,29 +120,29 @@ function onCommand(command: string) {
             {{ state.label }}
           </span>
           <el-tag v-if="d.external" size="small" effect="plain" type="info"
-            title="Set up on LLMBench; change it there">on LLMBench</el-tag>
+            :title="t('datasets.card.onLlmbenchTip')">{{ t('datasets.card.onLlmbench') }}</el-tag>
         </div>
         <div class="meta">
-          <span>model <b>{{ d.model || '—' }}</b></span>
+          <span>{{ t('datasets.card.model') }} <b>{{ d.model || '—' }}</b></span>
           <span class="sep">·</span>
           <span :class="{ mono: d.forwarded_to.length }">{{ nodes }}</span>
           <span class="sep">·</span>
-          <span>{{ fmt(d.sample_size) }} requests from the last {{ d.window_hours }} h</span>
+          <span>{{ t('datasets.card.fromLast', { n: fmt(d.sample_size), h: d.window_hours }) }}</span>
           <span class="sep">·</span>
           <span class="mono id">{{ d.name }}</span>
         </div>
       </div>
       <div class="actions">
         <el-button size="small" :icon="Refresh" :disabled="inFlight || !collector"
-          @click="emit('collect')">Collect now</el-button>
-        <el-button v-if="d.can_edit" size="small" @click="emit('edit')">Edit</el-button>
+          @click="emit('collect')">{{ t('datasets.card.collectNow') }}</el-button>
+        <el-button v-if="d.can_edit" size="small" @click="emit('edit')">{{ t('datasets.card.edit') }}</el-button>
         <el-dropdown v-if="d.can_edit || llmbenchUrl" trigger="click" @command="onCommand">
-          <el-button size="small" class="icon-btn" aria-label="More"><el-icon><MoreFilled /></el-icon></el-button>
+          <el-button size="small" class="icon-btn" :aria-label="t('datasets.card.more')"><el-icon><MoreFilled /></el-icon></el-button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-if="llmbenchUrl" command="llmbench">Open on LLMBench</el-dropdown-item>
+              <el-dropdown-item v-if="llmbenchUrl" command="llmbench">{{ t('datasets.card.openOnLlmbench') }}</el-dropdown-item>
               <el-dropdown-item v-if="d.can_edit" command="delete" divided>
-                <span class="danger">Delete</span></el-dropdown-item>
+                <span class="danger">{{ t('datasets.card.delete') }}</span></el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -149,22 +151,22 @@ function onCommand(command: string) {
 
     <div v-if="inFlight" class="progress">
       <el-icon class="is-loading"><Loading /></el-icon>
-      <span class="clip" :title="d.last_build?.progress ?? ''">{{ d.last_build?.progress || 'Queued on LLMBench' }}</span>
+      <span class="clip" :title="d.last_build?.progress ?? ''">{{ d.last_build?.progress || t('datasets.card.queued') }}</span>
     </div>
     <div v-else-if="lastFailed" class="failure" :title="d.last_build?.error ?? ''">
-      {{ d.current ? 'The last attempt failed, so the sample below is still in use: ' : 'Failed: ' }}
-      {{ d.last_build?.error || 'no reason given' }}
+      {{ d.current ? t('datasets.card.failedKept') : t('datasets.card.failedPrefix') }}
+      {{ d.last_build?.error || t('datasets.card.noReason') }}
     </div>
 
     <div class="body">
       <!-- The sample in use -->
       <section class="cell sample">
-        <div class="cell-label"><el-icon><DataAnalysis /></el-icon> Sample in use</div>
+        <div class="cell-label"><el-icon><DataAnalysis /></el-icon> {{ t('datasets.card.sampleInUse') }}</div>
         <template v-if="d.current">
-          <div class="big">{{ fmt(d.current.records) }}<span class="unit">requests</span></div>
-          <div class="sub" :title="exactTime(d.current.built_at)">taken {{ relativeTime(d.current.built_at) }}</div>
+          <div class="big">{{ fmt(d.current.records) }}<span class="unit">{{ t('datasets.card.requestsWord') }}</span></div>
+          <div class="sub" :title="exactTime(d.current.built_at)">{{ t('datasets.card.taken', { ago: relativeTime(d.current.built_at) }) }}</div>
           <div v-if="d.current.window_start" class="sub tiny">
-            traffic {{ absoluteTime(d.current.window_start) }} → {{ absoluteTime(d.current.window_end) }}</div>
+            {{ t('datasets.card.traffic') }} {{ absoluteTime(d.current.window_start) }} → {{ absoluteTime(d.current.window_end) }}</div>
           <div v-if="cacheHit != null" class="cache">
             <svg viewBox="0 0 36 36" class="donut" aria-hidden="true">
               <circle cx="18" cy="18" r="15" class="track" />
@@ -173,26 +175,24 @@ function onCommand(command: string) {
             </svg>
             <div>
               <div class="cache-val">{{ Math.round(cacheHit * 100) }}%</div>
-              <div class="sub tiny">prompt tokens cached
-                <InfoHint>The share of prompt tokens the serving engine already had cached when
-                  each request was recorded. A sample breaks up long conversations, so its replay
-                  usually hits the cache less often than production did.</InfoHint>
+              <div class="sub tiny">{{ t('datasets.card.cached') }}
+                <InfoHint>{{ t('datasets.card.cachedHint') }}</InfoHint>
               </div>
             </div>
           </div>
         </template>
-        <div v-else class="none">{{ inFlight ? 'The first sample is on its way.' : 'No sample yet.' }}</div>
+        <div v-else class="none">{{ inFlight ? t('datasets.card.firstOnWay') : t('datasets.card.noSample') }}</div>
       </section>
 
       <!-- What the requests look like -->
       <section class="cell shape">
         <div class="cell-label">
-          Prompt lengths
-          <InfoHint>How many requests of the sample fall in each prompt-length band, in tokens.</InfoHint>
+          {{ t('datasets.card.promptLengths') }}
+          <InfoHint>{{ t('datasets.card.promptLengthsHint') }}</InfoHint>
         </div>
         <div v-if="bands.length" class="hist">
           <div v-for="b in bands" :key="b.band" class="col"
-            :title="`${b.band}: ${fmt(b.count)} requests (${Math.round(b.share * 100)}%)`">
+            :title="t('datasets.card.bandTip', { band: b.band, n: fmt(b.count), pct: Math.round(b.share * 100) })">
             <span class="col-bar">
               <span class="col-n">{{ b.count ? `${Math.round(b.share * 100)}%` : '' }}</span>
               <span class="col-fill" :style="{ height: `${Math.max(b.height * 100, b.count ? 3 : 0)}%` }" />
@@ -202,41 +202,40 @@ function onCommand(command: string) {
         </div>
         <div v-else class="none">—</div>
         <div v-if="summary?.prompt_tokens || summary?.completion_tokens" class="stats">
-          <span v-if="summary?.prompt_tokens" :title="`median ${fmt(summary.prompt_tokens.p50)} · p90 ${fmt(summary.prompt_tokens.p90)} · longest ${fmt(summary.prompt_tokens.max)}`">
-            prompt <b>{{ short(summary.prompt_tokens.p50) }}</b> median · <b>{{ short(summary.prompt_tokens.p90) }}</b> p90</span>
-          <span v-if="summary?.completion_tokens" :title="`median ${fmt(summary.completion_tokens.p50)} · p90 ${fmt(summary.completion_tokens.p90)}`">
-            output <b>{{ short(summary.completion_tokens.p50) }}</b> median · <b>{{ short(summary.completion_tokens.p90) }}</b> p90</span>
+          <span v-if="summary?.prompt_tokens" :title="`${t('datasets.card.median')} ${fmt(summary.prompt_tokens.p50)} · p90 ${fmt(summary.prompt_tokens.p90)} · ${t('datasets.card.longest')} ${fmt(summary.prompt_tokens.max)}`">
+            {{ t('datasets.card.prompt') }} <b>{{ short(summary.prompt_tokens.p50) }}</b> {{ t('datasets.card.median') }} · <b>{{ short(summary.prompt_tokens.p90) }}</b> p90</span>
+          <span v-if="summary?.completion_tokens" :title="`${t('datasets.card.median')} ${fmt(summary.completion_tokens.p50)} · p90 ${fmt(summary.completion_tokens.p90)}`">
+            {{ t('datasets.card.output') }} <b>{{ short(summary.completion_tokens.p50) }}</b> {{ t('datasets.card.median') }} · <b>{{ short(summary.completion_tokens.p90) }}</b> p90</span>
         </div>
       </section>
 
       <!-- When the next one comes -->
       <section class="cell next">
-        <div class="cell-label"><el-icon><Clock /></el-icon> Next sample</div>
+        <div class="cell-label"><el-icon><Clock /></el-icon> {{ t('datasets.card.nextSample') }}</div>
         <div class="next-line"><el-icon class="next-icon"><Refresh /></el-icon>{{ refreshLabel }}</div>
         <div v-if="d.held_by.length" class="held">
           <el-icon><Lock /></el-icon>
-          <span>Waits for {{ d.held_by.length === 1 ? 'a campaign' : `${d.held_by.length} campaigns` }}
-            measuring on this sample</span>
+          <span>{{ d.held_by.length === 1 ? t('datasets.card.waitsForOne') : t('datasets.card.waitsFor', { n: d.held_by.length }) }}</span>
         </div>
         <div v-else-if="untilNext && !inFlight" class="sub">{{ untilNext }}</div>
-        <div class="cell-label strip-label">Recent collections</div>
+        <div class="cell-label strip-label">{{ t('datasets.card.recent') }}</div>
         <div v-if="history.length" class="strip">
           <span v-for="b in history" :key="b.id" class="tick" :class="`b-${b.status}`" :title="b.tip">
             <span :style="{ height: `${b.height * 100}%` }" />
           </span>
         </div>
-        <div v-else class="sub tiny">{{ builds ? 'None yet' : 'Loading…' }}</div>
+        <div v-else class="sub tiny">{{ builds ? t('datasets.card.noneYet') : t('datasets.card.loading') }}</div>
       </section>
     </div>
 
     <footer class="foot">
       <div class="used">
-        <span class="foot-label">{{ campaigns.length ? `Replayed by ${campaigns.length} campaign${campaigns.length === 1 ? '' : 's'}` : 'No campaign replays it yet' }}</span>
+        <span class="foot-label">{{ campaigns.length === 1 ? t('datasets.card.replayedByOne') : campaigns.length ? t('datasets.card.replayedBy', { n: campaigns.length }) : t('datasets.card.noneReplays') }}</span>
         <CampaignChips v-if="campaigns.length" :campaigns="campaigns" :holding="holding" :max="5" />
       </div>
       <div class="source tiny">
-        From <span v-if="d.source_url" class="mono">{{ d.source_url }}</span><template v-else>the install’s VictoriaLogs</template>
-        · status {{ d.statuses.join(', ') || 'any' }} · {{ d.uris.join(', ') || 'any path' }}
+        {{ t('datasets.card.fromSource') }} <span v-if="d.source_url" class="mono">{{ d.source_url }}</span><template v-else>{{ t('datasets.card.installStore') }}</template>
+        · {{ t('datasets.card.status') }} {{ d.statuses.join(', ') || t('datasets.card.any') }} · {{ d.uris.join(', ') || t('datasets.card.anyPath') }}
         <template v-if="d.extra_logsql"> · <span class="mono">{{ d.extra_logsql }}</span></template>
       </div>
     </footer>
