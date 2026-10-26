@@ -1341,11 +1341,13 @@ class K8sDriver(DeploymentDriver):
         """`http://<node>:<nodePort>` — the NodePort Service reached via a node
         IP. Falls back to the spec's host:port until the Service has a port
         (right after apply) or if no node IP can be read."""
-        port = self.settings.k8s_service_nodeport
+        # An existing Service keeps its allocated port when cluster defaults
+        # change. Never point a running model at a newly configured port.
+        svc = self.api.get("service", spec.container_name)
+        ports = ((svc or {}).get("spec") or {}).get("ports") or []
+        port = ports[0].get("nodePort") if ports else None
         if not port:
-            svc = self.api.get("service", spec.container_name)
-            ports = ((svc or {}).get("spec") or {}).get("ports") or []
-            port = ports[0].get("nodePort") if ports else None
+            port = self.settings.k8s_service_nodeport
         host = self.settings.k8s_node_host or self._first_node_ip()
         if host and port:
             return f"http://{host}:{port}"

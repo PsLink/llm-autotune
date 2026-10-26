@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
 import { api, type Cluster, type Machine, type MachineGroup, type MachineGroupPreflight, type MachineLifecycle } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
+import ClusterEndpointFields from '../components/ClusterEndpointFields.vue'
 import PageLoading from '../components/PageLoading.vue'
 import LinkButton from '../components/LinkButton.vue'
 import { useI18n } from '../i18n'
@@ -91,6 +92,7 @@ const emptyClusterForm = () => ({
   namespace: '',
   workload_kind: 'deployment',
   node_host: '',
+  service_nodeport: 0,
   gpu_resource: 'nvidia.com/gpu',
   gpu_product_label: 'nvidia.com/gpu.product',
   runtime_class: 'nvidia',
@@ -146,6 +148,7 @@ const addStep = ref<'connect' | 'nodes'>('connect')
 const clusterAdvanced = ref<string[]>([])
 const newCluster = ref({
   name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
+  node_host: '', service_nodeport: 0,
   runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu',
   gpu_product_label: 'nvidia.com/gpu.product', tolerations: '',
   image_pull_secrets: '',
@@ -180,6 +183,7 @@ watch(() => newCluster.value.kubeconfig, (text, before) => {
 function openAddCluster() {
   newCluster.value = {
     name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
+    node_host: '', service_nodeport: 0,
     runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu',
     gpu_product_label: 'nvidia.com/gpu.product', tolerations: '',
     image_pull_secrets: '',
@@ -443,6 +447,7 @@ function openEditCluster(c: Cluster) {
     namespace: c.namespace,
     workload_kind: c.workload_kind,
     node_host: c.node_host,
+    service_nodeport: c.service_nodeport,
     gpu_resource: c.gpu_resource,
     gpu_product_label: c.gpu_product_label,
     runtime_class: c.runtime_class,
@@ -1161,6 +1166,8 @@ onMounted(() => {
         <el-form-item :label="t('common.name')">
           <el-input v-model="newCluster.name" placeholder="gpu-cluster-a" />
         </el-form-item>
+        <ClusterEndpointFields v-model:host="newCluster.node_host"
+          v-model:port="newCluster.service_nodeport" :workload-kind="newCluster.workload_kind" />
         <el-collapse v-model="clusterAdvanced" class="dialog-advanced">
           <el-collapse-item name="advanced" :title="t('resources.advanced')">
             <div class="grid-2">
@@ -1389,10 +1396,9 @@ onMounted(() => {
               ? t('resources.pasteYaml')
               : t('resources.keepCred')" />
         </el-form-item>
+        <ClusterEndpointFields v-model:host="clusterForm.node_host"
+          v-model:port="clusterForm.service_nodeport" :workload-kind="clusterForm.workload_kind" />
         <div class="grid-2">
-          <el-form-item :label="t('resources.endpointHost')">
-            <el-input v-model="clusterForm.node_host" class="mono" placeholder="198.51.100.10" />
-          </el-form-item>
           <el-form-item label="RuntimeClass">
             <el-input v-model="clusterForm.runtime_class" class="mono" />
           </el-form-item>

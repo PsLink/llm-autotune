@@ -214,6 +214,28 @@ def test_deployment_endpoint_falls_back_without_a_node_ip():
     assert driver._deployment_endpoint(_spec()) == _spec().endpoint_url
 
 
+def test_public_endpoint_with_a_fixed_nodeport_survives_reattach():
+    settings = _clone(
+        k8s_workload_kind="deployment", k8s_node_host="198.51.100.84",
+        k8s_service_nodeport=31080,
+    )
+    api = FakeK8sApi(settings)
+    driver = _driver(settings, api)
+    spec = _spec()
+    handle, _ = driver.launch(spec)
+    service = api.objects[("service", spec.container_name)]
+    assert service["spec"]["ports"][0]["nodePort"] == 31080
+    assert handle.endpoint_url == "http://198.51.100.84:31080"
+
+    # Editing the default port must not point this existing Service at a port
+    # it does not own, including after a worker rebuilds its driver.
+    changed = _driver(_clone(
+        k8s_workload_kind="deployment", k8s_node_host="198.51.100.84",
+        k8s_service_nodeport=31081,
+    ), api)
+    assert changed.attach(spec).endpoint_url == "http://198.51.100.84:31080"
+
+
 def test_endpoint_uses_node_host_when_nodes_are_unreadable():
     """The gpu-cluster-a reality: the scoped SA has no cluster-scoped `nodes` grant.
 

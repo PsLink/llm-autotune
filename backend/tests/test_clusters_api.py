@@ -141,6 +141,33 @@ async def test_delete_refused_while_a_machine_names_the_cluster(client):
     assert (await client.delete(f"/api/clusters/{created['id']}")).status_code == 200
 
 
+async def test_public_endpoint_configuration_round_trips_on_create_and_edit(client):
+    created = await _add(client, service_nodeport=31080)
+    assert created["node_host"] == "198.51.100.10"
+    assert created["service_nodeport"] == 31080
+    listed = (await client.get("/api/clusters")).json()[0]
+    # The edit form sends these fields back while keeping the stored credential.
+    response = await client.put(f"/api/clusters/{created['id']}", json={
+        "name": listed["name"], "namespace": listed["namespace"],
+        "node_host": listed["node_host"], "service_nodeport": listed["service_nodeport"],
+        "kubeconfig": "", "notes": "edited",
+    })
+    assert response.status_code == 200
+    edited = response.json()
+    assert edited["service_nodeport"] == 31080
+    assert edited["node_host"] == "198.51.100.10"
+    assert edited["has_kubeconfig"] is True
+    async with client.factory() as session:
+        from app.control.launch.clusters import K8sClusterSettings
+        from app.core.config import get_settings
+
+        settings = K8sClusterSettings.from_row(
+            await session.get(Cluster, created["id"]), get_settings(),
+        )
+        assert settings.k8s_node_host == "198.51.100.10"
+        assert settings.k8s_service_nodeport == 31080
+
+
 async def test_probe_reports_unavailable_without_touching_a_cluster(client):
     created = await _add(client, api_mode="unavailable")
     resp = await client.post(f"/api/clusters/{created['id']}/probe")

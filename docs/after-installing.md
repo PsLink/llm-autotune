@@ -144,6 +144,24 @@ count and type the node reports, leased to the platform unless you clear
 **Lease them to the platform now**. **Clusters ▸ Nodes** registers nodes added
 later and lists registered machines whose node has left the cluster.
 
+For engines reached over the public network, use the default **deployment**
+workload kind. In **Add GPU cluster** or **Clusters ▸ Edit**, set **Service
+public IP / hostname** to a node address reachable by both the AutoTune worker
+and LLMBench. Enter only the host, without `http://`, a port or a path; the API
+server address in the kubeconfig is not necessarily a service entry point.
+Set **Service NodePort** to the exposed port, for example `31080`, to produce
+`http://<public-host>:31080`. The platform creates the NodePort Service for
+each run. A public NAT entry must forward that port to the same node port.
+
+Use `0` for automatic port allocation when running concurrently. A fixed
+NodePort is shared cluster-wide and can belong to only one Service, so fixed
+ports require serial runs and cleanup of the previous Service. Fixed ports
+must be in the cluster's configured range (normally `30000–32767`). Public host
+and fixed port settings here do not override an Operator's endpoint in
+**custom** mode. Worker processes adopt edits within the settings cache TTL
+(15 seconds) on their next driver lookup; an existing Service keeps its actual
+allocated port.
+
 Network paths:
 
 - AutoTune's pods reach the cluster's API server.
