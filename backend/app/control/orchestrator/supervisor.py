@@ -31,6 +31,7 @@ from app.control.launch import (
     get_driver,
     merge_volumes,
 )
+from app.control.launch.clusters import resolve_cluster
 from app.control.launch.failures import (
     RELEASED,
     classify_exit,
@@ -884,6 +885,11 @@ class Supervisor:
             return self.driver
         key = (wanted, cluster_id)
         cached = self._drivers.get(key)
+        if wanted == "k8s" and cluster_id and cached is not None:
+            # The resolver refreshes DB settings on its TTL. A long-lived
+            # worker must adopt edits to the public endpoint without restart.
+            if cached.settings != resolve_cluster(cluster_id):
+                cached = None
         if cached is None:
             cached = get_driver(wanted, cluster_id=cluster_id)
             self._drivers[key] = cached

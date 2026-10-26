@@ -241,9 +241,8 @@ def as_cluster(source: Any) -> K8sClusterSettings:
 
 # Cluster rows change rarely (an admin edits one) and are read on every driver
 # construction, so a short TTL keeps a probe from hitting the DB per call while
-# still letting an edit land without a restart. The supervisor's long-lived
-# drivers are a known exception — see the design doc: a cluster edit reaches a
-# running worker on its next restart.
+# still letting an edit land without a restart. The supervisor checks these
+# resolved settings before reusing a cached driver and rebuilds it on changes.
 _TTL_SECONDS = 15.0
 _cache: dict[int, tuple[float, K8sClusterSettings]] = {}
 
