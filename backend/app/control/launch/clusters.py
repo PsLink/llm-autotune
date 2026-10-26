@@ -49,6 +49,7 @@ _OVERRIDABLE: tuple[str, ...] = (
     "k8s_run_ttl_seconds",
     "k8s_node_host",
     "k8s_service_nodeport",
+    "k8s_service_nodeport_pool",
     "k8s_gpu_resource",
     "k8s_gpu_product_label",
     "k8s_runtime_class",
@@ -91,6 +92,7 @@ _ROW_MAP: dict[str, str] = {
     "shm_size_mb": "k8s_shm_size_mb",
     "node_selector": "k8s_node_selector",
     "service_nodeport": "k8s_service_nodeport",
+    "service_nodeport_pool": "k8s_service_nodeport_pool",
     "run_ttl_seconds": "k8s_run_ttl_seconds",
     "in_cluster": "k8s_in_cluster",
     "cr_group": "k8s_cr_group",
@@ -135,6 +137,7 @@ class K8sClusterSettings:
     k8s_run_ttl_seconds: int = 0
     k8s_node_host: str = ""
     k8s_service_nodeport: int = 0
+    k8s_service_nodeport_pool: str = ""
     k8s_gpu_resource: str = "nvidia.com/gpu"
     k8s_gpu_product_label: str = "nvidia.com/gpu.product"
     k8s_runtime_class: str = "nvidia"

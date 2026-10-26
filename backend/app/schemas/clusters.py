@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.nodeports import parse_nodeport_pool
+
 ApiMode = Literal["client", "kubectl", "unavailable"]
 WorkloadKind = Literal["deployment", "custom"]
 
@@ -42,6 +44,8 @@ class ClusterIn(BaseModel):
     # Where a delegated policy pod runs; empty = the install's setting.
     policy_node_selector: str = Field("", max_length=512)
     service_nodeport: int = Field(0, ge=0, le=65535)
+    # Nonempty pool takes precedence over the legacy fixed port.
+    service_nodeport_pool: str = Field("", max_length=4096)
     run_ttl_seconds: int = Field(0, ge=0)
     in_cluster: bool = False
     cr_group: str = "tuning.modelsphere.dev"
@@ -64,6 +68,18 @@ class ClusterIn(BaseModel):
     @field_validator("namespace")
     @classmethod
     def _strip(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("service_nodeport_pool", mode="before")
+    @classmethod
+    def _nodeport_pool(cls, v: Any) -> str:
+        if isinstance(v, list):
+            if any(type(port) is not int for port in v):
+                raise ValueError("NodePort lists must contain integers")
+            v = ",".join(str(port) for port in v)
+        if not isinstance(v, str):
+            raise ValueError("NodePort pool must be a range string or a list of integers")
+        parse_nodeport_pool(v)
         return v.strip()
 
 
@@ -104,6 +120,7 @@ class ClusterOut(BaseModel):
     node_selector: str
     policy_node_selector: str = ""
     service_nodeport: int
+    service_nodeport_pool: str = ""
     run_ttl_seconds: int
     in_cluster: bool
     cr_group: str

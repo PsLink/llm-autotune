@@ -104,6 +104,7 @@ export interface Cluster {
   /** Where a delegated policy pod runs here; "" = the install's setting. */
   policy_node_selector: string
   service_nodeport: number
+  service_nodeport_pool: string
   run_ttl_seconds: number
   in_cluster: boolean
   cr_group: string
@@ -146,6 +147,7 @@ export interface ClusterInput {
   node_selector?: string
   policy_node_selector?: string
   service_nodeport?: number
+  service_nodeport_pool?: string
   run_ttl_seconds?: number
   in_cluster?: boolean
   engine_cpu_request?: string

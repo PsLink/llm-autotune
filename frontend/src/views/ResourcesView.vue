@@ -93,6 +93,7 @@ const emptyClusterForm = () => ({
   workload_kind: 'deployment',
   node_host: '',
   service_nodeport: 0,
+  service_nodeport_pool: '',
   gpu_resource: 'nvidia.com/gpu',
   gpu_product_label: 'nvidia.com/gpu.product',
   runtime_class: 'nvidia',
@@ -148,7 +149,7 @@ const addStep = ref<'connect' | 'nodes'>('connect')
 const clusterAdvanced = ref<string[]>([])
 const newCluster = ref({
   name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
-  node_host: '', service_nodeport: 0,
+  node_host: '', service_nodeport: 0, service_nodeport_pool: '',
   runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu',
   gpu_product_label: 'nvidia.com/gpu.product', tolerations: '',
   image_pull_secrets: '',
@@ -183,7 +184,7 @@ watch(() => newCluster.value.kubeconfig, (text, before) => {
 function openAddCluster() {
   newCluster.value = {
     name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
-    node_host: '', service_nodeport: 0,
+    node_host: '', service_nodeport: 0, service_nodeport_pool: '',
     runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu',
     gpu_product_label: 'nvidia.com/gpu.product', tolerations: '',
     image_pull_secrets: '',
@@ -448,6 +449,7 @@ function openEditCluster(c: Cluster) {
     workload_kind: c.workload_kind,
     node_host: c.node_host,
     service_nodeport: c.service_nodeport,
+    service_nodeport_pool: c.service_nodeport_pool ?? '',
     gpu_resource: c.gpu_resource,
     gpu_product_label: c.gpu_product_label,
     runtime_class: c.runtime_class,
@@ -1167,6 +1169,7 @@ onMounted(() => {
           <el-input v-model="newCluster.name" placeholder="gpu-cluster-a" />
         </el-form-item>
         <ClusterEndpointFields v-model:host="newCluster.node_host"
+          v-model:pool="newCluster.service_nodeport_pool"
           v-model:port="newCluster.service_nodeport" :workload-kind="newCluster.workload_kind" />
         <el-collapse v-model="clusterAdvanced" class="dialog-advanced">
           <el-collapse-item name="advanced" :title="t('resources.advanced')">
@@ -1397,6 +1400,7 @@ onMounted(() => {
               : t('resources.keepCred')" />
         </el-form-item>
         <ClusterEndpointFields v-model:host="clusterForm.node_host"
+          v-model:pool="clusterForm.service_nodeport_pool"
           v-model:port="clusterForm.service_nodeport" :workload-kind="clusterForm.workload_kind" />
         <div class="grid-2">
           <el-form-item label="RuntimeClass">

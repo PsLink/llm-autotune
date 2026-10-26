@@ -69,6 +69,16 @@ class K8sUnavailable(K8sError):
     transient cluster error: this one never succeeds on retry."""
 
 
+class NodePortAllocated(K8sError):
+    """The API server rejected a Service because another Service owns its port."""
+
+
+def _apply_error(message: str, detail: str) -> K8sError:
+    if "nodeport" in detail.lower() and "provided port is already allocated" in detail.lower():
+        return NodePortAllocated(message)
+    return K8sError(message)
+
+
 class K8sApi(ABC):
     """Everything the k8s driver needs from the cluster, and nothing more."""
 
@@ -209,7 +219,9 @@ class KubectlApi(K8sApi):
         )
         result = self._run(["apply", "-f", "-"], stdin=json.dumps(doc))
         if result.returncode != 0:
-            raise K8sError(f"kubectl apply failed: {result.stderr.strip()[:2000]}")
+            raise _apply_error(
+                f"kubectl apply failed: {result.stderr.strip()[:2000]}", result.stderr,
+            )
 
     def get(self, resource: str, name: str) -> dict | None:
         result = self._run(["get", resource, name, "-o", "json"])
@@ -425,12 +437,20 @@ class ClientApi(K8sApi):
             # Already there (idempotent relaunch): carry the live resourceVersion
             # and replace, so apply is create-or-update like `kubectl apply`.
             if exc.status != 409:
-                raise K8sError(f"client apply {kind}/{name} failed: {exc.reason}") from exc
+                raise _apply_error(
+                    f"client apply {kind}/{name} failed: {exc.reason}", exc.body or "",
+                ) from exc
             current = self.get(self._resource_for_kind(kind), name)
             if current is not None:
                 rv = (current.get("metadata") or {}).get("resourceVersion")
                 item.setdefault("metadata", {})["resourceVersion"] = rv
-            replace(name, item)
+            try:
+                replace(name, item)
+            except self._ApiException as replace_exc:
+                raise _apply_error(
+                    f"client apply {kind}/{name} failed: {replace_exc.reason}",
+                    replace_exc.body or "",
+                ) from replace_exc
 
     def get(self, resource: str, name: str) -> dict | None:
         self._ensure()
@@ -480,6 +500,8 @@ class ClientApi(K8sApi):
         try:
             if resource == "pods":
                 resp = self._core.list_namespaced_pod(self._ns, **kwargs)
+            elif resource == "services":
+                resp = self._core.list_namespaced_service(self._ns, **kwargs)
             elif resource == "events":
                 resp = self._core.list_namespaced_event(self._ns, **kwargs)
             elif resource == "nodes":

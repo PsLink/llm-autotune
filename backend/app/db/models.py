@@ -305,6 +305,7 @@ class Cluster(Base):
     # node of one cluster and so cannot place pods on every cluster.
     policy_node_selector: Mapped[str] = mapped_column(String(512), default="", server_default="")
     service_nodeport: Mapped[int] = mapped_column(Integer, default=0)
+    service_nodeport_pool: Mapped[str] = mapped_column(String(4096), default="", server_default="")
     run_ttl_seconds: Mapped[int] = mapped_column(Integer, default=0)
     in_cluster: Mapped[bool] = mapped_column(Boolean, default=False)
     cr_group: Mapped[str] = mapped_column(String(128), default="tuning.modelsphere.dev")

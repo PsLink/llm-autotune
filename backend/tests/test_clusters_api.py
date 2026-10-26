@@ -168,6 +168,33 @@ async def test_public_endpoint_configuration_round_trips_on_create_and_edit(clie
         assert settings.k8s_service_nodeport == 31080
 
 
+async def test_nodeport_pool_round_trips_and_reaches_cluster_driver_settings(client):
+    created = await _add(client, service_nodeport_pool=[31080, 31081, 31100])
+    assert created["service_nodeport_pool"] == "31080,31081,31100"
+    response = await client.put(f"/api/clusters/{created['id']}", json={
+        "name": created["name"], "namespace": created["namespace"],
+        "node_host": created["node_host"], "service_nodeport_pool": "31080-31089,31105",
+    })
+    assert response.status_code == 200
+    listed = (await client.get("/api/clusters")).json()[0]
+    assert listed["service_nodeport_pool"] == "31080-31089,31105"
+    async with client.factory() as session:
+        from app.control.launch.clusters import K8sClusterSettings
+        from app.core.config import get_settings
+
+        settings = K8sClusterSettings.from_row(
+            await session.get(Cluster, created["id"]), get_settings(),
+        )
+        assert settings.k8s_service_nodeport_pool == "31080-31089,31105"
+    response = await client.put(f"/api/clusters/{created['id']}", json={
+        "name": created["name"], "service_nodeport_pool": "31089-31080",
+    })
+    assert response.status_code == 422
+    assert (await client.get("/api/clusters")).json()[0]["service_nodeport_pool"] == (
+        "31080-31089,31105"
+    )
+
+
 async def test_probe_reports_unavailable_without_touching_a_cluster(client):
     created = await _add(client, api_mode="unavailable")
     resp = await client.post(f"/api/clusters/{created['id']}/probe")

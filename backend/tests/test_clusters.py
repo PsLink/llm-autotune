@@ -103,7 +103,7 @@ def _row(**over) -> SimpleNamespace:
         runtime_class="",
         tolerate_gpu_taint=True, tolerations="", image_pull_secrets="",
         model_pvc="", model_pvc_root="", shm_size_mb=16384, node_selector="",
-        service_nodeport=0, run_ttl_seconds=0, in_cluster=False,
+        service_nodeport=0, service_nodeport_pool="", run_ttl_seconds=0, in_cluster=False,
         cr_group="tuning.modelsphere.dev", cr_version="v1alpha1", cr_kind="TuningRun",
         cr_plural="tuningruns", cr_pod_label="tuning.modelsphere.dev/run",
         engine_cpu_request="16", engine_memory_request="64Gi",

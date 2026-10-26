@@ -938,6 +938,8 @@ export default {
     endpointHost: 'Service public IP / hostname',
     endpointHostHint: 'A node public IP or hostname reachable by both the worker and benchmark runner, without scheme, port or path. Empty uses a node InternalIP. The API server address may be a different endpoint.',
     serviceNodePort: 'Service NodePort',
+    nodePortPool: 'Candidate NodePort pool (optional)',
+    nodePortPoolHint: 'Use ranges and comma-separated ports, e.g. 31080-31089,31100. Overrides the single port above. Each run claims an available port, waits if all are busy, and releases it when its Service is deleted. Expose every candidate port and use the cluster’s allowed range.',
     serviceNodePortHint: '0 allocates automatically; a fixed port must be in the cluster’s allowed range (default 30000–32767). Forward this public port to the same port on a node.',
     fixedNodePortHint: 'Only one Service can claim a fixed NodePort. Run serially and wait for the previous Service to be removed. Use automatic allocation for concurrent runs.',
     endpointPreview: 'Benchmark endpoint:',

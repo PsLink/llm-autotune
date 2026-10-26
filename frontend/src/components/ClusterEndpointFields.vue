@@ -4,6 +4,7 @@ import { useI18n } from '../i18n'
 defineProps<{ workloadKind: string }>()
 const host = defineModel<string>('host', { required: true })
 const port = defineModel<number>('port', { required: true })
+const pool = defineModel<string>('pool', { required: true })
 const { t } = useI18n()
 </script>
 
@@ -17,12 +18,18 @@ const { t } = useI18n()
     </el-form-item>
     <el-form-item :label="t('resources.serviceNodePort')">
       <el-input-number v-model="port" :min="0" :max="65535" :precision="0"
+        :disabled="!!pool.trim()"
         @change="port = $event ?? 0" />
       <div class="muted small">{{ t('resources.serviceNodePortHint') }}</div>
     </el-form-item>
-    <el-alert v-if="port > 0" type="warning" :closable="false"
+    <el-form-item :label="t('resources.nodePortPool')">
+      <el-input v-model.trim="pool" class="mono" placeholder="31080-31089,31100,31105"
+        :maxlength="4096" />
+      <div class="muted small">{{ t('resources.nodePortPoolHint') }}</div>
+    </el-form-item>
+    <el-alert v-if="port > 0 && !pool.trim()" type="warning" :closable="false"
       :title="t('resources.fixedNodePortHint')" />
-    <div v-if="host && port > 0" class="mono small">
+    <div v-if="host && port > 0 && !pool.trim()" class="mono small">
       {{ t('resources.endpointPreview') }} http://{{ host }}:{{ port }}
     </div>
   </template>

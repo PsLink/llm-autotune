@@ -50,6 +50,7 @@ from app.control.launch.base import (
     DeploymentDriver,
     DeploymentHandle,
     DeploymentState,
+    LaunchDeferred,
     LaunchSpec,
     MachineInfo,
     WorkloadSpec,
@@ -60,8 +61,9 @@ from app.control.launch.base import (
 )
 from app.control.launch.clusters import K8sClusterSettings, as_cluster, resolve_cluster
 from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
-from app.control.launch.k8s_api import K8sApi, get_k8s_api
+from app.control.launch.k8s_api import K8sApi, K8sError, NodePortAllocated, get_k8s_api
 from app.core.config import Settings, get_settings
+from app.core.nodeports import parse_nodeport_pool
 from app.hardware import normalize_gpu_type
 
 logger = logging.getLogger(__name__)
@@ -926,7 +928,17 @@ class K8sDriver(DeploymentDriver):
         manifests = render_workload(spec, self.settings)
         # apply, not create: idempotent, so a relaunch of the same run replaces
         # any stale objects rather than colliding on the name.
-        self.api.apply(manifests)
+        if self._mode == "deployment" and self.settings.k8s_service_nodeport_pool:
+            self._apply_with_nodeport_pool(spec, manifests)
+        else:
+            if self._mode == "deployment":
+                current = self.api.get("service", spec.container_name)
+                ports = ((current or {}).get("spec") or {}).get("ports") or []
+                if ports and ports[0].get("nodePort"):
+                    # Clearing a pool or switching back to a fixed port changes
+                    # future runs, never a Service this run already owns.
+                    manifests[1]["spec"]["ports"][0]["nodePort"] = ports[0]["nodePort"]
+            self.api.apply(manifests)
         handle = DeploymentHandle(
             driver=self.name,
             container_name=spec.container_name,
@@ -936,6 +948,49 @@ class K8sDriver(DeploymentDriver):
         # The "exact launch command" is the manifest set it was applied from —
         # the reproducible artifact, the way the docker run line is for ssh.
         return handle, f"kubectl apply -f - <<'EOF'\n{_yaml_ish(manifests)}\nEOF"
+
+    def _apply_with_nodeport_pool(self, spec: LaunchSpec, manifests: list[dict]) -> None:
+        deployment, service = manifests
+        current = self.api.get("service", spec.container_name)
+        current_ports = ((current or {}).get("spec") or {}).get("ports") or []
+        allocated = current_ports[0].get("nodePort") if current_ports else None
+        if allocated:
+            # Reattaching/relaunching never reallocates a live Service, even
+            # after a pool edit or a worker restart.
+            service["spec"]["ports"][0]["nodePort"] = allocated
+            self.api.apply(service)
+        else:
+            candidates = parse_nodeport_pool(self.settings.k8s_service_nodeport_pool)
+            # Skip known reservations in our namespace. This is only an
+            # optimization: the API server arbitrates cross-namespace races.
+            try:
+                used = {
+                    port.get("nodePort")
+                    for svc in self.api.list("services")
+                    for port in (svc.get("spec") or {}).get("ports") or []
+                }
+            except K8sError:
+                used = set()  # scoped credentials may not grant list
+            for port in candidates:
+                if port in used:
+                    continue
+                service["spec"]["ports"][0]["nodePort"] = port
+                try:
+                    # Reserve the port BEFORE starting an engine or taking GPUs.
+                    self.api.apply(service)
+                    break
+                except NodePortAllocated:
+                    continue
+            else:
+                raise LaunchDeferred("waiting for a free NodePort in the configured pool")
+        try:
+            self.api.apply(deployment)
+        except Exception:
+            # If no engine exists, release our new reservation on failure.
+            # Never remove an existing run's Service on a failed reapply.
+            if current is None and self.api.get("deployment", spec.container_name) is None:
+                self.api.delete("service", spec.container_name)
+            raise
 
     def state(self, handle: DeploymentHandle) -> DeploymentState:
         primary = self.api.get(self._resource, handle.container_name)
@@ -1033,7 +1088,11 @@ class K8sDriver(DeploymentDriver):
 
     def attach(self, spec: LaunchSpec) -> DeploymentHandle | None:
         if self.api.get(self._resource, spec.container_name) is None:
-            return None
+            # A worker can die after reserving a pool port but before creating
+            # the Deployment. Keep that Service visible to cancellation and
+            # teardown, so its NodePort is not leaked.
+            if self._mode != "deployment" or self.api.get("service", spec.container_name) is None:
+                return None
         return DeploymentHandle(
             driver=self.name,
             container_name=spec.container_name,

@@ -1785,6 +1785,10 @@ class Supervisor:
                 # would put an ssh round-trip on the readiness poll.
                 self._snapshot_environment(run, handle)
                 self._transition(session, run, RunStatus.HEALTH_CHECK)
+            elif state == DeploymentState.GONE:
+                # A k8s handle can still own a reserved Service after its
+                # Deployment disappeared. Fail and tear down that reservation.
+                self._fail(session, run, "gone", "container disappeared")
             elif state == DeploymentState.CRASHED:
                 self._capture_failure(session, run, handle)
             else:

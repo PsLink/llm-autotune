@@ -926,6 +926,8 @@ const zh: typeof en = {
     endpointHost: '服务公网 IP / 域名',
     endpointHostHint: '填写 Worker 和压测端都能访问的节点公网 IP 或域名，不带协议、端口或路径。留空则使用节点内网 IP。API Server 的地址不一定是服务入口。',
     serviceNodePort: '服务 NodePort',
+    nodePortPool: '候选 NodePort 池（可选）',
+    nodePortPoolHint: '支持范围和逗号分隔的列表，例如 31080-31089,31100。填写后优先于单端口配置；每个任务启动时选择一个空闲端口，全部占用时等待，服务删除后释放。请预先放通池内端口，并确保它们在集群允许范围内。',
     serviceNodePortHint: '0 表示自动分配；指定端口必须在集群允许范围内（默认 30000–32767）。公网入口需将此端口转发到节点的同一端口。',
     fixedNodePortHint: '固定 NodePort 只能被一个 Service 占用；请串行运行，并等待前一个服务清理后再启动。并发运行请使用自动分配。',
     endpointPreview: '压测入口：',

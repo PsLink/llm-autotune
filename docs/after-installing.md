@@ -162,6 +162,24 @@ and fixed port settings here do not override an Operator's endpoint in
 (15 seconds) on their next driver lookup; an existing Service keeps its actual
 allocated port.
 
+For concurrent runs through a limited set of public ports, fill **Candidate
+NodePort pool** with ranges and/or comma-separated ports, for example
+`31080-31089,31100,31105`. A nonempty pool overrides the single NodePort field.
+Each run reserves one port with Kubernetes before its Deployment starts;
+allocation conflicts try the next candidate. If all candidates are occupied,
+the run stays pending and retries on a later worker tick. Deleting its Service
+releases the port. The API server arbitrates allocations across namespaces and
+workers; no separate database port lock is needed. Existing Services retain
+their allocated port even if the pool is edited or the worker restarts.
+
+The cluster API accepts `service_nodeport_pool` as a range string or an integer
+list such as `[31080, 31081, 31100]`, and returns it as a string. Empty keeps
+the existing fixed-port/automatic behavior. Pools allow up to 4096 unique ports
+between 1 and 65535; the actual permitted range is enforced by the cluster.
+Expose every candidate port on the public entry point. This feature applies to
+deployment-mode clusters. Upgrades must run the normal database migrations
+(`021_cluster_nodeport_pool`) before starting the updated API and workers.
+
 Network paths:
 
 - AutoTune's pods reach the cluster's API server.

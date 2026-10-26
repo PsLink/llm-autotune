@@ -1,6 +1,9 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.nodeports import parse_nodeport_pool
 
 
 class Settings(BaseSettings):
@@ -269,6 +272,13 @@ class Settings(BaseSettings):
     # `k8s_service_nodeport` pins the NodePort (0 = let k8s allocate one).
     k8s_node_host: str = ""
     k8s_service_nodeport: int = 0
+    k8s_service_nodeport_pool: str = ""
+
+    @field_validator("k8s_service_nodeport_pool")
+    @classmethod
+    def _nodeport_pool(cls, value: str) -> str:
+        parse_nodeport_pool(value)
+        return value.strip()
     # The scheduler's resource name for a GPU, requested per pod. Placement
     # (which node, which devices) is the cluster's job, so the spec asks for a
     # count and never names an index.

@@ -7,13 +7,75 @@ routes by mode, and that constructing ClientApi + resolving resources needs
 neither a kubeconfig nor the cluster (config load is lazy).
 """
 
+import json
+import subprocess
+from types import SimpleNamespace
+
+import pytest
+
 from app.control.launch.k8s_api import (
     ClientApi,
+    K8sError,
     KubectlApi,
+    NodePortAllocated,
     UnavailableK8sApi,
     get_k8s_api,
 )
 from app.core.config import get_settings
+
+_PORT_CONFLICT = json.dumps({"message": (
+    'Service "run" is invalid: spec.ports[0].nodePort: Invalid value: 31080: '
+    "provided port is already allocated"
+)})
+
+
+@pytest.mark.parametrize("already_exists", [False, True])
+def test_client_preserves_nodeport_allocation_conflict(already_exists, monkeypatch):
+    from kubernetes.client.rest import ApiException
+
+    api = ClientApi(_s())
+    api._ApiException = ApiException
+
+    def occupied(*args):
+        error = ApiException(status=422, reason="Unprocessable Entity")
+        error.body = _PORT_CONFLICT
+        raise error
+
+    def exists(*args):
+        raise ApiException(status=409, reason="AlreadyExists")
+
+    monkeypatch.setattr(
+        api, "_writers", lambda _: (exists if already_exists else occupied, occupied),
+    )
+    monkeypatch.setattr(api, "get", lambda *args: {"metadata": {"resourceVersion": "1"}})
+    with pytest.raises(NodePortAllocated):
+        api._apply_one({"kind": "Service", "metadata": {"name": "run"}})
+
+
+@pytest.mark.parametrize(("detail", "error_type"), [
+    (_PORT_CONFLICT, NodePortAllocated),
+    ("Forbidden", K8sError),
+    ("spec.ports[0].nodePort: provided port is not in the valid range", K8sError),
+])
+def test_kubectl_only_treats_allocated_ports_as_retryable(detail, error_type, monkeypatch):
+    api = KubectlApi(_s())
+    monkeypatch.setattr(api, "_run", lambda *args, **kwargs: subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="", stderr=detail,
+    ))
+    with pytest.raises(K8sError) as exc:
+        api.apply({"kind": "Service", "metadata": {"name": "run"}})
+    assert type(exc.value) is error_type
+
+
+def test_client_can_list_service_reservations(monkeypatch):
+    api = ClientApi(_s())
+    service = {"spec": {"ports": [{"nodePort": 31080}]}}
+    api._core = SimpleNamespace(
+        list_namespaced_service=lambda ns: SimpleNamespace(items=[service]),
+    )
+    monkeypatch.setattr(api, "_ensure", lambda: None)
+    monkeypatch.setattr(api, "_sanitize", lambda obj: obj)
+    assert api.list("services") == [service]
 
 
 def _s(**over):
