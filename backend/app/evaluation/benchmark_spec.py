@@ -205,6 +205,17 @@ class BenchmarkSpec(BaseModel):
                 "bfcl parameters require kind=bfcl; use bfcl_quality for a quality check")
         return self
 
+    def require_ranking_metric(self, target: str) -> None:
+        """Ask LLMBench to explain missing token usage when this stage ranks by BFCL TPM."""
+        bfcl = self.bfcl or self.bfcl_quality
+        if bfcl is None:
+            return
+        targets = {"bfcl_v4.total_tpm", "bfcl_v4/total_tpm", "bfcl_v4/total_tpm_per_gpu"}
+        if self.kind == "bfcl":
+            targets.update(("", "total_tpm", "total_tpm_per_gpu"))
+        if target in targets and "total_tpm" not in bfcl.required_metrics:
+            bfcl.required_metrics.append("total_tpm")
+
     def essentials(self) -> dict:
         """Only what this kind actually uses, so two specs that differ in an
         unused field are the same benchmark."""

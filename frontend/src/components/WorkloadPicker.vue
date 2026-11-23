@@ -21,6 +21,7 @@ const props = defineProps<{
   frozen?: FrozenDataset[]
   benchmarks: BenchmarkChoice[]
   /** The second stage offers replay, BFCL or an existing benchmark. */
+  targetMetric?: string
   noSweep?: boolean
 }>()
 const w = defineModel<Workload>({ required: true })
@@ -71,7 +72,7 @@ function frozenNote(d: FrozenDataset): string {
 const resolved = ref<{ slug: string; name: string; module: string; exists: boolean | null } | null>(null)
 let asked = 0
 watch(
-  () => JSON.stringify(specOf(w.value)),
+  [() => JSON.stringify(specOf(w.value)), () => props.targetMetric],
   async () => {
     const spec = specOf(w.value)
     const mine = ++asked
@@ -82,7 +83,7 @@ watch(
       return
     }
     try {
-      const { data } = await api.post('/benchmarks/spec', spec)
+      const { data } = await api.post('/benchmarks/spec', spec, { params: { target_metric: props.targetMetric } })
       if (mine !== asked) return
       resolved.value = data
       emit('module', data.module)

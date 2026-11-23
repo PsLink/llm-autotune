@@ -83,6 +83,8 @@ class Scenario:
     operating_rule: str = ""
     supports: frozenset[str] = frozenset()
 
+    params: dict[str, Any] = field(default_factory=dict)
+
     @property
     def operating(self) -> dict[str, float]:
         return self.points.get("operating", {})
@@ -598,7 +600,8 @@ def adapt(
     module = key.split("#", 1)[0]
     family = family_of(module, replay_names, aliases)
     params = params or {}
-    sc = Scenario(key=key, module=module, family=family, kind=_KIND.get(family, "quality"))
+    sc = Scenario(key=key, module=module, family=family, kind=_KIND.get(family, "quality"),
+                  params=params)
     cards = cards or cards_from_card_norm(raw)
     if family == "perf_guidellm_sweep":
         _sweep(sc, raw, params, cards)

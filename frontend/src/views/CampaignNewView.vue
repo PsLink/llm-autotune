@@ -1447,7 +1447,7 @@ onMounted(async () => {
                 <span>{{ t('campaignNew.workload') }}</span>
                 <InfoHint :width="380"><span v-html="t('campaignNew.workloadHint')" /></InfoHint>
               </template>
-              <WorkloadPicker v-model="workload" v-model:rebuild="rebuildAtStart"
+              <WorkloadPicker :target-metric="selectedObjective?.target_metric" v-model="workload" v-model:rebuild="rebuildAtStart"
                 :profiles="datasetProfiles" :frozen="frozenDatasets" :benchmarks="benchmarks"
                 @module="(m) => (screenModule = m)" @datasets-changed="loadDatasetProfiles" />
             </el-form-item>
@@ -1552,7 +1552,7 @@ onMounted(async () => {
                     </InfoHint>
                   </div>
                   <template v-if="form.verify_enabled">
-                    <WorkloadPicker v-model="verifyWorkload" v-model:rebuild="rebuildAtStart"
+                    <WorkloadPicker :target-metric="selectedVerifyObjective?.target_metric" v-model="verifyWorkload" v-model:rebuild="rebuildAtStart"
                       :profiles="datasetProfiles" :frozen="frozenDatasets" :benchmarks="benchmarks" no-sweep
                       @module="(m) => (verifyModule = m)" @datasets-changed="loadDatasetProfiles" />
                     <div class="grid-2 verify-fields">

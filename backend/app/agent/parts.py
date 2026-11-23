@@ -24,6 +24,7 @@ import shlex
 from datetime import datetime
 from typing import Any
 
+from app import staging
 from app.agent.loader import RunBundle
 from app.control.engines import get_adapter
 from app.control.engines.flags import render_flag
@@ -40,7 +41,8 @@ from app.evaluation.scenarios import (
     scenario_label,
     scenarios_of,
 )
-from app.objective import target_metric
+from app.measures import Reader
+from app.objective import redlines, target_metric
 from app.schemas.agent import (
     BenchmarkLLMBenchOut,
     BenchmarkModuleOut,
@@ -381,7 +383,7 @@ def platform_overlay(campaign) -> BenchmarkPlatformOut:
         slo=gate.to_dict() if gate else {},
         gate_text=gate.describe() if gate else "",
         max_run_minutes=campaign.max_run_minutes or 0,
-        quality_floors=_quality_floors(campaign),
+        quality_floors=_quality_floors(campaign.objective),
     )
 
 
@@ -582,26 +584,52 @@ def ranking_metric_of(b: RunBundle) -> str:
     return ""
 
 
-def _quality_floors(campaign) -> dict[str, float]:
-    """Redlines on modules that are not scenarios — a quality suite's score,
-    say. Read off the campaign objective so a report shows the same floors the
-    leaderboard ranked by."""
-    floors: dict[str, float] = {}
-    objective = (campaign.objective if campaign is not None else None) or {}
-    for rule in objective.get("redlines") or []:
+def _floor_rules(objective: dict | None):
+    """Keep the position of each floor in the result's stored constraint vector."""
+    for index, rule in enumerate(redlines(objective)):
         if not isinstance(rule, dict) or rule.get("op") not in (">=", ">"):
             continue
         metric = str(rule.get("metric") or "")
-        if rule.get("relative_to"):
-            continue  # an offset is not an absolute floor
         leaf = metric.rsplit(".", 1)[-1]
-        if not metric or leaf.startswith("ttft_") or leaf == "request_output_tps":
-            continue  # that is the latency gate, not a quality floor
-        try:
-            floors[metric] = float(rule.get("value"))
-        except (TypeError, ValueError):
-            continue
-    return floors
+        if metric and not leaf.startswith("ttft_") and leaf != "request_output_tps":
+            yield index, rule
+
+
+def _quality_floors(objective: dict | None) -> dict[str, float]:
+    return {rule["metric"]: value for _, rule in _floor_rules(objective)
+            if not rule.get("relative_to") and (value := _number(rule.get("value"))) is not None}
+
+
+def _floor_verdicts(b: RunBundle, reader: Reader) -> list[VerdictOut]:
+    objective = staging.objective(b.campaign, staging.stage_of(b.candidate)) if b.campaign else {}
+    overlay = b.overlay.quality_floors if b.overlay is not None else None
+    slacks = (b.result.constraints or []) if b.result is not None else []
+    rules = list(_floor_rules(objective))
+    if overlay is not None:
+        rules = [(i, r) for i, r in rules if r.get("relative_to") and r["metric"] not in overlay]
+        rules.extend((-1, {"metric": k, "op": ">=", "value": v}) for k, v in overlay.items())
+
+    out = []
+    for index, rule in rules:
+        ref = rule["metric"]
+        actual = _number(reader.get(ref))
+        if rule.get("relative_to"):
+            # The signed slack is the resolved minimum minus the observed value.
+            slack = _number(slacks[index]) if index < len(slacks) else None
+            limit = actual + slack if actual is not None and slack is not None else None
+            ok = slack is not None and (slack < 0 if rule["op"] == ">" else slack <= 0)
+        else:
+            limit = _number(rule.get("value"))
+            ok = None
+            if actual is not None and limit is not None:
+                ok = actual > limit if rule["op"] == ">" else actual >= limit
+        module, _, metric = ref.replace("/", ".", 1).partition(".")
+        if not metric:
+            scenario = reader.scenario_for(ref)
+            module, metric = (scenario.key if scenario else ""), ref
+        out.append(VerdictOut(module=module, metric=metric, role="quality_floor",
+                              min=limit, actual=actual, ok=ok))
+    return out
 
 
 def _measures(b: RunBundle, metrics: dict[str, Any], reports: list[dict]) -> list[ScenarioMeasures]:
@@ -719,53 +747,7 @@ def results_part(b: RunBundle) -> ResultsPart:
                 )
             )
 
-    # Quality floors the campaign's objective declares as redlines on a
-    # non-scenario module, which the benchmark itself may not have judged.
-    floors = (
-        b.overlay.quality_floors
-        if b.overlay is not None and b.overlay.quality_floors is not None
-        else _quality_floors(b.campaign)
-    )
-    for full_key, floor in floors.items():
-        module, _, metric = str(full_key).partition(".")
-        actual = _number(metrics.get(full_key))
-        limit = _number(floor)
-        verdicts.append(
-            VerdictOut(
-                module=module,
-                metric=metric or full_key,
-                role="quality_floor",
-                min=limit,
-                actual=actual,
-                ok=(actual >= limit) if (actual is not None and limit is not None) else None,
-            )
-        )
-
-    # Relative BFCL floors were resolved when this result was judged. Recover
-    # the absolute threshold from its stored signed slack, rather than compare
-    # accuracy with the negative offset (which would pass every candidate).
-    if b.campaign is not None:
-        from app import staging
-        from app.measures import reader_for
-        from app.objective import redlines
-
-        objective = staging.objective(b.campaign, staging.stage_of(b.candidate))
-        reader = reader_for(metrics, b.result.raw if b.result is not None else {},
-                            b.candidate.config if b.candidate is not None else {}, b.campaign)
-        slacks = list(b.result.constraints or []) if b.result is not None else []
-        for index, rule in enumerate(redlines(objective)):
-            ref = str(rule.get("metric") or "")
-            if not (ref.startswith("bfcl_v4/") and rule.get("relative_to")
-                    and rule.get("op") == ">="):
-                continue
-            actual = _number(reader.get(ref))
-            slack = _number(slacks[index]) if index < len(slacks) else None
-            verdicts.append(VerdictOut(
-                module="bfcl_v4", metric=ref.split("/", 1)[1], role="quality_floor",
-                actual=actual,
-                min=actual + slack if actual is not None and slack is not None else None,
-                ok=slack <= 0 if slack is not None else False,
-            ))
+    verdicts.extend(_floor_verdicts(b, Reader(metrics, reports, cards_of(b))))
 
     first = scenarios[0] if scenarios else None
     ranking_metric = ranking_metric_of(b)

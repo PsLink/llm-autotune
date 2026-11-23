@@ -953,3 +953,25 @@ async def test_bfcl_report_separates_accuracy_from_telemetry_and_compares_protoc
     })
     assert response.status_code == 422, response.text
     assert "cases_per_category" in response.text
+
+
+async def test_verify_report_resolves_an_absolute_bfcl_accuracy_floor(stack):
+    http, factory = stack
+    rid = await _seed_run(factory, sid=1, name="verify", engine_args={}, base_tps=50)
+    async with factory() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.verify_benchmark_slug = "bfcl-verify"
+        campaign.verify_objective = {"target_metric": "bfcl_v4.total_tpm", "redlines": [
+            {"metric": "bfcl_v4/accuracy[overall]", "op": ">=", "value": 0.9}]}
+        run = await session.get(Run, rid)
+        candidate = await session.get(Candidate, run.candidate_id)
+        candidate.kind = "verification"
+        result = (await session.execute(select(Result).where(Result.run_id == rid))).scalar_one()
+        result.raw = {"runs": [{"module_name": "bfcl_v4", "metrics_json": {"accuracy": 0.71}}]}
+        result.metrics = _flatten_metrics(result.raw)
+        await session.commit()
+    response = await http.get(f"/api/agent/v1/runs/{rid}/results")
+    assert response.status_code == 200, response.text
+    floors = [v for v in response.json()["verdicts"] if v["role"] == "quality_floor"]
+    assert floors == [{"module": "bfcl_v4", "metric": "accuracy[overall]", "min": 0.9,
+                       "actual": 0.71, "max": None, "role": "quality_floor", "ok": False}]

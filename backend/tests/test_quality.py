@@ -97,7 +97,7 @@ def test_the_floor_is_production_s_average_less_the_allowed_drop(db):
 
     _measure(db, {}, 72.0, baseline=True)  # validation's production run
     _measure(db, {}, 68.0)  # production as a recipe campaign's empty config
-    assert quality.production_scores(db, campaign, [GPQA]) == {
+    assert quality.production_scores(db, campaign, [GPQA], reader_for(early.metrics)) == {
         GPQA: pytest.approx(0.70)
     }
     assert quality.rescore(db, campaign, lambda run: OBJECTIVE) >= 1
@@ -169,14 +169,16 @@ def test_bfcl_floor_rejudges_finalists_after_production_arrives(db):
                  quality.quality_floor([], 0.1, metrics=["bfcl_v4/accuracy[overall]"])}
     campaign = db.get(Campaign, 1)
 
-    def record(n, accuracy, baseline):
+    def record(n, accuracy, baseline, task="bfcl-v4-tool-use-v1", cases=20):
         candidate = Candidate(id=n, campaign_id=1, config={} if baseline else {"tp": 4},
                               config_hash=f"bfcl-{n}", is_baseline=baseline)
         db.add(candidate)
         db.add(Run(id=n, campaign_id=1, candidate_id=n))
         metrics = {"bfcl_v4.accuracy": accuracy, "bfcl_v4.passed_cases_per_hour": 100}
-        reader = reader_for(metrics, {}, candidate.config, campaign)
-        result = Result(run_id=n, source="llmbench", metrics=metrics,
+        raw = {"runs": [{"module_name": "bfcl_v4", "params_json": {
+            "task_set": task, "cases_per_category": cases}}]}
+        reader = reader_for(metrics, raw, candidate.config, campaign)
+        result = Result(run_id=n, source="llmbench", metrics=metrics, raw=raw,
                         **quality.judge(db, campaign, objective, reader).as_dict())
         db.add(result)
         db.flush()
@@ -184,8 +186,18 @@ def test_bfcl_floor_rejudges_finalists_after_production_arrives(db):
 
     finalist = record(1, 0.75, False)
     assert not finalist.feasible
-    record(2, 0.8, True)
+    record(2, 0.50, True, "bfcl-v4-smoke-v1", 1)
+    record(3, 0.50, True, cases=5)
+    quality.rescore(db, campaign, lambda run: objective)
+    assert not finalist.feasible and "no production score" in finalist.breaches[0]
+    record(4, 0.90, True)
+    quality.rescore(db, campaign, lambda run: objective)
+    assert not finalist.feasible and "production 0.9" in finalist.breaches[0]
+    record(5, 0.70, True)
     assert quality.rescore(db, campaign, lambda run: objective) >= 1
     assert finalist.feasible
-    poor = record(3, 0.5, False)
+    record(6, 0.77, True)
+    quality.rescore(db, campaign, lambda run: objective)
+    assert finalist.constraints == pytest.approx([-0.06])
+    poor = record(7, 0.5, False)
     assert not poor.feasible

@@ -254,7 +254,25 @@ async def test_bfcl_campaign_and_verification_default_to_total_tpm(client):
     assert out["objective"]["target_metric"] == "bfcl_v4.total_tpm"
     assert out["verify_objective"]["target_metric"] == "bfcl_v4.total_tpm"
     assert out["dataset_profile"] == ""
-    assert [s.kind for s in client.made] == ["bfcl", "bfcl"]
+    for spec in client.made:
+        assert "total_tpm" in bs.document(spec)["modules"][0]["params"]["required_metrics"]
+    preview = await client.post("/api/benchmarks/spec", json={"kind": "bfcl"})
+    assert preview.json()["slug"] == out["verify_benchmark_slug"] == out["benchmark_slug"]
+
+
+async def test_bfcl_requires_tpm_only_for_the_stage_that_ranks_on_it(client):
+    response = await client.post("/api/campaigns", json=_body(
+        benchmark_spec={"kind": "bfcl"}, objective={"target_metric": "bfcl_v4.accuracy"},
+        verify_benchmark_spec={"kind": "bfcl"}, verify_top_k=2))
+    assert response.status_code == 200, response.text
+    screen, verify = client.made
+    assert "total_tpm" not in screen.bfcl.required_metrics
+    assert verify.bfcl.required_metrics.count("total_tpm") == 1
+    body = campaigns_api.PreflightRequest(**_body(
+        benchmark_spec={"kind": "bfcl"}, objective={"target_metric": "bfcl_v4.accuracy"},
+        verify_benchmark_spec={"kind": "bfcl"}))
+    campaigns_api._with_specs(body, {})
+    assert (body.benchmark_slug, body.verify_benchmark_slug) == (screen.slug, verify.slug)
 
 
 def test_preflight_described_workload_includes_both_quality_modules():
@@ -288,3 +306,16 @@ async def test_manual_validation_refuses_invalid_quality_metric_references(clien
         "quality_max_drop": 5,
     })
     assert response.status_code == 422, response.text
+
+
+def test_preflight_detects_an_llmbench_without_bfcl(mock_llmbench, monkeypatch):
+    import httpx
+
+    def unavailable(name):
+        response = httpx.Response(404, request=httpx.Request("GET", f"http://bench/modules/{name}"))
+        response.raise_for_status()
+
+    monkeypatch.setattr(mock_llmbench, "module_defaults", unavailable)
+    body = campaigns_api.PreflightRequest(**_body(benchmark_spec={"kind": "bfcl"}))
+    checks = campaigns_api._benchmark_checks(body, {}, mock_llmbench)
+    assert any(c.key == "bfcl_module" and c.status == "fail" for c in checks)

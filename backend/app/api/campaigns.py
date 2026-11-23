@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import anyio
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
@@ -282,15 +283,25 @@ async def create_campaign(
     return await _campaign_out(session, campaign)
 
 
-def _spec(raw: dict | None, field: str) -> BenchmarkSpec | None:
+def _spec(body, field: str) -> BenchmarkSpec | None:
+    raw = getattr(body, field)
     if raw is None:
         return None
     try:
-        return BenchmarkSpec.model_validate(raw)
+        spec = BenchmarkSpec.model_validate(raw)
     except ValidationError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field}: {exc.errors()}"
         ) from exc
+
+    objective_field = "verify_objective" if field == "verify_benchmark_spec" else "objective"
+    objective = getattr(body, objective_field) or {}
+    target = objective.get("target_metric") or ""
+    spec.require_ranking_metric(target)
+    if spec.kind == "bfcl" and not target:
+        setattr(body, objective_field, {"direction": "maximize", **objective,
+                                        "target_metric": "bfcl_v4.total_tpm"})
+    return spec
 
 
 async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
@@ -299,7 +310,7 @@ async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
     replay of a rolling profile also pins that profile, unless one is set."""
     for spec_field, slug_field in (("benchmark_spec", "benchmark_slug"),
                                    ("verify_benchmark_spec", "verify_benchmark_slug")):
-        spec = _spec(getattr(body, spec_field), spec_field)
+        spec = _spec(body, spec_field)
         if spec is None:
             continue
         try:
@@ -312,7 +323,6 @@ async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
                 f"could not create the benchmark on LLMBench: {exc}",
             ) from exc
         setattr(body, slug_field, ensured.slug)
-        _bfcl_objective(body, spec, spec_field)
         if spec.kind == "replay" and spec.dataset_profile.strip() and not body.dataset_profile:
             body.dataset_profile = spec.dataset_profile.strip()
         if spec.kind == "replay" and spec.dataset_frozen.strip():
@@ -682,15 +692,6 @@ class PreflightRequest(BaseModel):
     policy_image: str = ""
 
 
-def _bfcl_objective(body, spec: BenchmarkSpec, spec_field: str) -> None:
-    if spec.kind == "bfcl":
-        field = "verify_objective" if spec_field == "verify_benchmark_spec" else "objective"
-        current = getattr(body, field) or {}
-        if not current.get("target_metric"):
-            setattr(body, field, {"direction": "maximize", **current,
-                                  "target_metric": "bfcl_v4.total_tpm"})
-
-
 def _with_specs(
     body: PreflightRequest,
     catalog: dict[str, list[str]] | None,
@@ -701,11 +702,10 @@ def _with_specs(
     waits for the campaign itself."""
     for spec_field, slug_field in (("benchmark_spec", "benchmark_slug"),
                                    ("verify_benchmark_spec", "verify_benchmark_slug")):
-        spec = _spec(getattr(body, spec_field), spec_field)
+        spec = _spec(body, spec_field)
         if spec is None:
             continue
         setattr(body, slug_field, spec.slug)
-        _bfcl_objective(body, spec, spec_field)
         if catalog is not None:
             catalog.setdefault(spec.slug, [spec.module]
                                + (["opencompass"] if spec.quality is not None else [])
@@ -728,6 +728,17 @@ def _benchmark_checks(
             [r.get("metric", "") for r in redlines(body.objective)],
         )
     ]
+    stages = (body.benchmark_slug, body.verify_benchmark_slug)
+    if catalog and any("bfcl_v4" in catalog.get(slug, []) for slug in stages):
+        try:
+            client.module_defaults("bfcl_v4")
+        except httpx.HTTPError as exc:
+            missing = isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404
+            checks.append(pf.Check(
+                "bfcl_module", "BFCL V4 module", pf.FAIL if missing else pf.SKIP,
+                "Deploy LLMBench with the bfcl_v4 module before running this benchmark."
+                if missing else "Could not check the BFCL module on LLMBench.",
+            ))
     if body.verify_benchmark_slug:
         checks.append(
             pf.benchmark_check(

@@ -2,7 +2,9 @@
 
 AutoTune 支持 LLMBench 的 `bfcl_v4` 模块，可以作为独立负载，也可以在 sweep/replay 后附加质量检测。运行和官方评分由 LLMBench 完成，AutoTune 不需要安装 BFCL Python 环境。LLMBench 服务必须部署包含该模块及其运行依赖的版本，推理端点需要支持原生流式工具调用，并配置匹配模型的 tool-call parser。
 
-在新建调优任务的负载选择中选 **BFCL V4**。选择固定题集、每类题数、题目并发、超时、重试和遥测覆盖率要求。独立 BFCL 默认按 `bfcl_v4.total_tpm`（输入加输出的总 TPM）最大化排名，也提供 BFCL accuracy 内置目标；生产调优应为准确率配置经过校准的红线。
+默认安装脚本固定的 LLMBench v0.3.0 尚未包含 BFCL。使用 BFCL 时，API 和 worker 均需部署包含该模块的 LLMBench 镜像。
+
+在新建调优任务的负载选择中选 **BFCL V4**。选择固定题集、每类题数、题目并发、超时、重试和遥测覆盖率要求。独立 BFCL 默认按 `bfcl_v4.total_tpm`（输入加输出的总 TPM）最大化排名，生成的 benchmark 会自动将 `total_tpm` 加入必报指标；缺失 token usage 时 LLMBench 会指出缺失的指标。也提供 BFCL accuracy 内置目标；生产调优应为准确率配置经过校准的红线。
 
 如需保留原来的性能负载，在质量检测中选择 **BFCL V4**。默认只测生产配置和入围候选，也可选择每轮测量。质量底线使用 `bfcl_v4/accuracy[overall]`，例如允许比生产低 5 个百分点时，保存的红线为：
 
@@ -10,7 +12,7 @@ AutoTune 支持 LLMBench 的 `bfcl_v4` 模块，可以作为独立负载，也�
 {"metric": "bfcl_v4/accuracy[overall]", "op": ">=", "relative_to": "production", "value": -0.05}
 ```
 
-生产分数尚不存在时，候选不会通过相对底线；生产结果到达后会重新评分。API 支持同时追加 OpenCompass `quality` 和 `bfcl_quality`，界面选择其中一个。独立 BFCL 负载已经测量工具调用质量，不能再追加一个 `bfcl_quality`。
+生产均分仅使用相同 BFCL 题集、每类题数及生成设置的测量。对应生产分数尚不存在时，候选不会通过相对底线；生产结果到达后会重新评分。API 支持同时追加 OpenCompass `quality` 和 `bfcl_quality`，界面选择其中一个。独立 BFCL 负载已经测量工具调用质量，不能再追加一个 `bfcl_quality`。
 
 ## API 配置
 
