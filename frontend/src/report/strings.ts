@@ -6,6 +6,10 @@
 export type Lang = 'en' | 'zh'
 
 const en = {
+  bfclScanStatus: 'Scan status', bfclPartial: 'Partial ({completed}/{planned} valid points)',
+  bfclComplete: 'Complete', bfclCanceled: 'Canceled',
+  bfclStatus: 'Point status', bfclBest: 'Best eligible', bfclMeasured: 'Measured',
+  bfclIneligible: 'Below requirements', bfclFailed: 'Failed',
   bfclPassed: 'Passed cases/hour', bfclConcurrency: 'Case concurrency',
   bfclNote: 'Frozen official BFCL subset. Concurrency counts cases. Rates exclude grading. Compare accuracy together with throughput and telemetry coverage.',
 
@@ -122,6 +126,10 @@ const en = {
 type Strings = typeof en
 
 const zh: Strings = {
+  bfclScanStatus: '扫描状态', bfclPartial: '部分完成（有效点 {completed}/{planned}）',
+  bfclComplete: '完整', bfclCanceled: '已取消',
+  bfclStatus: '点状态', bfclBest: '最佳合格点', bfclMeasured: '已测量',
+  bfclIneligible: '未满足要求', bfclFailed: '失败',
   bfclPassed: '每小时通过题数', bfclConcurrency: '题目并发',
   bfclNote: '固定的官方 BFCL 子集。并发指题目数，速率不含评分时间。应同时比较准确率、吞吐和遥测覆盖率。',
 

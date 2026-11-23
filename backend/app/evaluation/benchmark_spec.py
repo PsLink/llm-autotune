@@ -111,6 +111,8 @@ class BFCLSpec(BaseModel):
     ] = "bfcl-v4-tool-use-v1"
     cases_per_category: int = Field(20, ge=1, le=200)
     concurrency: int = Field(2, ge=1, le=128)
+    concurrency_grid: list[int] | None = Field(default=None, min_length=2, max_length=16)
+    max_total_seconds: float | None = Field(default=None, ge=1, le=1382400)
     request_timeout_seconds: float = Field(120, ge=1, le=3600)
     max_seconds: float = Field(1800, ge=1, le=86400)
     request_retries: int = Field(0, ge=0, le=3)
@@ -122,8 +124,21 @@ class BFCLSpec(BaseModel):
     min_usage_coverage: float = Field(0, ge=0, le=1)
     min_cache_usage_coverage: float = Field(0, ge=0, le=1)
 
+    @field_validator("concurrency_grid", mode="before")
+    @classmethod
+    def _strict_grid(cls, value):
+        if value is not None and (not isinstance(value, list)
+                                  or any(type(c) is not int for c in value)):
+            raise ValueError("BFCL scan requires integer concurrency points")
+        return value
+
     @model_validator(mode="after")
     def _smoke_count(self) -> BFCLSpec:
+        if self.concurrency_grid is not None:
+            grid = self.concurrency_grid
+            if (grid != sorted(set(grid))
+                    or any(type(c) is not int or not 1 <= c <= 128 for c in grid)):
+                raise ValueError("concurrency_grid requires increasing unique integers in [1, 128]")
         if self.task_set == "bfcl-v4-smoke-v1" and self.cases_per_category != 1:
             raise ValueError("the BFCL smoke subset requires cases_per_category=1")
         return self
@@ -138,7 +153,7 @@ def bfcl_module(spec: BFCLSpec, *, quality: bool = False) -> dict:
                "input_usage_coverage", "output_usage_coverage", "cache_usage_coverage"]
     return {
         "module_name": BFCL_MODULE,
-        "params": spec.model_dump(),
+        "params": spec.model_dump(exclude_none=True),
         "metric_configs": [
             {"key": key, "role": "score" if key == "accuracy" and not quality else "display",
              "formula": "passthrough"}
@@ -225,7 +240,7 @@ class BenchmarkSpec(BaseModel):
                    "requests_per_concurrency": self.requests_per_concurrency,
                    "max_seconds_per_level": self.max_seconds_per_level}
         elif self.kind == "bfcl":
-            out = {"kind": "bfcl", "bfcl": self.bfcl.model_dump()}
+            out = {"kind": "bfcl", "bfcl": self.bfcl.model_dump(exclude_none=True)}
         else:
             out = {"kind": "replay", "dataset_profile": self.dataset_profile.strip(),
                    "requests": self.requests, "concurrency": self.concurrency}
@@ -239,7 +254,7 @@ class BenchmarkSpec(BaseModel):
             # document as first created.
             out["quality"] = {**self.quality.model_dump(), "once": True}
         if self.bfcl_quality is not None:
-            out["bfcl_quality"] = self.bfcl_quality.model_dump()
+            out["bfcl_quality"] = self.bfcl_quality.model_dump(exclude_none=True)
         return out
 
     @property

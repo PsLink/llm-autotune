@@ -74,3 +74,24 @@ AutoTune 支持 LLMBench 的 `bfcl_v4` 模块，可以作为独立负载，也�
 报告支持 `table` 的 `type: bfcl` 和 `chart` 的 `type: bfcl`（附 `scenario: bfcl_v4`），展示准确率、每小时通过题数和遥测。质量表只包含 BFCL 的准确率，吞吐和 coverage 不会被误显示为质量分数。
 
 题集包括两题 smoke、五类 tool-use 和独立 multi-turn-long-context。Smoke 只能每类一题；其余每类支持 1–200 题。默认自动生成配置使用每类 20 题；不要用极小样本判断微小精度变化。比较时固定题集、样本数、并发、超时和重试策略，报告会拒绝协议参数不同的直接比较。LLMBench artifact 中的 manifest 还记录 BFCL revision 和 `protocol_hash`，跨 LLMBench 升级比较时应核对这些信息。
+
+## 单个 run 内的多并发扫描
+
+独立 BFCL 负载可增加 `concurrency_grid`，例如：
+
+```json
+{"kind":"bfcl","bfcl":{"task_set":"bfcl-v4-multi-turn-long-context-v1","concurrency_grid":[1,3,5,6,8],"max_seconds":1800,"max_total_seconds":9000}}
+```
+
+单次部署、单个 run 和一个 LLMBench 模块按升序执行全部点。固定并发字段在扫描时不参与执行。
+每点单独生成题目结果、官方评分和遥测，保存为 `c<N>`；报告展示完整 TPM/准确率曲线及点表。
+顶层指标来自满足 benchmark redline 的最高总 TPM 有效点。部分点失败、超时或总预算耗尽时，
+只要仍有有效且达标的点就可以入榜；没有达标点则不能入榜。用户主动取消时，整次提交
+不能入榜，即使已有达标点。报告保留有效/计划点数、各点失败原因，并标记部分完成或取消。
+`max_seconds` 是每点预算，总预算默认是点数乘每点预算，也可用 `max_total_seconds` 指定。
+同一次扫描共用端点缓存，不清缓存，不增加合成 warmup；比较时保持扫描顺序和协议一致。
+不同 grid 的报告默认判为不可直接比较。省略 grid 保留原来的固定并发行为。
+
+需要部署支持扫描的 LLMBench 版本。提交级扫描参数为
+`extra_params.bfcl_concurrency_grid`，不能与单值 concurrency override 同时使用；
+LLMBench 冻结实际生效的 grid，AutoTune 保留全部点及实际选中的题目并发。

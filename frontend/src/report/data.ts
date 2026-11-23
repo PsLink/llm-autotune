@@ -13,7 +13,7 @@ export interface Delta {
   better: 'higher' | 'lower'
   improved: boolean | null
 }
-export interface Level { concurrency: number; metrics: Record<string, unknown> }
+export interface Level { concurrency: number; metrics: Record<string, unknown>; error?: string }
 export interface Scenario {
   key: string
   kind: 'sweep' | 'replay' | 'bfcl'

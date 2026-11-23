@@ -121,7 +121,14 @@ def scenarios_of(metrics: dict[str, Any], module_reports: list, ttft_percentile:
         if is_bfcl(report):
             out.append({
                 "key": key, "kind": "bfcl", "label": scenario_label(report),
-                "case_concurrency": as_number(params.get("concurrency")),
+                "case_concurrency": as_number(metrics.get(f"{key}.reported_concurrency"))
+                    or as_number(params.get("concurrency")),
+                "concurrency_grid": params.get("concurrency_grid"),
+                "sweep_complete": as_flag(metrics.get(f"{key}.sweep_complete")),
+                "sweep_canceled": as_flag(metrics.get(f"{key}.sweep_canceled")),
+                "sweep_points_completed": as_number(metrics.get(f"{key}.sweep_points_completed")),
+                "sweep_points_planned": as_number(metrics.get(f"{key}.sweep_points_planned")),
+                "sweep_stop_reason": metrics.get(f"{key}.sweep_stop_reason") or "",
                 "task_set": params.get("task_set"),
                 "passed_cases_per_hour": as_number(metrics.get(f"{key}.passed_cases_per_hour")),
                 "accuracy": as_number(metrics.get(f"{key}.accuracy")),

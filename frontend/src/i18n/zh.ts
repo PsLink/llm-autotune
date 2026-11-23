@@ -17,6 +17,9 @@ import type en from './en'
 
 const zh: typeof en = {
   bfcl: {
+    grid: '并发扫描点（留空使用固定并发）',
+    gridInvalid: '请输入 2–16 个递增且不重复的整数，范围 1–128。',
+
     taskSet: '固定题集', note: '官方 BFCL 子集，并非完整榜单。并发指同时执行的题目数。比较结果时应保持参数一致。',
     cases: '每类题数', concurrency: '题目并发', maxSeconds: '总时限（秒）', timeout: '请求超时（秒）',
     retries: '请求重试次数', ttftCoverage: '最低 TTFT 覆盖率', usageCoverage: '最低 token usage 覆盖率',

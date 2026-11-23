@@ -11,6 +11,9 @@
  */
 export default {
   bfcl: {
+    grid: 'Concurrency scan points (leave empty for fixed concurrency)',
+    gridInvalid: 'Enter 2–16 distinct increasing integers from 1 to 128.',
+
     taskSet: "Frozen task set",
     note: "Official BFCL subset, not the full leaderboard. Concurrency counts cases. Keep settings identical when comparing runs.",
     cases: "Cases per category",

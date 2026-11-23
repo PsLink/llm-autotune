@@ -528,23 +528,29 @@ BFCL_SUPPORTS = frozenset({
 
 
 def _bfcl(sc: Scenario, raw: dict, params: dict, cards: float | None) -> None:
-    out: dict[str, float] = {}
-    _put(out, "accuracy[overall]", raw.get("accuracy"))
-    for category in BFCL_CATEGORIES:
-        _put(out, f"accuracy[{category}]", raw.get(f"accuracy_{category}"))
-    for stat in ("p50", "p90", "p99"):
-        _put(out, f"ttft_ms@{stat}", raw.get(f"ttft_{stat}_ms"))
-    _put(out, "e2e_latency_ms@p90", raw.get("request_e2e_p90_ms"))
-    for key in ("input_tpm", "output_tpm", "total_tpm", "cache_hit_rate", *BFCL_FACTS):
-        _put(out, key, raw.get(key))
-    _put(out, "request_rate", raw.get("successful_request_rps"))
-    _put(out, "window_s", raw.get("generation_wall_seconds"))
-    _per_gpu(out, cards)
-    # Case concurrency is deliberately not the standard HTTP concurrency.
-    # HTTP attempts include retries and are not a count of logical requests.
-    sc.points["operating"] = out
+    def point(raw: dict) -> dict:
+        out: dict[str, float] = {}
+        _put(out, "accuracy[overall]", raw.get("accuracy"))
+        for category in BFCL_CATEGORIES:
+            _put(out, f"accuracy[{category}]", raw.get(f"accuracy_{category}"))
+        for stat in ("p50", "p90", "p99"):
+            _put(out, f"ttft_ms@{stat}", raw.get(f"ttft_{stat}_ms"))
+        _put(out, "e2e_latency_ms@p90", raw.get("request_e2e_p90_ms"))
+        for key in ("input_tpm", "output_tpm", "total_tpm", "cache_hit_rate", *BFCL_FACTS):
+            _put(out, key, raw.get(key))
+        _put(out, "request_rate", raw.get("successful_request_rps"))
+        _put(out, "window_s", raw.get("generation_wall_seconds"))
+        _per_gpu(out, cards)
+        return out
+    sc.points["operating"] = point(raw)
+    for key, values in raw.items():
+        if re.fullmatch(r"c\d+", key) and isinstance(values, dict):
+            sc.points[key] = point(values)
+    if raw.get("reported_concurrency") is not None:
+        sc.operating_level = f"c{int(raw['reported_concurrency'])}"
     sc.supports = BFCL_SUPPORTS
-    sc.operating_rule = "the frozen BFCL subset; rates use generation time, excluding grading"
+    sc.operating_rule = ("highest total TPM clearing BFCL quality/telemetry "
+                         "at measured case concurrency")
 
 
 FAMILIES = ("perf_guidellm_sweep", "perf_guidellm", "replay", "bfcl_v4", *_QUALITY)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { BFCLConfig } from '../utils/workload'
 import { useI18n } from '../i18n'
 const spec = defineModel<BFCLConfig>({ required: true })
@@ -7,6 +7,11 @@ const { t } = useI18n()
 watch(() => spec.value.task_set, (task) => {
   if (task === 'bfcl-v4-smoke-v1') spec.value.cases_per_category = 1
 })
+const gridText = ref((spec.value.concurrency_grid ?? []).join(', '))
+const grid = computed(() => gridText.value.trim() ? gridText.value.split(/[,\s]+/).map(Number) : null)
+watch(grid, (value) => { spec.value.concurrency_grid = value })
+const gridBad = computed(() => !!grid.value && (grid.value.length < 2 || grid.value.length > 16
+  || grid.value.some((c, i) => !Number.isInteger(c) || c < 1 || c > 128 || (i > 0 && c <= grid.value![i - 1]))))
 const taskSets = ['bfcl-v4-tool-use-v1', 'bfcl-v4-multi-turn-long-context-v1', 'bfcl-v4-smoke-v1']
 </script>
 
@@ -19,6 +24,11 @@ const taskSets = ['bfcl-v4-tool-use-v1', 'bfcl-v4-multi-turn-long-context-v1', '
       </el-select>
     </label>
     <p class="muted tiny">{{ t('bfcl.note') }}</p>
+    <label class="field">
+      <span class="muted tiny">{{ t('bfcl.grid') }}</span>
+      <el-input v-model="gridText" placeholder="1, 3, 5, 6, 8" size="small" />
+      <span v-if="gridBad" class="tiny">{{ t('bfcl.gridInvalid') }}</span>
+    </label>
     <div class="bfcl-grid">
       <label v-for="field in [
         { key: 'cases_per_category' as const, label: 'cases', min: 1, max: 200 },
@@ -33,7 +43,8 @@ const taskSets = ['bfcl-v4-tool-use-v1', 'bfcl-v4-multi-turn-long-context-v1', '
         <span class="muted tiny">{{ t(`bfcl.${field.label}`) }}</span>
         <el-input-number v-model="spec[field.key]" :min="field.min" :max="field.max"
           :step="field.max === 1 ? 0.1 : 1" size="small" controls-position="right"
-          :disabled="field.key === 'cases_per_category' && spec.task_set === 'bfcl-v4-smoke-v1'" />
+          :disabled="(field.key === 'cases_per_category' && spec.task_set === 'bfcl-v4-smoke-v1')
+            || (field.key === 'concurrency' && !!grid?.length)" />
       </label>
     </div>
     <label class="field">

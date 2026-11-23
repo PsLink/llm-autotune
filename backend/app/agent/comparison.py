@@ -52,7 +52,7 @@ SCENARIO_PARAMS = (
     "dataset_source",
     "dataset_profile",
     "max_samples",
-    "concurrency",
+    "concurrency", "concurrency_grid", "max_total_seconds",
     "max_generation_tokens",
     "task_set", "cases_per_category", "request_timeout_seconds", "request_retries",
     "max_seconds", "probe_endpoint", "required_metrics", "min_ttft_coverage",

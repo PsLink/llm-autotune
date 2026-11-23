@@ -58,6 +58,8 @@ export interface BFCLConfig {
   task_set: string
   cases_per_category: number
   concurrency: number
+  concurrency_grid?: number[] | null
+  max_total_seconds?: number | null
   max_seconds: number
   request_timeout_seconds: number
   request_retries: number

@@ -280,20 +280,38 @@ export function bfclTable(doc: Comparison, lang: Lang, labels: Map<number, strin
   for (const s of doc.baseline.results.scenarios.filter((s) => s.kind === 'bfcl')) {
     for (const r of runsOf(doc)) {
       const sc = scenarioOf(r, s.key)
-      const m = sc?.metrics ?? {}
-      rows.push([
-        esc(scenarioName(s, lang)), esc(labels.get(r.run_id) ?? r.label),
-        esc(score(m.accuracy as number | undefined, true)), esc(num(m.passed_cases_per_hour)),
-        esc(num(m.ttft_p90_ms)), esc(num(sc?.summary.case_concurrency)),
-        esc(score(m.ttft_coverage as number | undefined, true)),
-        esc(score(m.input_usage_coverage as number | undefined, true)),
-        esc(score(m.output_usage_coverage as number | undefined, true)),
-        esc(score(m.cache_usage_coverage as number | undefined, true)),
-      ])
+      const levels = sc?.levels.length ? sc.levels.map((lv) => ({
+        metrics: lv.metrics, concurrency: lv.concurrency, error: lv.error,
+      })) : [{ metrics: sc?.metrics ?? {}, concurrency: sc?.summary.case_concurrency, error: '' }]
+      const complete = sc?.summary.sweep_complete
+      const scanStatus = sc?.summary.sweep_canceled ? tr(lang, 'bfclCanceled')
+        : complete === false || complete === 0 ? tr(lang, 'bfclPartial', {
+          completed: String(sc?.summary.sweep_points_completed ?? '?'),
+          planned: String(sc?.summary.sweep_points_planned ?? '?'),
+        }) : complete === true || complete === 1 ? tr(lang, 'bfclComplete') : '—'
+      for (const level of levels) {
+        const m = level.metrics
+        rows.push([
+          esc(scenarioName(s, lang)), esc(labels.get(r.run_id) ?? r.label),
+          esc(score(m.accuracy as number | undefined, true)), esc(num(m.passed_cases_per_hour)),
+          esc(num(m.ttft_p90_ms)), esc(num(level.concurrency)), esc(num(m.total_tpm)),
+          esc(score(m.ttft_coverage as number | undefined, true)),
+          esc(score(m.input_usage_coverage as number | undefined, true)),
+          esc(score(m.output_usage_coverage as number | undefined, true)),
+          esc(score(m.cache_usage_coverage as number | undefined, true)),
+          esc(tr(lang, m.valid === 0 ? 'bfclFailed' : m.eligible === 0 ? 'bfclIneligible'
+          : sc?.levels.length && level.concurrency === sc.summary.case_concurrency
+            ? 'bfclBest' : 'bfclMeasured'))
+            + esc(level.error ? `: ${level.error}` : ''),
+          esc(scanStatus) + esc(sc?.summary.sweep_stop_reason
+            ? `: ${sc.summary.sweep_stop_reason}` : ''),
+        ])
+      }
     }
   }
   return table([tr(lang, 'scenario'), tr(lang, 'config'), tr(lang, 'accuracy'),
     tr(lang, 'bfclPassed'), 'TTFT p90 (ms)', tr(lang, 'bfclConcurrency'),
-    'TTFT coverage', 'Input usage coverage', 'Output usage coverage', 'Cache usage coverage'], rows, 2)
+    'TPM', 'TTFT coverage', 'Input usage coverage', 'Output usage coverage', 'Cache usage coverage',
+    tr(lang, 'bfclStatus'), tr(lang, 'bfclScanStatus')], rows, 2)
     + note(tr(lang, 'bfclNote'))
 }

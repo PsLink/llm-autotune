@@ -82,7 +82,8 @@ def _bfcl_protocol(reader: Reader, metric: str) -> tuple | None:
     if params.get("task_set") and params.get("cases_per_category") is not None:
         keys = ("task_set", "cases_per_category", "concurrency", "max_seconds",
                 "request_timeout_seconds", "request_retries", "probe_endpoint")
-        return tuple(params.get(key) for key in keys)
+        return (*tuple(params.get(key) for key in keys),
+                tuple(params.get("concurrency_grid") or ()), params.get("max_total_seconds"))
     # Older results may only identify the entire locked benchmark.
     return (reader.benchmark_config_hash,) if reader.benchmark_config_hash else ()
 

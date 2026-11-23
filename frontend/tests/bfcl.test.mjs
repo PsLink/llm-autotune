@@ -68,3 +68,38 @@ test('BFCL chart uses accuracy percentages, cases per hour and null for missing 
   assert.equal(chart.series[0].data[1].value, null)
   assert.equal(chart.series[1].data[0].value, 180)
 })
+
+test('BFCL scans plot every concurrency and render every point in the report table', () => {
+  const doc = comparison()
+  for (const run of [doc.baseline, ...doc.attempts]) {
+    run.results.scenarios[0].levels = [1, 3, 5, 6, 8].map((c) => ({
+      concurrency: c, metrics: { accuracy: 0.9, total_tpm: c * 1000,
+        passed_cases_per_hour: c * 20, ttft_p90_ms: c * 10, valid: 1 },
+    }))
+  }
+  const chart = bfclChart(doc, 'en', new Map(), 'bfcl_v4')
+  assert.equal(chart.series[0].type, 'line')
+  assert.deepEqual(chart.series[0].data, [[1, 1000], [3, 3000], [5, 5000], [6, 6000], [8, 8000]])
+  assert.equal(chart.series.length, 4)
+  const table = bfclTable(doc, 'en', new Map())
+  assert.match(table, /8,000/)
+  assert.match(table, /TPM/)
+  assert.equal((table.match(/90\.00%/g) ?? []).length, 10)
+})
+
+
+test('partial scans show counts and point failures; cancellation stays explicit', () => {
+  const doc = comparison()
+  const scenario = doc.baseline.results.scenarios[0]
+  scenario.summary = { case_concurrency: 1, sweep_complete: 0,
+    sweep_points_completed: 1, sweep_points_planned: 3 }
+  scenario.levels = [
+    { concurrency: 1, metrics: { accuracy: 0.9, total_tpm: 1000, valid: 1, eligible: 1 } },
+    { concurrency: 3, metrics: { valid: 0, eligible: 0 }, error: 'Point timeout <3>' },
+  ]
+  const table = bfclTable(doc, 'en', new Map())
+  assert.match(table, /Partial.*1.*3/)
+  assert.match(table, /Point timeout &lt;3&gt;/)
+  scenario.summary.sweep_canceled = 1
+  assert.match(bfclTable(doc, 'en', new Map()), /Canceled/)
+})

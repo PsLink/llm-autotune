@@ -16,7 +16,8 @@ from app.measures.adapters import FAMILIES, family_of
 # Per family: the params that decide what the numbers describe.
 _PARAMS: dict[str, tuple[str, ...]] = {
     "bfcl_v4": (
-        "task_set", "cases_per_category", "concurrency", "max_seconds",
+        "task_set", "cases_per_category", "concurrency", "concurrency_grid", "max_seconds",
+        "max_total_seconds",
         "request_timeout_seconds", "request_retries", "probe_endpoint", "required_metrics",
         "min_ttft_coverage", "min_usage_coverage", "min_cache_usage_coverage",
     ),

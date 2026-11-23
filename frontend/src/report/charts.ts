@@ -343,6 +343,27 @@ export function mountChart(
 export function bfclChart(doc: Comparison, lang: Lang, labels: Map<number, string>, key: string): Option {
   const runs = runsOf(doc)
   const params = doc.benchmark.modules.find((m) => m.key === key)?.params ?? {}
+  if (runs.some((r) => (scenarioOf(r, key)?.levels.length ?? 0) > 0)) {
+    return {
+      ...base(lang),
+      title: { text: 'BFCL V4', subtext: String(params.task_set ?? key), left: 'center' },
+      tooltip: { trigger: 'axis', confine: true },
+      legend: { top: 45 },
+      grid: [{ left: '9%', right: '55%', top: 100, bottom: 60 },
+        { left: '61%', right: '5%', top: 100, bottom: 60 }],
+      xAxis: [0, 1].map((i) => ({ type: 'value', name: tr(lang, 'bfclConcurrency'), gridIndex: i, minInterval: 1 })),
+      yAxis: [{ type: 'value', name: 'TPM', gridIndex: 0 },
+        { type: 'value', name: tr(lang, 'accuracy'), min: 0, max: 100, gridIndex: 1 }],
+      series: runs.flatMap((r, i) => ['total_tpm', 'accuracy'].map((metric, axis) => ({
+        type: 'line', name: labels.get(r.run_id) ?? r.label,
+        xAxisIndex: axis, yAxisIndex: axis, connectNulls: false,
+        itemStyle: { color: PALETTE[i % PALETTE.length] },
+        data: (scenarioOf(r, key)?.levels ?? []).map((lv) => [lv.concurrency,
+          lv.metrics.valid === 0 || typeof lv.metrics[metric] !== 'number' ? null
+            : Number(lv.metrics[metric]) * (axis === 1 ? 100 : 1)]),
+      }))),
+    }
+  }
   const data = (metric: string, scale = 1) => runs.map((r, i) => {
     const raw = scenarioOf(r, key)?.metrics[metric]
     return { value: typeof raw === 'number' ? raw * scale : null,

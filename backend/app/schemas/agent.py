@@ -180,6 +180,7 @@ class ResultsHeadline(BaseModel):
 
 
 class ScenarioLevel(BaseModel):
+    error: str = ""
     concurrency: int
     metrics: dict[str, Any] = Field(default_factory=dict)
 
