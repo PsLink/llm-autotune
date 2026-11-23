@@ -6,6 +6,9 @@
 export type Lang = 'en' | 'zh'
 
 const en = {
+  bfclPassed: 'Passed cases/hour', bfclConcurrency: 'Case concurrency',
+  bfclNote: 'Frozen official BFCL subset. Concurrency counts cases. Rates exclude grading. Compare accuracy together with throughput and telemetry coverage.',
+
   baseline: 'Baseline',
   optimized: 'Optimized',
   optimizedN: 'Optimized {n}',
@@ -119,6 +122,9 @@ const en = {
 type Strings = typeof en
 
 const zh: Strings = {
+  bfclPassed: '每小时通过题数', bfclConcurrency: '题目并发',
+  bfclNote: '固定的官方 BFCL 子集。并发指题目数，速率不含评分时间。应同时比较准确率、吞吐和遥测覆盖率。',
+
   baseline: '基线',
   optimized: '优化配置',
   optimizedN: '优化配置 {n}',

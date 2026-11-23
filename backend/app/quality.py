@@ -35,15 +35,18 @@ def relative_redlines(objective: dict | None) -> list[dict]:
     return [r for r in redlines(objective) if r.get("relative_to") == PRODUCTION]
 
 
-def quality_floor(tasks: list[str], max_drop: float) -> list[dict]:
+def quality_floor(
+    tasks: list[str], max_drop: float, *, metrics: list[str] | None = None,
+) -> list[dict]:
     """The redlines that hold each task within `max_drop` (a fraction: 0.10
     is ten points) of production."""
     # Named with its scenario: an unnamed reference reads the benchmark's
     # main (throughput) scenario, which has no accuracy.
     return [
-        {"metric": f"{QUALITY_MODULE}/accuracy[{task}]", "op": ">=",
+        {"metric": metric, "op": ">=",
          "relative_to": PRODUCTION, "value": -abs(max_drop)}
-        for task in tasks
+        for metric in (metrics if metrics is not None else
+                       [f"{QUALITY_MODULE}/accuracy[{task}]" for task in tasks])
     ]
 
 

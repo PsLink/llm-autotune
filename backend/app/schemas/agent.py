@@ -189,7 +189,7 @@ class ScenarioOut(BaseModel):
     # "sweep": synthetic prompts, a concurrency search, per-level `levels`.
     # "replay": recorded traffic at one concurrency — no token counts, no
     # levels; everything it measured is in `metrics`.
-    kind: Literal["sweep", "replay"] = "sweep"
+    kind: Literal["sweep", "replay", "bfcl"] = "sweep"
     label: str = ""
     input_tokens: int | None = None
     output_tokens: int | None = None

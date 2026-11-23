@@ -312,6 +312,7 @@ async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
                 f"could not create the benchmark on LLMBench: {exc}",
             ) from exc
         setattr(body, slug_field, ensured.slug)
+        _bfcl_objective(body, spec, spec_field)
         if spec.kind == "replay" and spec.dataset_profile.strip() and not body.dataset_profile:
             body.dataset_profile = spec.dataset_profile.strip()
         if spec.kind == "replay" and spec.dataset_frozen.strip():
@@ -681,6 +682,15 @@ class PreflightRequest(BaseModel):
     policy_image: str = ""
 
 
+def _bfcl_objective(body, spec: BenchmarkSpec, spec_field: str) -> None:
+    if spec.kind == "bfcl":
+        field = "verify_objective" if spec_field == "verify_benchmark_spec" else "objective"
+        current = getattr(body, field) or {}
+        if not current.get("target_metric"):
+            setattr(body, field, {"direction": "maximize", **current,
+                                  "target_metric": "bfcl_v4.total_tpm"})
+
+
 def _with_specs(
     body: PreflightRequest,
     catalog: dict[str, list[str]] | None,
@@ -695,8 +705,11 @@ def _with_specs(
         if spec is None:
             continue
         setattr(body, slug_field, spec.slug)
+        _bfcl_objective(body, spec, spec_field)
         if catalog is not None:
-            catalog.setdefault(spec.slug, [spec.module])
+            catalog.setdefault(spec.slug, [spec.module]
+                               + (["opencompass"] if spec.quality is not None else [])
+                               + (["bfcl_v4"] if spec.bfcl_quality is not None else []))
         if wired is not None:
             replays = spec.dataset_profile.strip() if spec.kind == "replay" else ""
             wired.setdefault(spec.slug, replays)
@@ -1158,6 +1171,8 @@ class ValidateRequest(BaseModel):
         "", description="The benchmark to validate with, e.g. one that adds a quality "
         "suite to the campaign's workload. Empty: the campaign's validation benchmark.")
     quality_tasks: list[str] = Field(default_factory=lambda: ["gpqa_diamond"])
+    quality_metrics: list[str] | None = Field(
+        None, description="Explicit accuracy references, e.g. bfcl_v4/accuracy[overall].")
     quality_max_drop: float | None = Field(
         None, ge=0, le=100,
         description="Points a config may score below production on each quality task. "
@@ -1183,6 +1198,18 @@ async def validate_configs(
 ):
     from app import quality
     from app.control.search import CandidateConfig
+    from app.measures.refs import RefError, parse
+
+    if body.quality_metrics is not None:
+        try:
+            if not body.quality_metrics:
+                raise ValueError("quality_metrics must not be empty")
+            for metric in body.quality_metrics:
+                ref = parse(metric)
+                if ref.measure != "accuracy" or not ref.scenario:
+                    raise ValueError("quality_metrics must name a module's accuracy measure")
+        except (ValueError, RefError) as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
     campaign = await session.get(Campaign, campaign_id)
     if campaign is None:
@@ -1213,7 +1240,7 @@ async def validate_configs(
         base = dict(campaign.verify_objective or campaign.objective or {})
         kept = [r for r in base.get("redlines") or [] if not r.get("relative_to")]
         base["redlines"] = kept + quality.quality_floor(
-            body.quality_tasks, body.quality_max_drop / 100)
+            body.quality_tasks, body.quality_max_drop / 100, metrics=body.quality_metrics)
         campaign.verify_objective = base
 
     # The campaign's node pin names the nodes it searched on, and a run's pod

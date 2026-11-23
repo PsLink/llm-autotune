@@ -243,3 +243,48 @@ async def test_a_campaign_replaying_a_frozen_dataset_records_it_and_pins_nothing
     assert listed["prod-q36"]["origin"] == "upload"
     assert listed["other"]["campaigns"] == []
     assert "path" not in listed["prod-q36"]  # LLMBench's own business
+
+
+async def test_bfcl_campaign_and_verification_default_to_total_tpm(client):
+    response = await client.post("/api/campaigns", json=_body(
+        benchmark_spec={"kind": "bfcl"}, verify_benchmark_spec={"kind": "bfcl"},
+        verify_top_k=2))
+    assert response.status_code == 200, response.text
+    out = response.json()
+    assert out["objective"]["target_metric"] == "bfcl_v4.total_tpm"
+    assert out["verify_objective"]["target_metric"] == "bfcl_v4.total_tpm"
+    assert out["dataset_profile"] == ""
+    assert [s.kind for s in client.made] == ["bfcl", "bfcl"]
+
+
+def test_preflight_described_workload_includes_both_quality_modules():
+    body = campaigns_api.PreflightRequest(
+        engine="sglang", image="img", model_path="/m", search_space={"grid": {"tp": [1]}},
+        benchmark_spec={"kind": "replay", "quality": {}, "bfcl_quality": {}},
+    )
+    catalog = {}
+    campaigns_api._with_specs(body, catalog)
+    assert catalog[body.benchmark_slug] == ["replay", "opencompass", "bfcl_v4"]
+    from app.measures import problem_with
+
+    assert problem_with("bfcl_v4/accuracy[overall]", catalog[body.benchmark_slug]) is None
+
+
+def test_bfcl_template_is_created_once_and_native_defaults_are_discoverable(mock_llmbench):
+    spec = bs.BenchmarkSpec(kind="bfcl")
+    first = bs.ensure_spec(spec, mock_llmbench)
+    assert first.created and first.locked
+    assert not bs.ensure_spec(spec, mock_llmbench).created
+    row = mock_llmbench.get_benchmark(spec.slug)
+    assert row["modules"][0]["params_json"]["task_set"] == "bfcl-v4-tool-use-v1"
+    assert mock_llmbench.module_defaults("bfcl_v4")["default_metric_configs"]
+    assert ensure_benchmark(mock_llmbench, "autotune-bfcl-v4-tool-use-v1").locked
+
+
+@pytest.mark.parametrize("metric", ["accuracy[overall]", "bfcl_v4/ttft_ms@p90", "bad/accuracy"])
+async def test_manual_validation_refuses_invalid_quality_metric_references(client, metric):
+    response = await client.post("/api/campaigns/1/validate", json={
+        "configs": [{"tp": 2}], "machine": "node", "quality_metrics": [metric],
+        "quality_max_drop": 5,
+    })
+    assert response.status_code == 422, response.text

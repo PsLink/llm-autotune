@@ -89,7 +89,7 @@ class Scenario:
 
     @property
     def is_throughput(self) -> bool:
-        return self.kind in ("sweep", "single", "replay")
+        return self.kind in ("sweep", "single", "replay", "bfcl")
 
 
 def _put(out: dict[str, float], key: str, value: Any) -> None:
@@ -510,7 +510,42 @@ _QUALITY = {
 # -- recognizing a module -----------------------------------------------------------
 
 
-FAMILIES = ("perf_guidellm_sweep", "perf_guidellm", "replay", *_QUALITY)
+BFCL_CATEGORIES = ("simple_python", "multiple", "parallel", "irrelevance",
+                   "multi_turn_base", "multi_turn_long_context")
+BFCL_FACTS = (
+    "passed_cases_per_hour", "case_count", "ttft_coverage", "input_usage_coverage",
+    "output_usage_coverage", "cache_usage_coverage", "active_cases_peak", "active_http_peak",
+    "http_attempt_count", "request_error_count", "retry_count", "infra_error_count",
+)
+BFCL_SUPPORTS = frozenset({
+    "accuracy[overall]", *(f"accuracy[{c}]" for c in BFCL_CATEGORIES),
+    *(f"ttft_ms@{s}" for s in ("p50", "p90", "p99")), "e2e_latency_ms@p90",
+    "input_tpm", "output_tpm", "total_tpm", "input_tpm_per_gpu", "output_tpm_per_gpu",
+    "total_tpm_per_gpu", "request_rate", "cache_hit_rate", "window_s", *BFCL_FACTS,
+})
+
+
+def _bfcl(sc: Scenario, raw: dict, params: dict, cards: float | None) -> None:
+    out: dict[str, float] = {}
+    _put(out, "accuracy[overall]", raw.get("accuracy"))
+    for category in BFCL_CATEGORIES:
+        _put(out, f"accuracy[{category}]", raw.get(f"accuracy_{category}"))
+    for stat in ("p50", "p90", "p99"):
+        _put(out, f"ttft_ms@{stat}", raw.get(f"ttft_{stat}_ms"))
+    _put(out, "e2e_latency_ms@p90", raw.get("request_e2e_p90_ms"))
+    for key in ("input_tpm", "output_tpm", "total_tpm", "cache_hit_rate", *BFCL_FACTS):
+        _put(out, key, raw.get(key))
+    _put(out, "request_rate", raw.get("successful_request_rps"))
+    _put(out, "window_s", raw.get("generation_wall_seconds"))
+    _per_gpu(out, cards)
+    # Case concurrency is deliberately not the standard HTTP concurrency.
+    # HTTP attempts include retries and are not a count of logical requests.
+    sc.points["operating"] = out
+    sc.supports = BFCL_SUPPORTS
+    sc.operating_rule = "the frozen BFCL subset; rates use generation time, excluding grading"
+
+
+FAMILIES = ("perf_guidellm_sweep", "perf_guidellm", "replay", "bfcl_v4", *_QUALITY)
 
 
 def family_of(
@@ -528,6 +563,7 @@ _KIND = {
     "perf_guidellm_sweep": "sweep",
     "perf_guidellm": "single",
     "replay": "replay",
+    "bfcl_v4": "bfcl",
 }
 
 
@@ -570,6 +606,8 @@ def adapt(
         _single(sc, raw, params, cards)
     elif family == "replay":
         _replay(sc, raw, params, cards)
+    elif family == "bfcl_v4":
+        _bfcl(sc, raw, params, cards)
     else:
         out: dict[str, float] = {}
         sc.supports = _QUALITY[family](out, raw) if family in _QUALITY else frozenset()

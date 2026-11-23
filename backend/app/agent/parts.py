@@ -34,6 +34,7 @@ from app.db.models import RunStatus
 from app.evaluation.gate import Gate
 from app.evaluation.llmbench import _keyed_runs, module_reports
 from app.evaluation.scenarios import (
+    is_bfcl,
     is_replay,
     is_scenario,
     scenario_label,
@@ -482,6 +483,19 @@ def best_level_of(
     its cards. A replay has one level, the one it ran at. {} when no level
     passed."""
     per_gpu = max(1, int(cards or 1))
+    if scenario.kind == "bfcl":
+        m = scenario.metrics
+        total, output = _number(m.get("total_tpm")), _number(m.get("output_tpm"))
+        return _per_machine({
+            "total_tps_per_gpu": total / 60 / per_gpu if total is not None else None,
+            "output_tps_per_gpu": output / 60 / per_gpu if output is not None else None,
+            "input_tps_per_gpu": (total - output) / 60 / per_gpu
+                if total is not None and output is not None else None,
+            "case_concurrency": _number(scenario.summary.get("case_concurrency")),
+            "passed_cases_per_hour": _number(m.get("passed_cases_per_hour")),
+            "accuracy": _number(m.get("accuracy")),
+            "ttft_ms": _number(m.get(f"ttft_{ttft_percentile}_ms")),
+        })
     if scenario.kind == "replay":
         total = _number(scenario.summary.get("tpm_card_norm"))
         output = _number(scenario.summary.get("output_tpm_card_norm"))
@@ -578,6 +592,8 @@ def _quality_floors(campaign) -> dict[str, float]:
         if not isinstance(rule, dict) or rule.get("op") not in (">=", ">"):
             continue
         metric = str(rule.get("metric") or "")
+        if rule.get("relative_to"):
+            continue  # an offset is not an absolute floor
         leaf = metric.rsplit(".", 1)[-1]
         if not metric or leaf.startswith("ttft_") or leaf == "request_output_tps":
             continue  # that is the latency gate, not a quality floor
@@ -670,7 +686,7 @@ def results_part(b: RunBundle) -> ResultsPart:
             scenarios.append(
                 ScenarioOut(
                     key=key,
-                    kind="replay" if is_replay(report) else "sweep",
+                    kind="bfcl" if is_bfcl(report) else "replay" if is_replay(report) else "sweep",
                     label=scenario_label(report),
                     input_tokens=_as_int(params.get("input_tokens")),
                     output_tokens=_as_int(params.get("output_tokens")),
@@ -682,7 +698,7 @@ def results_part(b: RunBundle) -> ResultsPart:
             scenarios[-1].best_level = best_level_of(
                 scenarios[-1], cards=cards_of(b), ttft_percentile=pct, gate=gate
             )
-        else:
+        if not is_scenario(report) or is_bfcl(report):
             scores = {
                 k: float(v)
                 for k, v in (_scalars(metrics_json) or {
@@ -691,6 +707,7 @@ def results_part(b: RunBundle) -> ResultsPart:
                     if k.startswith(f"{key}.") and k.count(".") == 1
                 }).items()
                 if _number(v) is not None
+                and (not is_bfcl(report) or k == "accuracy" or k.startswith("accuracy_"))
             }
             quality.append(
                 QualityOut(
@@ -723,6 +740,32 @@ def results_part(b: RunBundle) -> ResultsPart:
                 ok=(actual >= limit) if (actual is not None and limit is not None) else None,
             )
         )
+
+    # Relative BFCL floors were resolved when this result was judged. Recover
+    # the absolute threshold from its stored signed slack, rather than compare
+    # accuracy with the negative offset (which would pass every candidate).
+    if b.campaign is not None:
+        from app import staging
+        from app.measures import reader_for
+        from app.objective import redlines
+
+        objective = staging.objective(b.campaign, staging.stage_of(b.candidate))
+        reader = reader_for(metrics, b.result.raw if b.result is not None else {},
+                            b.candidate.config if b.candidate is not None else {}, b.campaign)
+        slacks = list(b.result.constraints or []) if b.result is not None else []
+        for index, rule in enumerate(redlines(objective)):
+            ref = str(rule.get("metric") or "")
+            if not (ref.startswith("bfcl_v4/") and rule.get("relative_to")
+                    and rule.get("op") == ">="):
+                continue
+            actual = _number(reader.get(ref))
+            slack = _number(slacks[index]) if index < len(slacks) else None
+            verdicts.append(VerdictOut(
+                module="bfcl_v4", metric=ref.split("/", 1)[1], role="quality_floor",
+                actual=actual,
+                min=actual + slack if actual is not None and slack is not None else None,
+                ok=slack <= 0 if slack is not None else False,
+            ))
 
     first = scenarios[0] if scenarios else None
     ranking_metric = ranking_metric_of(b)

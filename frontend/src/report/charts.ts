@@ -71,7 +71,11 @@ function base(lang: Lang): Option {
 
 export function summaryChart(doc: Comparison, lang: Lang, labels: Map<number, string>,
   names: ScenarioLabels = {}): Option {
-  const scenarios = doc.baseline.results.scenarios
+  const allScenarios = doc.baseline.results.scenarios
+  if (allScenarios.length && allScenarios.every((s) => s.kind === 'bfcl')) {
+    return bfclChart(doc, lang, labels, allScenarios[0].key)
+  }
+  const scenarios = allScenarios.filter((s) => s.kind !== 'bfcl')
   const runs = runsOf(doc)
   const hardware = ` (${hardwareText(doc)})`
   return {
@@ -333,5 +337,37 @@ export function mountChart(
       chart.dispose()
     },
     update: () => chart.setOption(build(width), true),
+  }
+}
+
+export function bfclChart(doc: Comparison, lang: Lang, labels: Map<number, string>, key: string): Option {
+  const runs = runsOf(doc)
+  const params = doc.benchmark.modules.find((m) => m.key === key)?.params ?? {}
+  const data = (metric: string, scale = 1) => runs.map((r, i) => {
+    const raw = scenarioOf(r, key)?.metrics[metric]
+    return { value: typeof raw === 'number' ? raw * scale : null,
+      itemStyle: { color: PALETTE[i % PALETTE.length] } }
+  })
+  const names = runs.map((r) => labels.get(r.run_id) ?? r.label)
+  return {
+    ...base(lang),
+    title: [
+      { text: 'BFCL V4', subtext: String(params.task_set ?? key), left: 'center', top: 0 },
+      { text: tr(lang, 'accuracy'), left: '22%', top: 54, textStyle: { fontSize: 13 } },
+      { text: tr(lang, 'bfclPassed'), left: '65%', top: 54, textStyle: { fontSize: 13 } },
+    ],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, confine: true },
+    grid: [{ left: '8%', right: '56%', top: 100, bottom: 58 },
+      { left: '60%', right: '5%', top: 100, bottom: 58 }],
+    xAxis: [{ type: 'category', data: names, gridIndex: 0 },
+      { type: 'category', data: names, gridIndex: 1 }],
+    yAxis: [{ type: 'value', min: 0, max: 100, name: '%', gridIndex: 0 },
+      { type: 'value', min: 0, name: 'cases/h', gridIndex: 1 }],
+    series: [
+      { type: 'bar', name: tr(lang, 'accuracy'), xAxisIndex: 0, yAxisIndex: 0,
+        data: data('accuracy', 100), barMaxWidth: 56 },
+      { type: 'bar', name: tr(lang, 'bfclPassed'), xAxisIndex: 1, yAxisIndex: 1,
+        data: data('passed_cases_per_hour'), barMaxWidth: 56 },
+    ],
   }
 }

@@ -13,13 +13,14 @@ import { specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
 import { useI18n } from '../i18n'
 import DatasetDialog from './DatasetDialog.vue'
 import InfoHint from './InfoHint.vue'
+import BFCLFields from './BFCLFields.vue'
 
 const props = defineProps<{
   profiles: DatasetProfile[]
   /** Frozen datasets on LLMBench: files that never change. */
   frozen?: FrozenDataset[]
   benchmarks: BenchmarkChoice[]
-  /** The second stage is a replay or an existing benchmark, never a sweep. */
+  /** The second stage offers replay, BFCL or an existing benchmark. */
   noSweep?: boolean
 }>()
 const w = defineModel<Workload>({ required: true })
@@ -110,6 +111,7 @@ function profileNote(p: DatasetProfile): string {
   <div class="workload">
     <div v-if="!showExisting" class="modes-row">
       <el-radio-group v-model="w.mode" size="small" class="modes">
+        <el-radio-button value="bfcl">BFCL V4</el-radio-button>
         <el-radio-button value="replay">{{ t('campaignNew.wl.replay') }}</el-radio-button>
         <el-radio-button v-if="!noSweep" value="sweep">{{ t('campaignNew.wl.sweep') }}</el-radio-button>
       </el-radio-group>
@@ -153,6 +155,8 @@ function profileNote(p: DatasetProfile): string {
           size="small" controls-position="right" />
       </label>
     </div>
+
+    <BFCLFields v-else-if="w.mode === 'bfcl'" v-model="w.bfcl" />
 
     <template v-else-if="w.mode === 'replay'">
       <label class="field">

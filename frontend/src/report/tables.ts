@@ -57,7 +57,7 @@ export function summaryTable(doc: Comparison, lang: Lang, labels: Map<number, st
   const runs = runsOf(doc)
   const mixed = !sameCards(doc)
   const rows: string[][] = []
-  for (const base of doc.baseline.results.scenarios) {
+  for (const base of doc.baseline.results.scenarios.filter((s) => s.kind !== 'bfcl')) {
     for (const r of runs) {
       const best = scenarioOf(r, base.key)?.best_level ?? {}
       const name = esc(scenarioName(base, lang, names))
@@ -72,15 +72,18 @@ export function summaryTable(doc: Comparison, lang: Lang, labels: Map<number, st
         name,
         config,
         ...gpus,
-        esc(concurrencyText(best.concurrency)),
+        esc(concurrencyText(base.kind === 'bfcl' ? best.case_concurrency : best.concurrency)),
         `<b>${esc(num(perMachine(best.total_tps_per_gpu)))}</b>${pctBadge(d)}`,
       ])
     }
   }
-  return table([
+  const normal = table([
     tr(lang, 'scenario'), tr(lang, 'config'), ...(mixed ? [tr(lang, 'gpusCol')] : []),
     tr(lang, 'bestConcurrency'), tr(lang, 'totalServing'),
   ], rows, 2) + note(tr(lang, 'capacityNote'))
+  const bfcl = doc.baseline.results.scenarios.some((s) => s.kind === 'bfcl')
+    ? bfclTable(doc, lang, labels) : ''
+  return (rows.length ? normal : '') + bfcl
 }
 
 /** A quality score read as a percentage when it is a 0–1 accuracy, which is
@@ -177,6 +180,11 @@ export function scenariosTable(doc: Comparison, lang: Lang, names: ScenarioLabel
   const rows: string[][] = doc.baseline.results.scenarios.map((s) => {
     const params = modules.get(s.key)?.params ?? {}
     const given = names[s.key]?.description
+    if (s.kind === 'bfcl') return [
+      `<b>${esc(scenarioName(s, lang, names))}</b>`,
+      esc(`${params.task_set ?? 'BFCL V4'} · ${params.cases_per_category ?? '?'} cases/category`),
+      esc(given ?? tr(lang, 'bfclNote')),
+    ]
     if (s.kind === 'replay') {
       const c = String(params.concurrency ?? s.best_level?.concurrency ?? '?')
       return [
@@ -264,4 +272,28 @@ export function setupTable(doc: Comparison, lang: Lang, labels: Map<number, stri
     }))])
   }
   return table([tr(lang, 'item'), tr(lang, 'value')], rows, 2)
+}
+
+/** BFCL telemetry is kept separate from accuracy percentages. */
+export function bfclTable(doc: Comparison, lang: Lang, labels: Map<number, string>): string {
+  const rows: string[][] = []
+  for (const s of doc.baseline.results.scenarios.filter((s) => s.kind === 'bfcl')) {
+    for (const r of runsOf(doc)) {
+      const sc = scenarioOf(r, s.key)
+      const m = sc?.metrics ?? {}
+      rows.push([
+        esc(scenarioName(s, lang)), esc(labels.get(r.run_id) ?? r.label),
+        esc(score(m.accuracy as number | undefined, true)), esc(num(m.passed_cases_per_hour)),
+        esc(num(m.ttft_p90_ms)), esc(num(sc?.summary.case_concurrency)),
+        esc(score(m.ttft_coverage as number | undefined, true)),
+        esc(score(m.input_usage_coverage as number | undefined, true)),
+        esc(score(m.output_usage_coverage as number | undefined, true)),
+        esc(score(m.cache_usage_coverage as number | undefined, true)),
+      ])
+    }
+  }
+  return table([tr(lang, 'scenario'), tr(lang, 'config'), tr(lang, 'accuracy'),
+    tr(lang, 'bfclPassed'), 'TTFT p90 (ms)', tr(lang, 'bfclConcurrency'),
+    'TTFT coverage', 'Input usage coverage', 'Output usage coverage', 'Cache usage coverage'], rows, 2)
+    + note(tr(lang, 'bfclNote'))
 }

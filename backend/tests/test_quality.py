@@ -162,3 +162,30 @@ def test_a_config_that_leaves_the_recipe_as_it_is_is_production(db):
                                                        "dsa_decode_backend": None}), campaign)
     # Removing a flag the recipe does set is a change, not production.
     assert not quality.is_production(Candidate(config={"tp": None}), campaign)
+
+
+def test_bfcl_floor_rejudges_finalists_after_production_arrives(db):
+    objective = {"target_metric": "bfcl_v4.passed_cases_per_hour", "redlines":
+                 quality.quality_floor([], 0.1, metrics=["bfcl_v4/accuracy[overall]"])}
+    campaign = db.get(Campaign, 1)
+
+    def record(n, accuracy, baseline):
+        candidate = Candidate(id=n, campaign_id=1, config={} if baseline else {"tp": 4},
+                              config_hash=f"bfcl-{n}", is_baseline=baseline)
+        db.add(candidate)
+        db.add(Run(id=n, campaign_id=1, candidate_id=n))
+        metrics = {"bfcl_v4.accuracy": accuracy, "bfcl_v4.passed_cases_per_hour": 100}
+        reader = reader_for(metrics, {}, candidate.config, campaign)
+        result = Result(run_id=n, source="llmbench", metrics=metrics,
+                        **quality.judge(db, campaign, objective, reader).as_dict())
+        db.add(result)
+        db.flush()
+        return result
+
+    finalist = record(1, 0.75, False)
+    assert not finalist.feasible
+    record(2, 0.8, True)
+    assert quality.rescore(db, campaign, lambda run: objective) >= 1
+    assert finalist.feasible
+    poor = record(3, 0.5, False)
+    assert not poor.feasible
