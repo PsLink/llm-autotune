@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.config import get_settings
 from app.evaluation.benchmarks import GROUP_TAG, BenchmarkRefused, Ensured, ensure_document
+from app.evaluation.bfcl_sweep import BFCL_SCAN_MAX_SECONDS
 from app.evaluation.llmbench import LLMBenchClient
 
 SWEEP_MODULE = "perf_guidellm_sweep"
@@ -112,7 +113,7 @@ class BFCLSpec(BaseModel):
     cases_per_category: int = Field(20, ge=1, le=200)
     concurrency: int = Field(2, ge=1, le=128)
     concurrency_grid: list[int] | None = Field(default=None, min_length=2, max_length=16)
-    max_total_seconds: float | None = Field(default=None, ge=1, le=1382400)
+    max_total_seconds: float | None = Field(default=None, ge=1, le=BFCL_SCAN_MAX_SECONDS)
     request_timeout_seconds: float = Field(120, ge=1, le=3600)
     max_seconds: float = Field(1800, ge=1, le=86400)
     request_retries: int = Field(0, ge=0, le=3)
@@ -139,6 +140,11 @@ class BFCLSpec(BaseModel):
             if (grid != sorted(set(grid))
                     or any(type(c) is not int or not 1 <= c <= 128 for c in grid)):
                 raise ValueError("concurrency_grid requires increasing unique integers in [1, 128]")
+            budget = self.max_total_seconds or self.max_seconds * len(grid)
+            if budget > BFCL_SCAN_MAX_SECONDS:
+                raise ValueError(
+                    "BFCL scan budget exceeds 47 hours; reduce max_seconds or set max_total_seconds"
+                )
         if self.task_set == "bfcl-v4-smoke-v1" and self.cases_per_category != 1:
             raise ValueError("the BFCL smoke subset requires cases_per_category=1")
         return self
@@ -272,9 +278,13 @@ class BenchmarkSpec(BaseModel):
                      f"at concurrency {levels}, {self.requests_per_concurrency} requests "
                      "per slot")
         elif self.kind == "bfcl":
+            if self.bfcl.concurrency_grid:
+                levels = ",".join(str(c) for c in self.bfcl.concurrency_grid)
+                conc = f"at case concurrency grid {levels}"
+            else:
+                conc = f"at case concurrency {self.bfcl.concurrency}"
             title = (f"AutoTune BFCL — {self.bfcl.task_set}, "
-                     f"{self.bfcl.cases_per_category} cases/category "
-                     f"at case concurrency {self.bfcl.concurrency}")
+                     f"{self.bfcl.cases_per_category} cases/category {conc}")
         else:
             dataset = (self.dataset_profile.strip() or self.dataset_frozen.strip()
                        or "the example set")

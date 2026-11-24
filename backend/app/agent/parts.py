@@ -32,7 +32,7 @@ from app.control.launch.base import LaunchSpec, MachineInfo
 from app.control.launch_config import LaunchConfig
 from app.core.config import get_settings
 from app.db.models import RunStatus
-from app.evaluation.bfcl_sweep import bfcl_levels, select_bfcl_level
+from app.evaluation.bfcl_sweep import BFCL_SCAN_METRIC_KEYS, bfcl_levels, select_bfcl_level
 from app.evaluation.gate import Gate
 from app.evaluation.llmbench import _keyed_runs, module_reports
 from app.evaluation.scenarios import (
@@ -759,7 +759,10 @@ def results_part(b: RunBundle) -> ResultsPart:
                     point_report = {**report}
                     point_metrics = {f"{key}.c{level.concurrency}.{k}": v
                                      for k, v in level.metrics.items()}
-                    point_metrics[f"{key}.sweep_canceled"] = metrics.get(f"{key}.sweep_canceled")
+                    for scan_key in BFCL_SCAN_METRIC_KEYS:
+                        full_key = f"{key}.{scan_key}"
+                        if full_key in metrics:
+                            point_metrics[full_key] = metrics[full_key]
                     eligible = select_bfcl_level(point_metrics, point_report, floors)
                     level.metrics["eligible"] = int(eligible is not None)
                 if selected is None:

@@ -8,7 +8,10 @@ watch(() => spec.value.task_set, (task) => {
   if (task === 'bfcl-v4-smoke-v1') spec.value.cases_per_category = 1
 })
 const gridText = ref((spec.value.concurrency_grid ?? []).join(', '))
-const grid = computed(() => gridText.value.trim() ? gridText.value.split(/[,\s]+/).map(Number) : null)
+const grid = computed(() => {
+  const parts = gridText.value.trim().split(/[,\s]+/).filter(Boolean)
+  return parts.length ? parts.map(Number) : null
+})
 watch(grid, (value) => { spec.value.concurrency_grid = value })
 const gridBad = computed(() => !!grid.value && (grid.value.length < 2 || grid.value.length > 16
   || grid.value.some((c, i) => !Number.isInteger(c) || c < 1 || c > 128 || (i > 0 && c <= grid.value![i - 1]))))
